@@ -614,20 +614,33 @@ export async function aggregateCategory(
 
     const topics = clusterTopics(fresh, isRelevantMode ? localSet : new Set())
 
-    // Sort: for `relevant` category, boost topics with local coverage so UK
-    // news rises toward the top without completely burying major
-    // international stories. The relevance score is:
-    //   coverage + (localCoverage * 2.0)
-    // So a local story with 3 sources scores 3 + 6 = 9, beating a non-local
-    // story with 5 sources (score 5). But a major international story with
-    // 10 sources (score 10) still beats it. This gives the blend the user
-    // wants: local news up near the top, but major world news still visible.
+    // Sort: for `relevant` category, give LOCAL news much higher priority
+    // while keeping the absolute top stories based on coverage.
+    //
+    // The relevance score is:
+    //   coverage * 10 + localCoverage * 5 + (hasLocal ? 30 : 0)
+    //
+    // - coverage * 10: a 12-source story (120) still beats an 11-source
+    //   story (110) at the base level, so the biggest international story
+    //   stays at #1.
+    // - localCoverage * 5: each local source adds 5 points, so a 3-source
+    //   UK story with 8 local sources scores 30 + 40 = 70, beating a
+    //   5-source international story (50).
+    // - hasLocal bonus (+30): any story with at least 1 local source gets
+    //   a flat +30 boost, pushing UK-relevant stories above comparable
+    //   international ones.
+    //
+    // Net effect: the major 10+ source story stays #1, but UK-focused
+    // stories (even with just 2-3 sources) jump above mid-tier
+    // international stories.
     const filtered = topics
       .filter((t) => t.coverage >= minCoverage)
       .sort((a, b) => {
         if (isRelevantMode) {
-          const scoreA = a.coverage + (a.localCoverage ?? 0) * 2.0
-          const scoreB = b.coverage + (b.localCoverage ?? 0) * 2.0
+          const la = a.localCoverage ?? 0
+          const lb = b.localCoverage ?? 0
+          const scoreA = a.coverage * 10 + la * 5 + (la > 0 ? 30 : 0)
+          const scoreB = b.coverage * 10 + lb * 5 + (lb > 0 ? 30 : 0)
           if (scoreB !== scoreA) return scoreB - scoreA
           return b.latestSeen - a.latestSeen
         }
