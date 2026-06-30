@@ -39,11 +39,18 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Parse the URL to extract the origin for the Referer header.
+    // Some CDNs (BBC, Guardian) check the Referer and block requests
+    // without it.
+    const parsedUrl = new URL(url)
+    const referer = `${parsedUrl.protocol}//${parsedUrl.host}/`
+
     const res = await fetch(url, {
       signal: AbortSignal.timeout(8000),
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible: NeutralWireBot/1.0)',
-        Accept: 'image/*,*/*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        Referer: referer,
       },
       cache: 'no-store',
     })

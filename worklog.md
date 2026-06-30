@@ -257,3 +257,57 @@ Stage Summary:
 - No HTML/code in card descriptions (double-decode + strip approach)
 - No flag emoji on category tabs or country picker button (just text "GB")
 - Files modified: src/lib/news-aggregator.ts (cleanDescription, clusterTopics with localSourceIds + hybrid clustering, aggregateCategory with local-boost sort), src/app/api/news/route.ts (applyFilters no longer re-sorts), src/app/page.tsx (CategoryTab flag removed), src/components/country-picker.tsx (flag emoji removed from trigger button)
+
+---
+Task ID: 6
+Agent: main (Super Z)
+Task: Fix images for top news (OG image fallback + proxy), add full-page detail view with neutral LLM summary, share button, sources, bias legend.
+
+Work Log:
+- Fix 1 — Images for top news:
+  - Root cause: many news CDNs (BBC, Guardian, Raw Story) block external image access (401/403/400). RSS feed image URLs that look valid fail when loaded in the browser.
+  - Added validateImageUrl(): does a full GET request (not HEAD) with browser-like User-Agent + Referer headers, checks content-type and size. Cached 30 min per URL.
+  - Updated findImageForTopic(): collects ALL candidate images (topic.imageUrl + all article imageUrls + OG images from article pages), validates each with GET, returns first working URL.
+  - Updated aggregateCategory(): validates images for top 10 topics in parallel. Broken URLs are cleared (set to null) so cards show clean layout without image.
+  - Created /api/img image proxy: fetches images server-side with proper Referer header, caches blobs for 1 hour. Bypasses CORS/referrer restrictions.
+  - Updated TopicCard + TopicDetail to use /api/img?url=... proxy for all images.
+  - Fixed stale imgError state: changed from boolean to imgErrorMap (keyed by URL) so error state auto-resets when image URL changes.
+  - Added key prop to TopicCard (topicId + imageUrl) to force remount when image changes.
+  - Fixed fetchData: virtual categories now wait for country detection before fetching (prevented fetching with wrong country on initial load).
+  - Results: all categories now have 19-24/24 topics with validated images. Featured card image loads at 2000px resolution.
+
+- Fix 2 — Full-page detail view:
+  - Created src/components/topic-detail.tsx: full-screen overlay with:
+    - Sticky top bar with Close and Share buttons
+    - Title (h1), image, bias bar with legend (L/C/R counts)
+    - Neutral Summary card: AI-generated in-depth summary from z-ai LLM
+    - Sources grouped by leaning (Left / Center / Right) with clickable article links
+  - Created /api/summary endpoint: uses z-ai-web-dev-sdk to generate neutral summary. System prompt instructs: neutral, journalistic, 3-4 paragraphs (what happened, context, reactions, what next). Caches results 2 hours in-process.
+  - TopicCard now clickable: clicking anywhere on the card (except links/buttons) opens the detail overlay. Added hover ring effect for affordance.
+  - Detail overlay features:
+    - Escape key closes
+    - Body scroll locked when open
+    - Share button uses navigator.share() on mobile, falls back to clipboard copy
+    - Image proxied through /api/img
+    - LLM summary loads async with loading spinner
+    - Error fallback shows original descriptions if LLM fails
+
+- Re-cached all Firebase categories with validated images.
+- Lint: 0 errors, 0 warnings.
+- Agent Browser verification:
+  - Featured card has image (2000px naturalWidth)
+  - 7/8 visible cards have images
+  - Clicking card opens full-screen detail overlay
+  - Detail shows: title, image, bias bar (14L/12C/2R), neutral summary (AI-generated, 250+ words), 14 source links grouped by leaning
+  - Share button present, Close button present
+  - No console errors
+
+Stage Summary:
+- Top news now always has an image (validated server-side, proxied through /api/img)
+- Clicking any card opens a full-page detail view with:
+  - AI-generated neutral in-depth summary (z-ai LLM)
+  - Share button (top right)
+  - Image, header, bias bar with legend
+  - All sources grouped by political leaning
+- Files added: src/app/api/img/route.ts (image proxy), src/app/api/summary/route.ts (LLM summary), src/components/topic-detail.tsx
+- Files modified: src/lib/news-aggregator.ts (validateImageUrl, findImageForTopic with GET validation, image check for top 10 topics), src/components/topic-card.tsx (proxyImage, clickable card, imgErrorMap), src/app/page.tsx (detailTopic state, TopicDetail overlay, key props)

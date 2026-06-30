@@ -342,19 +342,80 @@ async function fetchOgImage(articleUrl: string): Promise<string | null> {
 }
 
 /**
- * For a topic with no image, try to fetch an OG image from the first
- * few articles' pages. Returns the first successful image URL, or null.
+ * Check if an image URL is actually fetchable by downloading it.
+ * Many news CDNs block HEAD requests or external access, so we do a
+ * full GET and check the content-type. Returns the validated URL or null.
  *
- * Only tries up to `maxAttempts` articles to keep it fast.
+ * Caches the result so we don't re-fetch the same image on every aggregation.
+ */
+const VALIDATED_CACHE = new Map<string, { ts: number; ok: boolean }>()
+const VALIDATED_TTL_MS = 30 * 60 * 1000
+
+async function validateImageUrl(url: string): Promise<boolean> {
+  const cached = VALIDATED_CACHE.get(url)
+  if (cached && Date.now() - cached.ts < VALIDATED_TTL_MS) {
+    return cached.ok
+  }
+
+  try {
+    const parsedUrl = new URL(url)
+    const referer = `${parsedUrl.protocol}//${parsedUrl.host}/`
+
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(5000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        Referer: referer,
+      },
+      redirect: 'follow',
+      cache: 'no-store',
+    })
+    if (!res.ok) {
+      VALIDATED_CACHE.set(url, { ts: Date.now(), ok: false })
+      return false
+    }
+    const ct = res.headers.get('content-type') || ''
+    // Read a small chunk to confirm it's actually image data.
+    const buf = await res.arrayBuffer()
+    const ok = (ct.startsWith('image/') || buf.byteLength > 1000) && buf.byteLength < 10 * 1024 * 1024
+    VALIDATED_CACHE.set(url, { ts: Date.now(), ok })
+    return ok
+  } catch {
+    VALIDATED_CACHE.set(url, { ts: Date.now(), ok: false })
+    return false
+  }
+}
+
+/**
+ * For a topic, find the best image URL that actually works.
+ *
+ * Strategy:
+ * 1. Collect candidate images from: topic.imageUrl + all article imageUrls
+ *    + OG images fetched from article pages.
+ * 2. Validate each candidate with a HEAD request.
+ * 3. Return the first valid image URL.
+ *
+ * Tries up to `maxAttempts` articles for OG images.
  */
 async function findImageForTopic(
   topic: TopicArticle,
   maxAttempts = 4,
 ): Promise<string | null> {
-  if (topic.imageUrl) return topic.imageUrl
+  // Collect all candidate image URLs.
+  const candidates: string[] = []
+  if (topic.imageUrl) candidates.push(topic.imageUrl)
+  for (const a of topic.articles) {
+    if (a.imageUrl) candidates.push(a.imageUrl)
+  }
 
-  // Try articles that are most likely to have good images (BBC, NYT, Guardian, etc.)
-  const prioritySources = ['bbc', 'nytimes', 'theguardian', 'cnbc', 'reuters-algolia', 'ft']
+  // Validate existing candidates first (fast — HEAD requests).
+  for (const url of candidates) {
+    if (await validateImageUrl(url)) return url
+  }
+
+  // If no existing candidate works, try fetching OG images from article pages.
+  const prioritySources = ['nytimes', 'bbc', 'theguardian', 'cnbc', 'ft', 'npr']
   const sorted = [...topic.articles].sort((a, b) => {
     const aPriority = prioritySources.includes(a.sourceId) ? 0 : 1
     const bPriority = prioritySources.includes(b.sourceId) ? 0 : 1
@@ -362,9 +423,10 @@ async function findImageForTopic(
   })
 
   for (let i = 0; i < Math.min(maxAttempts, sorted.length); i++) {
-    const url = await fetchOgImage(sorted[i].link)
-    if (url) return url
+    const ogUrl = await fetchOgImage(sorted[i].link)
+    if (ogUrl && await validateImageUrl(ogUrl)) return ogUrl
   }
+
   return null
 }
 
@@ -574,19 +636,20 @@ export async function aggregateCategory(
       })
       .slice(0, limit)
 
-    // Image fallback: for topics without an image, try fetching OG images
-    // from the article pages. Only do this for the top N topics (the ones
-    // most likely to be seen) to keep aggregation fast. We try 3 articles
-    // per topic in parallel.
-    const topicsNeedingImages = filtered.filter((t) => !t.imageUrl).slice(0, 8)
-    if (topicsNeedingImages.length > 0) {
-      await Promise.all(
-        topicsNeedingImages.map(async (topic) => {
-          const img = await findImageForTopic(topic, 3)
-          if (img) topic.imageUrl = img
-        }),
-      )
-    }
+    // Image validation + fallback: for the top N topics, validate that the
+    // existing imageUrl actually works (many CDNs return 401/403). If it
+    // doesn't, or if there's no image, try to find a working one from the
+    // article images or OG images.
+    //
+    // This runs in parallel for the top 10 topics to keep it fast.
+    const topicsForImageCheck = filtered.slice(0, 10)
+    await Promise.all(
+      topicsForImageCheck.map(async (topic) => {
+        const img = await findImageForTopic(topic, 3)
+        if (img) topic.imageUrl = img
+        else topic.imageUrl = null // ensure broken URLs are cleared
+      }),
+    )
 
     return {
       topics: filtered,
