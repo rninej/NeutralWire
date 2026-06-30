@@ -31,6 +31,7 @@ import {
 } from '@/lib/news-sources'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { TopicCard } from '@/components/topic-card'
+import { TopicDetail } from '@/components/topic-detail'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
 import { CountryPicker } from '@/components/country-picker'
@@ -97,6 +98,9 @@ export default function Home() {
   const [articleCount, setArticleCount] = useState(0)
   const [minCoverage, setMinCoverage] = useState(1)
   const [loadMs, setLoadMs] = useState<number | null>(null)
+
+  // --- Detail overlay state ---
+  const [detailTopic, setDetailTopic] = useState<TopicArticle | null>(null)
 
   // --- Refs for race-condition protection ---
   const reqIdRef = React.useRef(0)
@@ -207,6 +211,11 @@ export default function Home() {
   // --- Fetch news (cache-first from Firebase) ---
   const fetchData = React.useCallback(
     async (cat: Category, mc: number, country?: CountryInfo | null) => {
+      // For virtual categories, wait until country is detected.
+      // This prevents fetching with the wrong country on initial load.
+      const isVirtual = cat === 'relevant' || cat === 'mycountry'
+      if (isVirtual && !country) return
+
       const reqId = ++reqIdRef.current
       setLoading(true)
       setError(null)
@@ -216,7 +225,7 @@ export default function Home() {
           limit: '24',
           minCoverage: String(mc),
         })
-        if (country && cat !== 'top' && cat !== 'world' && cat !== 'politics' && cat !== 'business' && cat !== 'technology' && cat !== 'science' && cat !== 'health') {
+        if (country && isVirtual) {
           params.set('country', country.code)
         }
         const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
@@ -525,14 +534,24 @@ export default function Home() {
                         {featured.coverage} sources reporting
                       </span>
                     </div>
-                    <TopicCard topic={featured} variant="featured" defaultOpen />
+                    <TopicCard
+                      key={featured.topicId + (featured.imageUrl || '')}
+                      topic={featured}
+                      variant="featured"
+                      defaultOpen
+                      onOpenDetail={setDetailTopic}
+                    />
                   </div>
                 )}
 
                 {/* Topic grid */}
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {rest.map((t) => (
-                    <TopicCard key={t.topicId} topic={t} />
+                    <TopicCard
+                      key={t.topicId + (t.imageUrl || '')}
+                      topic={t}
+                      onOpenDetail={setDetailTopic}
+                    />
                   ))}
                 </div>
 
@@ -555,6 +574,14 @@ export default function Home() {
           NeutralWire
         </div>
       </footer>
+
+      {/* Detail overlay */}
+      {detailTopic && (
+        <TopicDetail
+          topic={detailTopic}
+          onClose={() => setDetailTopic(null)}
+        />
+      )}
     </div>
   )
 }

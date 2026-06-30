@@ -12,6 +12,7 @@ interface TopicCardProps {
   topic: TopicArticle
   variant?: 'default' | 'featured' | 'compact'
   defaultOpen?: boolean
+  onOpenDetail?: (topic: TopicArticle) => void
 }
 
 function timeAgo(ms: number): string {
@@ -43,23 +44,41 @@ function pickImage(topic: TopicArticle): string | null {
   return null
 }
 
-export function TopicCard({ topic, variant = 'default', defaultOpen = false }: TopicCardProps) {
+/**
+ * Wraps an image URL with the /api/img proxy.
+ * Many news sites block direct browser loading via referrer/CORS policies,
+ * so we proxy through our server which fetches the image server-side.
+ */
+function proxyImage(url: string): string {
+  return `/api/img?url=${encodeURIComponent(url)}`
+}
+
+export function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDetail }: TopicCardProps) {
   const [open, setOpen] = React.useState(defaultOpen || variant === 'featured')
-  const [imgError, setImgError] = React.useState(false)
+  const imageUrl = pickImage(topic)
+  // Key the imgError state to the imageUrl so it auto-resets when the image changes.
+  // This avoids stale error state from a previous render.
+  const [imgErrorMap, setImgErrorMap] = React.useState<Record<string, boolean>>({})
+  const imgError = imgErrorMap[imageUrl || ''] || false
 
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
-  const imageUrl = pickImage(topic)
-  // Only show the image if we have a URL AND it hasn't failed to load.
-  // If there's no image, the card just shows header + description + bias bar
-  // — no placeholder icon.
   const showImage = imageUrl && !imgError
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    // Don't open detail if the user clicked a link or button inside the card.
+    const target = e.target as HTMLElement
+    if (target.closest('a, button')) return
+    onOpenDetail?.(topic)
+  }
 
   return (
     <Card
       className={cn(
         'overflow-hidden p-0 gap-0 flex flex-col',
         variant === 'featured' && 'md:col-span-2',
+        onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
       )}
+      onClick={handleCardClick}
     >
       {/* Header: title + meta (always at the top) */}
       <div className="flex flex-col gap-2 p-4 pb-3">
@@ -92,10 +111,10 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false }: T
           )}
         >
           <img
-            src={imageUrl || undefined}
+            src={proxyImage(imageUrl!)}
             alt=""
             className="h-full w-full object-cover"
-            onError={() => setImgError(true)}
+            onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
         </div>
       )}

@@ -274,6 +274,100 @@ async function fetchFeed(
   }
 }
 
+// ---------- OG Image Fallback ----------
+/**
+ * Fetch an article's HTML page and extract the og:image (or twitter:image)
+ * meta tag. Used as a fallback when no image was found in the RSS feed.
+ *
+ * Times out after 5s. Returns null on any failure.
+ */
+const OG_IMAGE_CACHE = new Map<string, { ts: number; url: string | null }>()
+const OG_IMAGE_TTL_MS = 30 * 60 * 1000 // 30 min
+
+async function fetchOgImage(articleUrl: string): Promise<string | null> {
+  if (!articleUrl) return null
+
+  const cached = OG_IMAGE_CACHE.get(articleUrl)
+  if (cached && Date.now() - cached.ts < OG_IMAGE_TTL_MS) {
+    return cached.url
+  }
+
+  try {
+    const res = await fetch(articleUrl, {
+      signal: AbortSignal.timeout(5000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible: NeutralWireBot/1.0)',
+        Accept: 'text/html, application/xhtml+xml',
+      },
+      redirect: 'follow',
+      cache: 'no-store',
+    })
+    if (!res.ok) {
+      OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url: null })
+      return null
+    }
+    const html = await res.text()
+    // Extract og:image or twitter:image meta tag.
+    const ogMatch = html.match(
+      /<meta\s+(?:property|name)=["']og:image["']\s+content=["']([^"']+)["']/i,
+    )
+    if (ogMatch?.[1]) {
+      const url = ogMatch[1]
+      OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url })
+      return url
+    }
+    const twMatch = html.match(
+      /<meta\s+(?:property|name)=["']twitter:image["']\s+content=["']([^"']+)["']/i,
+    )
+    if (twMatch?.[1]) {
+      const url = twMatch[1]
+      OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url })
+      return url
+    }
+    // Also try og:image:url and og:image:secure_url
+    const ogAltMatch = html.match(
+      /<meta\s+(?:property|name)=["']og:image:(?:secure_)?url["']\s+content=["']([^"']+)["']/i,
+    )
+    if (ogAltMatch?.[1]) {
+      const url = ogAltMatch[1]
+      OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url })
+      return url
+    }
+    OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url: null })
+    return null
+  } catch {
+    OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url: null })
+    return null
+  }
+}
+
+/**
+ * For a topic with no image, try to fetch an OG image from the first
+ * few articles' pages. Returns the first successful image URL, or null.
+ *
+ * Only tries up to `maxAttempts` articles to keep it fast.
+ */
+async function findImageForTopic(
+  topic: TopicArticle,
+  maxAttempts = 4,
+): Promise<string | null> {
+  if (topic.imageUrl) return topic.imageUrl
+
+  // Try articles that are most likely to have good images (BBC, NYT, Guardian, etc.)
+  const prioritySources = ['bbc', 'nytimes', 'theguardian', 'cnbc', 'reuters-algolia', 'ft']
+  const sorted = [...topic.articles].sort((a, b) => {
+    const aPriority = prioritySources.includes(a.sourceId) ? 0 : 1
+    const bPriority = prioritySources.includes(b.sourceId) ? 0 : 1
+    return aPriority - bPriority
+  })
+
+  for (let i = 0; i < Math.min(maxAttempts, sorted.length); i++) {
+    const url = await fetchOgImage(sorted[i].link)
+    if (url) return url
+  }
+  return null
+}
+
 // ---------- Topic Clustering ----------
 /**
  * Cluster articles into topics based on title similarity.
@@ -479,6 +573,20 @@ export async function aggregateCategory(
         return b.latestSeen - a.latestSeen
       })
       .slice(0, limit)
+
+    // Image fallback: for topics without an image, try fetching OG images
+    // from the article pages. Only do this for the top N topics (the ones
+    // most likely to be seen) to keep aggregation fast. We try 3 articles
+    // per topic in parallel.
+    const topicsNeedingImages = filtered.filter((t) => !t.imageUrl).slice(0, 8)
+    if (topicsNeedingImages.length > 0) {
+      await Promise.all(
+        topicsNeedingImages.map(async (topic) => {
+          const img = await findImageForTopic(topic, 3)
+          if (img) topic.imageUrl = img
+        }),
+      )
+    }
 
     return {
       topics: filtered,
