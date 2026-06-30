@@ -8,8 +8,14 @@ import {
   refreshCategory,
   isStale,
   canRefresh,
+  isVirtualCategory,
   CACHE_CONSTANTS,
 } from '@/lib/news-cache'
+import {
+  detectCountryServer,
+  sourcesForCountry,
+  DEFAULT_COUNTRY,
+} from '@/lib/country-detect'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -19,47 +25,57 @@ export const revalidate = 0
  * Cache-first news endpoint.
  *
  * Behaviour:
- *   1. Read Firebase cache for the category (fast — single RTDB read).
- *   2. If the cache exists and is fresh (< STALE_MS old): return it.
- *      This is the hot path: no RSS fetching, instant response.
- *   3. If the cache exists but is stale: return it immediately AND
- *      kick off a background refresh via `after()` so the next visitor
- *      sees fresh data. The current response is still instant.
- *   4. If the cache is missing (first-ever request for this category):
- *      do a synchronous RSS aggregate so the user sees *something*,
- *      write it to Firebase, return it. Slow but only happens once.
+ *   1. For virtual categories (`relevant`, `mycountry`), detect the visitor's
+ *      country from request headers (server-side, ip-api.com).
+ *   2. Read Firebase cache for the (category, country) pair.
+ *   3. If fresh: return it (fast).
+ *   4. If stale: return it immediately AND kick off a background refresh.
+ *   5. If missing: do a synchronous aggregate (one-time per country).
  *
  * Query params:
- *   - category: 'top' | 'world' | 'politics' | ... (default 'top')
- *   - limit: number of topics to return (default 24, max 40)
- *   - minCoverage: minimum sources per topic (default 1, max 8)
- *   - wait: if '1', wait for refresh to finish before responding (used
- *     by the explicit Refresh button when the cache is stale).
+ *   - category: 'relevant' | 'mycountry' | 'top' | ... (default 'relevant')
+ *   - country:  ISO 3166-1 alpha-2 code (overrides auto-detection)
+ *   - limit, minCoverage, wait
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams
-  const category = (sp.get('category') || 'top') as Category
+  const category = (sp.get('category') || 'relevant') as Category
   const limit = Math.min(40, Math.max(5, Number(sp.get('limit') || '24')))
   const minCoverage = Math.max(1, Math.min(8, Number(sp.get('minCoverage') || '1')))
   const wait = sp.get('wait') === '1'
+  const countryOverride = sp.get('country') || ''
 
   const t0 = Date.now()
 
-  // 1. Try cache first.
-  let cached = await readCachedNews(category)
+  // Resolve the visitor's country for virtual categories.
+  let country = countryOverride
+  let countryName = ''
+  if (isVirtualCategory(category)) {
+    if (!country) {
+      const detected = await detectCountryServer(req.headers)
+      country = detected?.code || DEFAULT_COUNTRY.code
+      countryName = detected?.name || DEFAULT_COUNTRY.name
+    } else {
+      countryName = country
+    }
+  }
 
-  // 2. If no cache at all → do one synchronous aggregate so first-time
-  //    visitors get real news, not an empty page. This is the slow path
-  //    but only runs once per category for the entire deployment.
+  // For non-virtual categories we still pass an empty country — cachePath
+  // ignores it.
+  const countrySourceIds = isVirtualCategory(category)
+    ? sourcesForCountry(country)
+    : []
+
+  // 1. Try cache first.
+  let cached = await readCachedNews(category, country)
+
+  // 2. If no cache at all → do one synchronous aggregate.
   if (!cached) {
     try {
-      // Always aggregate the max (40 topics, minCoverage=1) so the cache
-      // stores a superset. Per-request limit/minCoverage filters are
-      // applied on read, so we never need to re-aggregate when a user
-      // tightens their filter.
       const agg = await aggregateCategory(category, {
         limit: 40,
         minCoverage: 1,
+        countrySourceIds,
       })
       const payload = {
         updatedAt: Date.now(),
@@ -67,10 +83,11 @@ export async function GET(req: NextRequest) {
         articleCount: agg.articleCount,
         topics: agg.topics,
       }
-      // Fire-and-forget write to Firebase.
-      void refreshCategory(category, async () => Promise.resolve(agg))
+      void refreshCategory(category, country, async () => Promise.resolve(agg))
       return NextResponse.json({
         category,
+        country,
+        countryName,
         topics: applyFilters(payload.topics, limit, minCoverage),
         cached: false,
         fresh: true,
@@ -87,21 +104,25 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 3. Cache exists. Truncate to requested limit/coverage before sending.
+  // 3. Cache exists.
   const truncated = applyFilters(cached.topics, limit, minCoverage)
 
-  // 4. If stale, kick off a background refresh (unless one is already
-  //    running locally). Use `after()` so the response isn't blocked.
+  // 4. Background refresh if stale.
   const stale = isStale(cached)
-  if (stale && canRefresh(category)) {
+  if (stale && canRefresh(category, country)) {
     if (wait) {
-      // Explicit refresh request — wait for it.
-      const fresh = await refreshCategory(category, (c) =>
-        aggregateCategory(c, { limit: 40, minCoverage: 1 }),
+      const fresh = await refreshCategory(category, country, (c) =>
+        aggregateCategory(c, {
+          limit: 40,
+          minCoverage: 1,
+          countrySourceIds,
+        }),
       )
       if (fresh) {
         return NextResponse.json({
           category,
+          country,
+          countryName,
           topics: applyFilters(fresh.topics, limit, minCoverage),
           cached: false,
           fresh: true,
@@ -112,14 +133,17 @@ export async function GET(req: NextRequest) {
         })
       }
     } else {
-      // Background refresh — don't block the response.
       after(async () => {
         try {
-          await refreshCategory(category, (c) =>
-            aggregateCategory(c, { limit: 40, minCoverage: 1 }),
+          await refreshCategory(category, country, (c) =>
+            aggregateCategory(c, {
+              limit: 40,
+              minCoverage: 1,
+              countrySourceIds,
+            }),
           )
         } catch (err) {
-          console.warn(`[api/news] background refresh ${category} failed:`, err)
+          console.warn(`[api/news] background refresh ${category}/${country} failed:`, err)
         }
       })
     }
@@ -127,6 +151,8 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     category,
+    country,
+    countryName,
     topics: truncated,
     cached: true,
     fresh: !stale,

@@ -83,3 +83,82 @@ Stage Summary:
 - Free-tier friendly: cache reads are 120KB each, refresh writes are 120KB each rate-limited to 1 per 5 min per category per instance → ~240MB/day total Firebase traffic, well within Spark plan 10GB/day limit
 - Files added: src/lib/firebase-server.ts, src/lib/news-aggregator.ts, src/lib/news-cache.ts, src/app/api/refresh/route.ts
 - Files modified: src/app/api/news/route.ts (cache-first rewrite), src/app/page.tsx (background refresh UI), src/components/{topic-card,bias-columns}.tsx (import path update)
+
+---
+Task ID: 3
+Agent: main (Super Z)
+Task: Add country auto-detection + 2 new subtopics (Relevant default + My Country) + image-in-every-card layout + rename to NeutralWire + API-powered search fallback.
+
+Work Log:
+- Tested free IP geolocation APIs: ip-api.com (server-side, no key, no CORS) and ipwho.is (CORS-friendly for client fallback) both work. ipapi.co is Cloudflare-blocked.
+- Created src/lib/country-detect.ts:
+  - detectCountryServer(): reads client IP from cf-connecting-ip / x-real-ip / x-forwarded-for headers, calls ip-api.com server-side. 1-hour in-process cache per IP.
+  - detectCountryClient(): browser-side fallback via ipwho.is (CORS-friendly). 24-hour localStorage cache.
+  - sourcesForCountry(): maps ISO country code → relevant source IDs (curated for 50+ countries, falls back to international set).
+  - isoToFlag() / countryName() helpers.
+- Created /api/country endpoint: server-side detection, returns {code, name, flag, detected}. Falls back to "International" if detection fails.
+- Updated news-sources.ts:
+  - Added `relevant` and `mycountry` virtual categories to CATEGORIES array (first two positions).
+  - Added PRIMARY_CATEGORIES = ['relevant', 'mycountry'] and SECONDARY_CATEGORIES = [top, world, politics, business, technology, science, health].
+  - Updated feedsForCategory() to accept {countrySourceIds} option:
+    - `mycountry`: only feeds from sources relevant to visitor's country
+    - `relevant`: local feeds PLUS global top/world feeds (mix)
+    - Non-virtual categories ignore country
+- Updated news-cache.ts:
+  - cachePath() now namespaces virtual categories as `<category>__<country>` (e.g. `relevant__US`, `mycountry__HK`)
+  - readCachedNews / writeCachedNews / canRefresh / refreshCategory all accept country param
+  - isVirtualCategory() helper exported
+- Updated /api/news and /api/refresh routes:
+  - Auto-detect visitor's country server-side for virtual categories (or accept ?country= override)
+  - Pass countrySourceIds to aggregateCategory()
+  - Country returned in response for client display
+- Updated news-aggregator.ts: aggregateCategory() accepts countrySourceIds option, passes through to feedsForCategory()
+- Rewrote src/components/topic-card.tsx with new layout:
+  - Header (title + meta) ABOVE the image
+  - Image (every card, with ImageIcon fallback placeholder if no image)
+  - Description BELOW the image
+  - Bias bar + View sources button BELOW the description
+  - pickImage() falls back from topic.imageUrl → any article.imageUrl
+  - imgError state hides broken images gracefully
+- Created /api/search endpoint:
+  - Reads entire newsCache/ root in one Firebase call
+  - Iterates all topics × all articles across all categories (incl. virtual)
+  - Matches on topic title, topic summary, article title, article description, article source name
+  - Returns up to 50 hits with snippet highlighting the match
+  - 1.7s for 11 categories × 1700+ articles
+- Created src/components/search-results.tsx:
+  - Card grid of search hits with leaning badge, source, snippet, "Read at X" link
+  - Loading state and empty state
+- Rewrote src/app/page.tsx:
+  - Default category changed to 'relevant'
+  - PRIMARY_CATEGORIES (Relevant, My Country) shown as primary tabs with country flag prefix
+  - SECONDARY_CATEGORIES hidden behind "More" expandable button
+  - Country auto-detected on mount via /api/country → client fallback to ipwho.is
+  - Country badge in header showing flag + code
+  - Search now: instant local filter → if 0 results, automatic /api/search fallback showing SearchResults component
+  - Clear-search X button
+- Renamed "Ground News Free" → "NeutralWire" everywhere: layout.tsx metadata, page header, page footer, footer description
+- Pre-populated Firebase caches for `relevant__US` and `mycountry__US` (24 topics each)
+- Lint: 0 errors, 0 warnings
+- Agent Browser verification:
+  - Page title: "NeutralWire — Compare News Bias Across Sources"
+  - Country auto-detected as 🇭🇰 HK (sandbox IP)
+  - Default tab "Relevant" shows HK-relevant + world stories
+  - "My Country" tab shows HK-relevant sources (BBC, Al Jazeera, Japan Times, France 24, NYT)
+  - "More" expands to Top Stories / World / Politics / Business / Tech / Science / Health
+  - Card layout verified: title → image → description → bias bar (via DOM query)
+  - 19 news images loaded on the page
+  - Search "Ukraine": local filter returned 0, API fallback returned hits from FT and DW with snippets
+  - Search "xyznonexistentterm123": API searched 11 categories in 1824ms, showed "No results" with stats
+  - No console errors
+
+Stage Summary:
+- 2 new subtopics added: "Relevant" (default, mix of local + world) and "My Country" (local only)
+- Country auto-detected server-side via IP (ip-api.com) with client-side fallback (ipwho.is)
+- Top Stories moved to "More" expandable section
+- Every news card now shows: title → image → description → bias bar (with ImageIcon fallback for imageless stories)
+- Renamed Ground News Free → NeutralWire (header, footer, metadata)
+- Search now falls back to /api/search which scans the entire Firebase cache (11 categories, 1700+ articles) when local filtering yields nothing
+- 9 Firebase cache nodes now: top, world, politics, business, technology, science, health, relevant__US, mycountry__US (more added per-country as visitors arrive)
+- Files added: src/lib/country-detect.ts, src/app/api/country/route.ts, src/app/api/search/route.ts, src/components/search-results.tsx
+- Files modified: src/lib/news-sources.ts, src/lib/news-aggregator.ts, src/lib/news-cache.ts, src/app/api/news/route.ts, src/app/api/refresh/route.ts, src/app/page.tsx, src/app/layout.tsx, src/components/topic-card.tsx

@@ -15,16 +15,16 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Ground News Free — Compare News Bias Across Sources",
+  title: "NeutralWire — Compare News Bias Across Sources",
   description:
-    "A free, open news aggregator that compares how left, center, and right outlets cover the same stories. Built with public RSS feeds — no API keys, no paywalls.",
-  keywords: ["news", "bias", "media bias", "ground news", "news aggregator", "left right center"],
-  authors: [{ name: "Ground News Free" }],
+    "A free, open news aggregator that compares how left, center, and right outlets cover the same stories. Auto-detects your country for relevant local + world news. Built with public RSS feeds — no API keys, no paywalls.",
+  keywords: ["news", "bias", "media bias", "neutralwire", "news aggregator", "left right center"],
+  authors: [{ name: "NeutralWire" }],
   icons: {
     icon: "/logo.svg",
   },
   openGraph: {
-    title: "Ground News Free",
+    title: "NeutralWire",
     description: "Compare how left, center, and right outlets cover the same stories.",
     type: "website",
   },

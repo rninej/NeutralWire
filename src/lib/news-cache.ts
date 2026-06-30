@@ -4,11 +4,14 @@
  * Storage layout (under the database root):
  *
  *   newsCache/
- *     <category>/
+ *     <category>/                          ← non-virtual categories
  *       updatedAt: <ms epoch>
  *       sourceCount: <number>
  *       articleCount: <number>
- *       topics: [ <TopicArticle>, <TopicArticle>, ... ]
+ *       topics: [ <TopicArticle>, ... ]
+ *     <category>__<country>/               ← virtual categories (relevant, mycountry)
+ *       updatedAt: <ms epoch>
+ *       ...
  *
  * Each category is a single node so a page load = one read.
  * Writes are rate-limited per category to avoid hammering the DB
@@ -24,15 +27,26 @@ const STALE_MS = 10 * 60 * 1000 // 10 minutes — cache is "fresh enough" for th
 const MIN_REFRESH_GAP_MS = 5 * 60 * 1000 // never refresh the same category more often than this
 
 // ---------- In-process refresh bookkeeping ----------
-// Prevents the same category from being refreshed concurrently or too
-// frequently within a single server instance. Combined with Firebase as
-// the source of truth, this means even multi-instance deployments won't
-// do redundant refreshes very often (Firebase updatedAt is the global
-// arbiter).
-const REFRESH_IN_FLIGHT = new Map<Category, Promise<CategoryCachePayload | null>>()
-const LAST_REFRESH_AT = new Map<Category, number>()
+const REFRESH_IN_FLIGHT = new Map<string, Promise<CategoryCachePayload | null>>()
+const LAST_REFRESH_AT = new Map<string, number>()
 
-export function cachePath(category: Category): string {
+/**
+ * Returns true if this category is virtual (depends on the visitor's country).
+ */
+export function isVirtualCategory(category: Category): boolean {
+  return category === 'relevant' || category === 'mycountry'
+}
+
+/**
+ * Build the Firebase path for a (category, country) pair.
+ * Non-virtual categories ignore the country.
+ */
+export function cachePath(category: Category, country: string = ''): string {
+  if (isVirtualCategory(category)) {
+    // Sanitise country code — only allow A-Z.
+    const c = (country || 'INT').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'INT'
+    return `${ROOT}/${category}__${c}`
+  }
   return `${ROOT}/${category}`
 }
 
@@ -42,8 +56,9 @@ export function cachePath(category: Category): string {
  */
 export async function readCachedNews(
   category: Category,
+  country: string = '',
 ): Promise<CategoryCachePayload | null> {
-  const payload = await firebaseRead<CategoryCachePayload>(cachePath(category))
+  const payload = await firebaseRead<CategoryCachePayload>(cachePath(category, country))
   if (!payload || !Array.isArray(payload.topics)) return null
   return payload
 }
@@ -53,6 +68,7 @@ export async function readCachedNews(
  */
 export async function writeCachedNews(
   category: Category,
+  country: string,
   topics: TopicArticle[],
   articleCount: number,
   sourceCount: number,
@@ -63,7 +79,7 @@ export async function writeCachedNews(
     articleCount,
     topics,
   }
-  return firebaseWrite(cachePath(category), payload)
+  return firebaseWrite(cachePath(category, country), payload)
 }
 
 /**
@@ -79,8 +95,9 @@ export function isStale(payload: CategoryCachePayload | null): boolean {
  * Returns true if we should kick off a background refresh for this category
  * on this server instance (rate-limited locally).
  */
-export function canRefresh(category: Category): boolean {
-  const last = LAST_REFRESH_AT.get(category) ?? 0
+export function canRefresh(category: Category, country: string = ''): boolean {
+  const key = cachePath(category, country)
+  const last = LAST_REFRESH_AT.get(key) ?? 0
   return Date.now() - last >= MIN_REFRESH_GAP_MS
 }
 
@@ -92,21 +109,24 @@ export function canRefresh(category: Category): boolean {
  */
 export async function refreshCategory(
   category: Category,
+  country: string,
   aggregateFn: (cat: Category) => Promise<{
     topics: TopicArticle[]
     articleCount: number
     sourceCount: number
   }>,
 ): Promise<CategoryCachePayload | null> {
+  const key = cachePath(category, country)
+
   // If a refresh is already running for this category, piggyback on it.
-  const inflight = REFRESH_IN_FLIGHT.get(category)
+  const inflight = REFRESH_IN_FLIGHT.get(key)
   if (inflight) return inflight
 
   const p = (async () => {
     try {
       const agg = await aggregateFn(category)
-      await writeCachedNews(category, agg.topics, agg.articleCount, agg.sourceCount)
-      LAST_REFRESH_AT.set(category, Date.now())
+      await writeCachedNews(category, country, agg.topics, agg.articleCount, agg.sourceCount)
+      LAST_REFRESH_AT.set(key, Date.now())
       return {
         updatedAt: Date.now(),
         sourceCount: agg.sourceCount,
@@ -114,14 +134,14 @@ export async function refreshCategory(
         topics: agg.topics,
       } satisfies CategoryCachePayload
     } catch (err) {
-      console.warn(`[news-cache] refresh ${category} failed:`, err)
+      console.warn(`[news-cache] refresh ${key} failed:`, err)
       return null
     } finally {
-      REFRESH_IN_FLIGHT.delete(category)
+      REFRESH_IN_FLIGHT.delete(key)
     }
   })()
 
-  REFRESH_IN_FLIGHT.set(category, p)
+  REFRESH_IN_FLIGHT.set(key, p)
   return p
 }
 

@@ -5,7 +5,13 @@ import {
   readCachedNews,
   refreshCategory,
   canRefresh,
+  isVirtualCategory,
 } from '@/lib/news-cache'
+import {
+  detectCountryServer,
+  sourcesForCountry,
+  DEFAULT_COUNTRY,
+} from '@/lib/country-detect'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -14,30 +20,41 @@ export const revalidate = 0
 /**
  * Force a refresh of a single category.
  *
- * - Always runs a fresh RSS aggregate (bypassing the in-process feed cache
- *   would require extra plumbing; the 5-min feed cache is acceptable here).
- * - Writes the result to Firebase.
- * - Returns the fresh topics.
- *
- * The client calls this when the user clicks the "Refresh" button,
- * or automatically ~5s after initial page load if the cache was stale
- * (so the user gets instant cached data, then sees fresh data a few
- * seconds later without re-clicking).
- *
- * Rate-limited per category (5-min gap) to prevent abuse.
+ * For virtual categories, the visitor's country is auto-detected server-side
+ * (or overridden via ?country=XX).
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams
-  const category = (sp.get('category') || 'top') as Category
+  const category = (sp.get('category') || 'relevant') as Category
   const limit = Math.min(40, Math.max(5, Number(sp.get('limit') || '24')))
   const minCoverage = Math.max(1, Math.min(8, Number(sp.get('minCoverage') || '1')))
   const force = sp.get('force') === '1'
+  const countryOverride = sp.get('country') || ''
+
+  // Resolve country for virtual categories.
+  let country = countryOverride
+  let countryName = ''
+  if (isVirtualCategory(category)) {
+    if (!country) {
+      const detected = await detectCountryServer(req.headers)
+      country = detected?.code || DEFAULT_COUNTRY.code
+      countryName = detected?.name || DEFAULT_COUNTRY.name
+    } else {
+      countryName = country
+    }
+  }
+
+  const countrySourceIds = isVirtualCategory(category)
+    ? sourcesForCountry(country)
+    : []
 
   // Rate limit (unless ?force=1).
-  if (!force && !canRefresh(category)) {
-    const cached = await readCachedNews(category)
+  if (!force && !canRefresh(category, country)) {
+    const cached = await readCachedNews(category, country)
     return NextResponse.json({
       category,
+      country,
+      countryName,
       topics: cached?.topics ?? [],
       cached: true,
       fresh: false,
@@ -50,8 +67,12 @@ export async function GET(req: NextRequest) {
 
   const t0 = Date.now()
   try {
-    const fresh = await refreshCategory(category, (c) =>
-      aggregateCategory(c, { limit: 40, minCoverage: 1 }),
+    const fresh = await refreshCategory(category, country, (c) =>
+      aggregateCategory(c, {
+        limit: 40,
+        minCoverage: 1,
+        countrySourceIds,
+      }),
     )
     if (!fresh) {
       return NextResponse.json(
@@ -61,6 +82,8 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({
       category,
+      country,
+      countryName,
       topics: fresh.topics
         .filter((t) => t.coverage >= minCoverage)
         .slice(0, limit),

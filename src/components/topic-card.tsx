@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Clock, ExternalLink, Globe } from 'lucide-react'
+import { Clock, ExternalLink, Globe, ImageIcon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -31,44 +31,44 @@ const LEANING_BADGE: Record<string, { label: string; cls: string }> = {
   right: { label: 'Right', cls: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300' },
 }
 
+/**
+ * Picks the best available image from a topic's articles.
+ * Falls back to the topic's own imageUrl, then to any article image.
+ */
+function pickImage(topic: TopicArticle): string | null {
+  if (topic.imageUrl) return topic.imageUrl
+  for (const a of topic.articles) {
+    if (a.imageUrl) return a.imageUrl
+  }
+  return null
+}
+
 export function TopicCard({ topic, variant = 'default', defaultOpen = false }: TopicCardProps) {
   const [open, setOpen] = React.useState(defaultOpen || variant === 'featured')
+  const [imgError, setImgError] = React.useState(false)
 
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
+  const imageUrl = pickImage(topic)
+  const showImage = imageUrl && !imgError
 
   return (
     <Card
       className={cn(
-        'overflow-hidden p-0 gap-0',
+        'overflow-hidden p-0 gap-0 flex flex-col',
         variant === 'featured' && 'md:col-span-2',
       )}
     >
-      {variant === 'featured' && topic.imageUrl && (
-        <div className="relative aspect-[16/9] w-full overflow-hidden bg-muted">
-          <img
-            src={topic.imageUrl}
-            alt=""
-            className="h-full w-full object-cover"
-            onError={(e) => {
-              ;(e.currentTarget.parentElement as HTMLElement).style.display = 'none'
-            }}
-          />
+      {/* Header: title + meta (ABOVE the image) */}
+      <div className="flex flex-col gap-2 p-4 pb-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="secondary" className="text-[10px]">
+            {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
+          </Badge>
+          <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Clock className="h-3 w-3" />
+            {timeAgo(topic.latestSeen)}
+          </span>
         </div>
-      )}
-
-      <div className="flex flex-col gap-3 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary" className="text-[10px]">
-              {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
-            </Badge>
-            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-              <Clock className="h-3 w-3" />
-              {timeAgo(topic.latestSeen)}
-            </span>
-          </div>
-        </div>
-
         <h3
           className={cn(
             'font-semibold leading-snug',
@@ -78,14 +78,46 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false }: T
         >
           {topic.title}
         </h3>
+      </div>
 
-        {topic.summary && variant !== 'compact' && (
-          <p className="text-sm text-muted-foreground line-clamp-2">{topic.summary}</p>
-        )}
+      {/* Image (every card, if available) */}
+      {showImage ? (
+        <div
+          className={cn(
+            'relative w-full overflow-hidden bg-muted',
+            variant === 'featured' ? 'aspect-[16/9]' : 'aspect-[16/10]',
+          )}
+        >
+          <img
+            src={imageUrl || undefined}
+            alt=""
+            className="h-full w-full object-cover"
+            onError={() => setImgError(true)}
+          />
+        </div>
+      ) : (
+        <div
+          className={cn(
+            'flex w-full items-center justify-center bg-muted/40 text-muted-foreground/50',
+            variant === 'featured' ? 'aspect-[16/9]' : 'aspect-[16/10]',
+          )}
+        >
+          <ImageIcon className="h-8 w-8" />
+        </div>
+      )}
 
+      {/* Description (BELOW the image) */}
+      {topic.summary && variant !== 'compact' && (
+        <div className="px-4 pt-3">
+          <p className="text-sm text-muted-foreground line-clamp-3">{topic.summary}</p>
+        </div>
+      )}
+
+      {/* Bias bar + meta (BELOW the description) */}
+      <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
         <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
 
-        <div className="flex items-center justify-between gap-2 pt-1">
+        <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] text-muted-foreground">
             {total} {total === 1 ? 'article' : 'articles'} across the spectrum
           </span>

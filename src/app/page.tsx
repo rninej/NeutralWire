@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Newspaper,
   RefreshCw,
@@ -12,6 +12,10 @@ import {
   Filter,
   Info,
   Cloud,
+  MapPin,
+  ChevronDown,
+  ChevronRight,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,19 +30,26 @@ import {
   CATEGORIES,
   CATEGORY_LABELS,
   NEWS_SOURCES,
+  PRIMARY_CATEGORIES,
+  SECONDARY_CATEGORIES,
   type Category,
 } from '@/lib/news-sources'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { TopicCard } from '@/components/topic-card'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
+import { SearchResults } from '@/components/search-results'
 import { cn } from '@/lib/utils'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import type { CountryInfo } from '@/lib/country-detect'
+import { detectCountryClient, DEFAULT_COUNTRY } from '@/lib/country-detect'
 
 type View = 'feed' | 'columns' | 'sources'
 
 interface NewsResponse {
   category: string
+  country?: string
+  countryName?: string
   topics: TopicArticle[]
   cached: boolean
   fresh?: boolean
@@ -51,113 +62,91 @@ interface NewsResponse {
   detail?: string
 }
 
+interface SearchResponse {
+  query: string
+  hits: Array<{
+    topic: TopicArticle
+    article: TopicArticle['articles'][number]
+    matchedField: 'title' | 'summary' | 'source'
+    snippet: string
+  }>
+  total: number
+  categoriesSearched: number
+  ms: number
+}
+
 export default function Home() {
-  const [category, setCategory] = React.useState<Category>('top')
-  const [view, setView] = React.useState<View>('feed')
-  const [search, setSearch] = React.useState('')
+  // --- Country detection ---
+  const [country, setCountry] = useState<CountryInfo | null>(null)
+
+  // --- Category / view state ---
+  const [category, setCategory] = useState<Category>('relevant')
+  const [view, setView] = useState<View>('feed')
+  const [extrasOpen, setExtrasOpen] = useState(false)
+
+  // --- Search state ---
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [apiSearchLoading, setApiSearchLoading] = useState(false)
+  const [apiSearchResult, setApiSearchResult] = useState<SearchResponse | null>(null)
+  const [localSearchAttempted, setLocalSearchAttempted] = useState(false)
+
+  // --- News data state ---
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-  const [topics, setTopics] = React.useState<TopicArticle[]>([])
-  const [fetchedAt, setFetchedAt] = React.useState<Date | null>(null)
-  const [isCached, setIsCached] = React.useState(false)
-  const [isFresh, setIsFresh] = React.useState(true)
-  const [articleCount, setArticleCount] = React.useState(0)
-  const [minCoverage, setMinCoverage] = React.useState(1)
-  const [loadMs, setLoadMs] = React.useState<number | null>(null)
-  const [lastBgRefreshAt, setLastBgRefreshAt] = React.useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [topics, setTopics] = useState<TopicArticle[]>([])
+  const [fetchedAt, setFetchedAt] = useState<Date | null>(null)
+  const [isCached, setIsCached] = useState(false)
+  const [isFresh, setIsFresh] = useState(true)
+  const [articleCount, setArticleCount] = useState(0)
+  const [minCoverage, setMinCoverage] = useState(1)
+  const [loadMs, setLoadMs] = useState<number | null>(null)
 
-  // Track in-flight category requests so we don't show stale data when
-  // the user rapidly switches categories.
+  // --- Refs for race-condition protection ---
   const reqIdRef = React.useRef(0)
-
-  const fetchData = React.useCallback(async (cat: Category, mc: number) => {
-    const reqId = ++reqIdRef.current
-    setLoading(true)
-    setError(null)
-    try {
-      const url = `/api/news?category=${encodeURIComponent(cat)}&limit=24&minCoverage=${mc}`
-      const res = await fetch(url, { cache: 'no-store' })
-      const json: NewsResponse = await res.json()
-      if (reqId !== reqIdRef.current) return // a newer request superseded us
-      if (!res.ok || json.error) {
-        throw new Error(json.error || `Failed (${res.status})`)
-      }
-      setTopics(json.topics)
-      setFetchedAt(new Date(json.fetchedAt))
-      setIsCached(!!json.cached)
-      setIsFresh(json.fresh !== false)
-      setArticleCount(json.articleCount ?? 0)
-      setLoadMs(json.ms ?? null)
-    } catch (e) {
-      if (reqId !== reqIdRef.current) return
-      setError(e instanceof Error ? e.message : 'Failed to load news')
-      setTopics([])
-    } finally {
-      if (reqId === reqIdRef.current) setLoading(false)
-    }
-  }, [])
-
-  // Background refresh: if the server returned stale cached data, kick
-  // off an async refresh in the background. The user sees the cached
-  // data immediately, then the data quietly updates ~15s later.
-  const bgRefresh = React.useCallback(
-    async (cat: Category, mc: number) => {
-      setRefreshing(true)
-      try {
-        const url = `/api/refresh?category=${encodeURIComponent(cat)}&limit=24&minCoverage=${mc}`
-        const res = await fetch(url, { cache: 'no-store' })
-        const json: NewsResponse = await res.json()
-        if (!res.ok || json.error) return
-        // Only apply if the user hasn't switched away in the meantime.
-        if (reqIdRef.current !== 0 && cat !== categoryRef.current) return
-        setTopics(json.topics)
-        setFetchedAt(new Date(json.fetchedAt))
-        setIsCached(false)
-        setIsFresh(true)
-        setArticleCount(json.articleCount ?? 0)
-        setLastBgRefreshAt(Date.now())
-      } catch {
-        // Silent — background refresh failure is not user-visible.
-      } finally {
-        setRefreshing(false)
-      }
-    },
-    [],
-  )
-
-  // Keep a ref of the current category so bgRefresh can detect switches.
   const categoryRef = React.useRef(category)
-  React.useEffect(() => {
+  useEffect(() => {
     categoryRef.current = category
   }, [category])
 
-  React.useEffect(() => {
+  // --- Country detection on first load ---
+  useEffect(() => {
     let cancelled = false
     ;(async () => {
-      await fetchData(category, minCoverage)
-      if (cancelled) return
-      // If the response was stale (cached older than 10 min), trigger
-      // a background refresh automatically.
-      // We wait 2s so the page can settle before kicking off the slow fetch.
-      if (!isFresh) {
-        await new Promise((r) => setTimeout(r, 2000))
-        if (!cancelled) bgRefresh(category, minCoverage)
+      // Try /api/country (server-side detection) first.
+      try {
+        const res = await fetch('/api/country', { cache: 'no-store' })
+        const json: CountryInfo & { detected: boolean } = await res.json()
+        if (!cancelled && json.detected) {
+          setCountry(json)
+          return
+        }
+      } catch {
+        // fall through to client detection
       }
+      // Fall back to client-side detection via ipwho.is.
+      const client = await detectCountryClient()
+      if (!cancelled) setCountry(client || DEFAULT_COUNTRY)
     })()
     return () => {
       cancelled = true
     }
-  }, [category, minCoverage])
+  }, [])
 
-  const handleRefreshClick = () => {
-    bgRefresh(category, minCoverage)
-  }
+  // --- Debounced search ---
+  useEffect(() => {
+    setLocalSearchAttempted(false)
+    const t = setTimeout(() => {
+      setDebouncedSearch(search.trim())
+    }, 250)
+    return () => clearTimeout(t)
+  }, [search])
 
-  // Filter topics by search query
+  // --- Filter topics locally for instant feedback ---
   const filteredTopics = React.useMemo(() => {
-    if (!search.trim()) return topics
-    const q = search.toLowerCase()
+    if (!debouncedSearch) return topics
+    const q = debouncedSearch.toLowerCase()
     return topics.filter(
       (t) =>
         t.title.toLowerCase().includes(q) ||
@@ -168,10 +157,139 @@ export default function Home() {
             a.sourceName.toLowerCase().includes(q),
         ),
     )
-  }, [topics, search])
+  }, [topics, debouncedSearch])
+
+  // Track whether local search yielded no results — triggers API search.
+  useEffect(() => {
+    if (debouncedSearch && filteredTopics.length === 0 && topics.length > 0) {
+      setLocalSearchAttempted(true)
+    } else if (debouncedSearch && filteredTopics.length > 0) {
+      setApiSearchResult(null)
+      setLocalSearchAttempted(false)
+    }
+  }, [debouncedSearch, filteredTopics.length, topics.length])
+
+  // --- API search fallback (when local search yields nothing) ---
+  useEffect(() => {
+    if (!localSearchAttempted || !debouncedSearch) return
+    let cancelled = false
+    setApiSearchLoading(true)
+    ;(async () => {
+      try {
+        const res = await fetch(
+          `/api/search?q=${encodeURIComponent(debouncedSearch)}&limit=30`,
+          { cache: 'no-store' },
+        )
+        const json: SearchResponse = await res.json()
+        if (!cancelled) setApiSearchResult(json)
+      } catch {
+        if (!cancelled) setApiSearchResult(null)
+      } finally {
+        if (!cancelled) setApiSearchLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [localSearchAttempted, debouncedSearch])
+
+  // --- Fetch news (cache-first from Firebase) ---
+  const fetchData = React.useCallback(
+    async (cat: Category, mc: number, country?: CountryInfo | null) => {
+      const reqId = ++reqIdRef.current
+      setLoading(true)
+      setError(null)
+      try {
+        const params = new URLSearchParams({
+          category: cat,
+          limit: '24',
+          minCoverage: String(mc),
+        })
+        if (country && cat !== 'top' && cat !== 'world' && cat !== 'politics' && cat !== 'business' && cat !== 'technology' && cat !== 'science' && cat !== 'health') {
+          params.set('country', country.code)
+        }
+        const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
+        const json: NewsResponse = await res.json()
+        if (reqId !== reqIdRef.current) return
+        if (!res.ok || json.error) {
+          throw new Error(json.error || `Failed (${res.status})`)
+        }
+        setTopics(json.topics)
+        setFetchedAt(new Date(json.fetchedAt))
+        setIsCached(!!json.cached)
+        setIsFresh(json.fresh !== false)
+        setArticleCount(json.articleCount ?? 0)
+        setLoadMs(json.ms ?? null)
+      } catch (e) {
+        if (reqId !== reqIdRef.current) return
+        setError(e instanceof Error ? e.message : 'Failed to load news')
+        setTopics([])
+      } finally {
+        if (reqId === reqIdRef.current) setLoading(false)
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    fetchData(category, minCoverage, country)
+  }, [category, minCoverage, country, fetchData])
+
+  // --- Background refresh when stale ---
+  const bgRefresh = React.useCallback(
+    async (cat: Category, mc: number, country?: CountryInfo | null) => {
+      setRefreshing(true)
+      try {
+        const params = new URLSearchParams({
+          category: cat,
+          limit: '24',
+          minCoverage: String(mc),
+        })
+        if (country && (cat === 'relevant' || cat === 'mycountry')) {
+          params.set('country', country.code)
+        }
+        const res = await fetch(`/api/refresh?${params.toString()}`, { cache: 'no-store' })
+        const json: NewsResponse = await res.json()
+        if (!res.ok || json.error) return
+        if (cat !== categoryRef.current) return
+        setTopics(json.topics)
+        setFetchedAt(new Date(json.fetchedAt))
+        setIsCached(false)
+        setIsFresh(true)
+        setArticleCount(json.articleCount ?? 0)
+      } catch {
+        // silent
+      } finally {
+        setRefreshing(false)
+      }
+    },
+    [],
+  )
+
+  // Auto-trigger background refresh when stale.
+  useEffect(() => {
+    if (!isFresh && !loading && !refreshing) {
+      const t = setTimeout(() => {
+        bgRefresh(category, minCoverage, country)
+      }, 2000)
+      return () => clearTimeout(t)
+    }
+  }, [isFresh, loading, refreshing, category, minCoverage, country, bgRefresh])
+
+  const handleRefreshClick = () => {
+    bgRefresh(category, minCoverage, country)
+  }
+
+  const handleClearSearch = () => {
+    setSearch('')
+    setDebouncedSearch('')
+    setApiSearchResult(null)
+    setLocalSearchAttempted(false)
+  }
 
   const featured = filteredTopics[0]
   const rest = filteredTopics.slice(1)
+  const showApiSearch = localSearchAttempted && debouncedSearch
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -182,22 +300,26 @@ export default function Home() {
             <div className="flex h-7 w-7 items-center justify-center rounded bg-foreground text-background">
               <Newspaper className="h-4 w-4" />
             </div>
-            <span className="hidden sm:inline">
-              Ground News <span className="text-muted-foreground">Free</span>
-            </span>
+            <span className="hidden sm:inline">NeutralWire</span>
           </a>
+
+          {/* Country indicator */}
+          {country && (
+            <Badge
+              variant="outline"
+              className="hidden gap-1 text-[10px] font-normal sm:inline-flex"
+              title={`Detected: ${country.name}`}
+            >
+              <MapPin className="h-3 w-3" />
+              {country.flag} {country.code}
+            </Badge>
+          )}
 
           {/* Cache indicator */}
           <Badge
             variant="outline"
             className="hidden gap-1 text-[10px] font-normal sm:inline-flex"
-            title={
-              isFresh
-                ? 'Data is fresh from RSS feeds'
-                : isCached
-                  ? 'Showing cached data from Firebase — refreshing in background'
-                  : 'Status unknown'
-            }
+            title={isFresh ? 'Data is fresh' : 'Showing cached data — refreshing'}
           >
             {isFresh ? (
               <>
@@ -232,21 +354,53 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Category nav */}
+        {/* Category nav: primary tabs + expandable extras */}
         <div className="mx-auto max-w-7xl px-4 pb-2">
-          <Tabs value={category} onValueChange={(v) => setCategory(v as Category)}>
-            <TabsList className="flex w-full overflow-x-auto justify-start gap-1 bg-transparent p-0 h-auto">
-              {CATEGORIES.map((c) => (
-                <TabsTrigger
+          <div className="flex flex-wrap items-center gap-1">
+            {PRIMARY_CATEGORIES.map((c) => (
+              <CategoryTab
+                key={c}
+                cat={c}
+                active={category === c}
+                country={c === 'mycountry' || c === 'relevant' ? country : null}
+                onClick={() => setCategory(c)}
+              />
+            ))}
+
+            <div className="mx-1 h-5 w-px bg-border" />
+
+            <button
+              type="button"
+              onClick={() => setExtrasOpen((v) => !v)}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted',
+                extrasOpen && 'bg-muted',
+              )}
+            >
+              More
+              {extrasOpen ? (
+                <ChevronDown className="h-3 w-3" />
+              ) : (
+                <ChevronRight className="h-3 w-3" />
+              )}
+            </button>
+          </div>
+
+          {extrasOpen && (
+            <div className="mt-2 flex flex-wrap items-center gap-1 border-t pt-2">
+              {SECONDARY_CATEGORIES.map((c) => (
+                <CategoryTab
                   key={c}
-                  value={c}
-                  className="data-[state=active]:bg-foreground data-[state=active]:text-background rounded-md px-3 py-1.5 text-xs font-medium"
-                >
-                  {CATEGORY_LABELS[c]}
-                </TabsTrigger>
+                  cat={c}
+                  active={category === c}
+                  onClick={() => {
+                    setCategory(c)
+                    setExtrasOpen(false)
+                  }}
+                />
               ))}
-            </TabsList>
-          </Tabs>
+            </div>
+          )}
         </div>
       </header>
 
@@ -259,143 +413,167 @@ export default function Home() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search topics, sources, headlines…"
-              className="pl-8"
+              placeholder="Search all cached articles across the spectrum…"
+              className="pl-8 pr-8"
             />
-          </div>
-        </div>
-
-        {/* View switcher + meta */}
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <Tabs value={view} onValueChange={(v) => setView(v as View)}>
-            <TabsList>
-              <TabsTrigger value="feed" className="gap-1.5 text-xs">
-                <TrendingUp className="h-3.5 w-3.5" /> Feed
-              </TabsTrigger>
-              <TabsTrigger value="columns" className="gap-1.5 text-xs">
-                <Filter className="h-3.5 w-3.5" /> Bias Split
-              </TabsTrigger>
-              <TabsTrigger value="sources" className="gap-1.5 text-xs">
-                Sources
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-
-          <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-            <span>
-              {loading
-                ? 'Loading…'
-                : refreshing
-                  ? 'Refreshing from RSS…'
-                  : `${filteredTopics.length} topics · ${articleCount} articles`}
-            </span>
-            {fetchedAt && (
-              <span className="hidden items-center gap-1 sm:inline-flex">
-                · updated {fetchedAt.toLocaleTimeString()}
-                {isCached && !isFresh && <span className="text-amber-500">(cached)</span>}
-              </span>
+            {search && (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="h-4 w-4" />
+              </button>
             )}
-            <select
-              value={minCoverage}
-              onChange={(e) => setMinCoverage(Number(e.target.value))}
-              className="rounded-md border bg-background px-1.5 py-1 text-xs"
-              aria-label="Minimum coverage filter"
-              title="Minimum sources per topic"
-            >
-              <option value={1}>All stories</option>
-              <option value={2}>2+ sources</option>
-              <option value={3}>3+ sources</option>
-              <option value={4}>4+ sources</option>
-            </select>
           </div>
         </div>
 
-        {/* Bias legend */}
-        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-          <span className="font-semibold text-foreground">Bias legend:</span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-blue-500" />
-            Left
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-zinc-500" />
-            Center
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
-            Right
-          </span>
-          <span className="ml-auto hidden items-center gap-1 sm:inline-flex">
-            <Info className="h-3 w-3" />
-            Bias ratings are community approximations, not authoritative.
-          </span>
-        </div>
-
-        {/* Content */}
-        {error ? (
-          <Card className="flex flex-col items-center gap-3 p-12 text-center">
-            <AlertCircle className="h-8 w-8 text-destructive" />
-            <div>
-              <div className="font-semibold">Could not load news</div>
-              <div className="mt-1 text-sm text-muted-foreground">{error}</div>
-            </div>
-            <Button onClick={handleRefreshClick} variant="outline" size="sm">
-              <RefreshCw className="h-4 w-4" /> Try again
-            </Button>
-          </Card>
-        ) : view === 'sources' ? (
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Ground News Free aggregates {NEWS_SOURCES.length} free RSS feeds from
-              outlets across the political spectrum. Bias labels follow public
-              ratings from AllSides and Media Bias Fact Check — they are
-              best-effort approximations, not definitive.
-            </p>
-            <SourceList />
-          </div>
-        ) : loading ? (
-          <LoadingState />
-        ) : filteredTopics.length === 0 ? (
-          <Card className="flex flex-col items-center gap-2 p-12 text-center text-muted-foreground">
-            <AlertCircle className="h-6 w-6" />
-            <div>
-              {search
-                ? `No topics match "${search}"`
-                : 'No topics found. Try a different category or lower the minimum coverage filter.'}
-            </div>
-          </Card>
-        ) : view === 'columns' ? (
-          <BiasColumns topics={filteredTopics} />
+        {/* Search results (full-catalog API search) — replaces the normal view
+            when local search yields nothing and an API search is running. */}
+        {showApiSearch ? (
+          <SearchResults
+            query={debouncedSearch}
+            loading={apiSearchLoading}
+            result={apiSearchResult}
+          />
         ) : (
           <>
-            {/* Featured story */}
-            {featured && (
-              <div className="mb-5">
-                <div className="mb-2 flex items-center gap-2">
-                  <Badge variant="default" className="gap-1 text-[10px]">
-                    <TrendingUp className="h-3 w-3" /> Most covered
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">
-                    {featured.coverage} sources reporting
-                  </span>
-                </div>
-                <TopicCard topic={featured} variant="featured" defaultOpen />
-              </div>
-            )}
+            {/* View switcher + meta */}
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <Tabs value={view} onValueChange={(v) => setView(v as View)}>
+                <TabsList>
+                  <TabsTrigger value="feed" className="gap-1.5 text-xs">
+                    <TrendingUp className="h-3.5 w-3.5" /> Feed
+                  </TabsTrigger>
+                  <TabsTrigger value="columns" className="gap-1.5 text-xs">
+                    <Filter className="h-3.5 w-3.5" /> Bias Split
+                  </TabsTrigger>
+                  <TabsTrigger value="sources" className="gap-1.5 text-xs">
+                    Sources
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
 
-            {/* Topic grid */}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {rest.map((t) => (
-                <TopicCard key={t.topicId} topic={t} />
-              ))}
+              <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                <span>
+                  {loading
+                    ? 'Loading…'
+                    : refreshing
+                      ? 'Refreshing from RSS…'
+                      : `${filteredTopics.length} topics · ${articleCount} articles`}
+                </span>
+                {fetchedAt && (
+                  <span className="hidden items-center gap-1 sm:inline-flex">
+                    · updated {fetchedAt.toLocaleTimeString()}
+                    {isCached && !isFresh && (
+                      <span className="text-amber-500">(cached)</span>
+                    )}
+                  </span>
+                )}
+                <select
+                  value={minCoverage}
+                  onChange={(e) => setMinCoverage(Number(e.target.value))}
+                  className="rounded-md border bg-background px-1.5 py-1 text-xs"
+                  aria-label="Minimum coverage filter"
+                  title="Minimum sources per topic"
+                >
+                  <option value={1}>All stories</option>
+                  <option value={2}>2+ sources</option>
+                  <option value={3}>3+ sources</option>
+                  <option value={4}>4+ sources</option>
+                </select>
+              </div>
             </div>
 
-            {/* Background refresh hint */}
-            {refreshing && (
-              <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full border bg-background/95 px-4 py-1.5 text-xs shadow-md backdrop-blur">
-                <Loader2 className="mr-1.5 inline h-3 w-3 animate-spin" />
-                Fetching fresh headlines from RSS feeds…
+            {/* Bias legend */}
+            <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+              <span className="font-semibold text-foreground">Bias legend:</span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-blue-500" />
+                Left
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-zinc-500" />
+                Center
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
+                Right
+              </span>
+              <span className="ml-auto hidden items-center gap-1 sm:inline-flex">
+                <Info className="h-3 w-3" />
+                Bias ratings are community approximations, not authoritative.
+              </span>
+            </div>
+
+            {/* Content */}
+            {error ? (
+              <Card className="flex flex-col items-center gap-3 p-12 text-center">
+                <AlertCircle className="h-8 w-8 text-destructive" />
+                <div>
+                  <div className="font-semibold">Could not load news</div>
+                  <div className="mt-1 text-sm text-muted-foreground">{error}</div>
+                </div>
+                <Button onClick={handleRefreshClick} variant="outline" size="sm">
+                  <RefreshCw className="h-4 w-4" /> Try again
+                </Button>
+              </Card>
+            ) : view === 'sources' ? (
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  NeutralWire aggregates {NEWS_SOURCES.length} free RSS feeds from
+                  outlets across the political spectrum. Bias labels follow public
+                  ratings from AllSides and Media Bias Fact Check — they are
+                  best-effort approximations, not definitive.
+                </p>
+                <SourceList />
               </div>
+            ) : loading ? (
+              <LoadingState />
+            ) : filteredTopics.length === 0 ? (
+              <Card className="flex flex-col items-center gap-2 p-12 text-center text-muted-foreground">
+                <AlertCircle className="h-6 w-6" />
+                <div>
+                  {debouncedSearch
+                    ? `No topics match "${debouncedSearch}" — searching full catalog…`
+                    : 'No topics found. Try a different category or lower the minimum coverage filter.'}
+                </div>
+              </Card>
+            ) : view === 'columns' ? (
+              <BiasColumns topics={filteredTopics} />
+            ) : (
+              <>
+                {/* Featured story */}
+                {featured && (
+                  <div className="mb-5">
+                    <div className="mb-2 flex items-center gap-2">
+                      <Badge variant="default" className="gap-1 text-[10px]">
+                        <TrendingUp className="h-3 w-3" /> Most covered
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {featured.coverage} sources reporting
+                      </span>
+                    </div>
+                    <TopicCard topic={featured} variant="featured" defaultOpen />
+                  </div>
+                )}
+
+                {/* Topic grid */}
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {rest.map((t) => (
+                    <TopicCard key={t.topicId} topic={t} />
+                  ))}
+                </div>
+
+                {/* Background refresh hint */}
+                {refreshing && (
+                  <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full border bg-background/95 px-4 py-1.5 text-xs shadow-md backdrop-blur">
+                    <Loader2 className="mr-1.5 inline h-3 w-3 animate-spin" />
+                    Fetching fresh headlines from RSS feeds…
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
@@ -406,9 +584,8 @@ export default function Home() {
         <div className="mx-auto max-w-7xl px-4 text-xs text-muted-foreground">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <strong className="text-foreground">Ground News Free</strong> · A free,
-              open-source news aggregator built on public RSS feeds. Not affiliated
-              with Ground News, Inc.
+              <strong className="text-foreground">NeutralWire</strong> · A free,
+              open-source news aggregator built on public RSS feeds.
             </div>
             <div className="flex items-center gap-3">
               <span>{NEWS_SOURCES.length} sources</span>
@@ -420,11 +597,13 @@ export default function Home() {
           </div>
           <p className="mt-3 max-w-3xl">
             Stories are cached in a free Firebase Realtime Database (europe-west1)
-            so the page loads instantly. Fresh RSS data is fetched in the
-            background every 10 minutes per category. Bias ratings shown here are
-            best-effort approximations based on public community ratings
-            (AllSides, Media Bias Fact Check) — they reflect general editorial
-            tendency, not the stance of any individual article.
+            so the page loads instantly. The “Relevant” tab mixes your country's
+            biggest news with the top world stories, auto-detected from your IP.
+            Fresh RSS data is fetched in the background every 10 minutes per
+            category. Bias ratings shown here are best-effort approximations
+            based on public community ratings (AllSides, Media Bias Fact Check)
+            — they reflect general editorial tendency, not the stance of any
+            individual article.
           </p>
         </div>
       </footer>
@@ -432,13 +611,42 @@ export default function Home() {
   )
 }
 
+function CategoryTab({
+  cat,
+  active,
+  country,
+  onClick,
+}: {
+  cat: Category
+  active: boolean
+  country?: CountryInfo | null
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+        active
+          ? 'bg-foreground text-background'
+          : 'hover:bg-muted text-foreground/80',
+      )}
+    >
+      {cat === 'mycountry' && country?.flag}
+      {cat === 'relevant' && country?.flag}
+      {CATEGORY_LABELS[cat]}
+    </button>
+  )
+}
+
 function LoadingState() {
   return (
     <div className="space-y-4">
-      <Card className="h-64 animate-pulse bg-muted/40" />
+      <Card className="h-72 animate-pulse bg-muted/40" />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 6 }).map((_, i) => (
-          <Card key={i} className="h-48 animate-pulse bg-muted/40" />
+          <Card key={i} className="h-64 animate-pulse bg-muted/40" />
         ))}
       </div>
       <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">

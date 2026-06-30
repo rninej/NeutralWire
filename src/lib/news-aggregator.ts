@@ -343,15 +343,24 @@ function clusterTopics(articles: FeedArticle[]): TopicArticle[] {
  *   - Firebase cache is empty/missing, OR
  *   - User explicitly clicks Refresh, OR
  *   - Background refresh decides the cache is stale
+ *
+ * For virtual categories (`relevant`, `mycountry`), pass `countrySourceIds`
+ * — the list of source IDs relevant to the visitor's country.
  */
 export async function aggregateCategory(
   category: Category,
-  options: { limit?: number; minCoverage?: number } = {},
+  options: {
+    limit?: number
+    minCoverage?: number
+    countrySourceIds?: string[]
+  } = {},
 ): Promise<{ topics: TopicArticle[]; articleCount: number; sourceCount: number }> {
   const limit = options.limit ?? 24
   const minCoverage = options.minCoverage ?? 1
 
-  const feeds = feedsForCategory(category)
+  const feeds = feedsForCategory(category, {
+    countrySourceIds: options.countrySourceIds,
+  })
   const ac = new AbortController()
   const timeout = setTimeout(() => ac.abort(), 18000)
 

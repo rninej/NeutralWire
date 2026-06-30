@@ -30,8 +30,17 @@ export interface NewsSource {
 /**
  * Categories that map to user-visible sections.
  * Each source's feeds carry one of these categories.
+ *
+ * `relevant` and `mycountry` are *virtual* categories — they don't appear
+ * in source feed definitions. Instead they're computed at request time
+ * based on the visitor's detected country:
+ *   - `mycountry`: only feeds from sources relevant to the visitor's country
+ *   - `relevant`: a mix — local feeds PLUS global `top` and `world` feeds,
+ *     with local stories prioritised in clustering.
  */
 export const CATEGORIES = [
+  'relevant',
+  'mycountry',
   'top',
   'world',
   'politics',
@@ -44,6 +53,8 @@ export const CATEGORIES = [
 export type Category = (typeof CATEGORIES)[number]
 
 export const CATEGORY_LABELS: Record<Category, string> = {
+  relevant: 'Relevant',
+  mycountry: 'My Country',
   top: 'Top Stories',
   world: 'World',
   politics: 'Politics',
@@ -52,6 +63,21 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   science: 'Science',
   health: 'Health',
 }
+
+/**
+ * The "main" categories shown as primary tabs.
+ * `top`/`world`/etc. are shown under "More".
+ */
+export const PRIMARY_CATEGORIES: Category[] = ['relevant', 'mycountry']
+export const SECONDARY_CATEGORIES: Category[] = [
+  'top',
+  'world',
+  'politics',
+  'business',
+  'technology',
+  'science',
+  'health',
+]
 
 export const NEWS_SOURCES: NewsSource[] = [
   // ---------- LEFT ----------
@@ -443,14 +469,48 @@ export function sourcesByLeaning(leaning: Leaning): NewsSource[] {
 
 /**
  * Returns all RSS feed URLs that match a given category, with the source they belong to.
+ *
+ * For virtual categories (`relevant`, `mycountry`), the caller must pass a
+ * `country` ISO code; we look up the relevant source IDs via
+ * `sourcesForCountry()` from country-detect.ts. To avoid a circular import,
+ * the source-id list is passed in directly.
  */
 export function feedsForCategory(
   category: Category,
+  options: { countrySourceIds?: string[] } = {},
 ): { url: string; source: NewsSource; feedCategory: string }[] {
   const out: { url: string; source: NewsSource; feedCategory: string }[] = []
+  const countryIds = new Set(options.countrySourceIds ?? [])
+
   for (const source of NEWS_SOURCES) {
     for (const feed of source.feeds) {
-      if (feed.category === category || category === 'top') {
+      // `top` is a catch-all — every feed's first category counts.
+      if (category === 'top') {
+        out.push({ url: feed.url, source, feedCategory: feed.category })
+        continue
+      }
+
+      // `mycountry`: only feeds from sources relevant to the visitor's country.
+      if (category === 'mycountry') {
+        if (countryIds.has(source.id)) {
+          out.push({ url: feed.url, source, feedCategory: 'mycountry' })
+        }
+        continue
+      }
+
+      // `relevant`: local feeds PLUS global top/world feeds.
+      // Local sources contribute all their feeds; international sources
+      // contribute only their `top` and `world` feeds.
+      if (category === 'relevant') {
+        if (countryIds.has(source.id)) {
+          out.push({ url: feed.url, source, feedCategory: 'local' })
+        } else if (feed.category === 'top' || feed.category === 'world') {
+          out.push({ url: feed.url, source, feedCategory: feed.category })
+        }
+        continue
+      }
+
+      if (feed.category === category) {
         out.push({ url: feed.url, source, feedCategory: feed.category })
       }
     }
