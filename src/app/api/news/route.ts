@@ -1,0 +1,401 @@
+import { NextRequest, NextResponse } from 'next/server'
+import {
+  NEWS_SOURCES,
+  feedsForCategory,
+  type Category,
+  type Leaning,
+  type NewsSource,
+} from '@/lib/news-sources'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
+// ---------- Types ----------
+export interface FeedArticle {
+  id: string
+  title: string
+  link: string
+  description: string
+  pubDate: string | null
+  iso: number
+  imageUrl: string | null
+  sourceId: string
+  sourceName: string
+  sourceHomepage: string
+  leaning: Leaning
+  country: string
+  category: string
+}
+
+export interface TopicArticle {
+  topicId: string
+  title: string
+  summary: string
+  imageUrl: string | null
+  coverage: number
+  leanLeft: number
+  leanCenter: number
+  leanRight: number
+  firstSeen: number
+  latestSeen: number
+  articles: FeedArticle[]
+}
+
+interface FeedCacheEntry {
+  ts: number
+  articles: FeedArticle[]
+}
+
+// ---------- Caching ----------
+const FEED_CACHE = new Map<string, FeedCacheEntry>()
+const FEED_TTL_MS = 5 * 60 * 1000
+const TOPIC_CACHE = new Map<string, { ts: number; topics: TopicArticle[] }>()
+const TOPIC_TTL_MS = 4 * 60 * 1000
+
+// ---------- Stopwords ----------
+const STOPWORDS = new Set([
+  'a','an','the','and','or','but','if','then','else','for','of','to','in','on','at','by','with','from','as','is','are','was','were','be','been','being','this','that','these','those','it','its','they','them','their','there','here','we','us','our','you','your','he','she','his','her','my','me','not','no','yes','do','does','did','done','have','has','had','will','would','can','could','should','may','might','must','shall','about','after','before','between','during','through','over','under','up','down','out','off','again','more','most','some','such','only','own','same','so','than','too','very','just','also','new','one','two','three','said','says','say','saying','news','report','reports','reported','amid','amidst','while','because','since','until','without','within','against','above','below','into','onto','upon','who','what','when','where','why','how','which','whom','whose','whether','either','neither','both','each','other','another','via','am','pm','gmt','utc',
+])
+
+function normalizeTitle(t: string): string {
+  return t
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function titleKeywords(t: string): Set<string> {
+  const words = normalizeTitle(t).split(' ').filter(Boolean)
+  const out = new Set<string>()
+  for (const w of words) {
+    if (w.length < 3) continue
+    if (STOPWORDS.has(w)) continue
+    if (/^\d+$/.test(w)) continue
+    out.add(w)
+  }
+  return out
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let inter = 0
+  for (const x of a) if (b.has(x)) inter++
+  const union = a.size + b.size - inter
+  return union === 0 ? 0 : inter / union
+}
+
+// ---------- RSS Parsing ----------
+function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedArticle[] {
+  const articles: FeedArticle[] = []
+  const itemRegex = /<(?:item|entry)[\s>]([\s\S]*?)<\/(?:item|entry)>/g
+  let m: RegExpExecArray | null
+
+  while ((m = itemRegex.exec(xml)) !== null) {
+    const block = m[1]
+
+    const title = extractTag(block, 'title') || ''
+    const link =
+      extractTag(block, 'link') ||
+      extractAttr(block, 'link', 'href') ||
+      ''
+    const description =
+      extractTag(block, 'description') ||
+      extractTag(block, 'summary') ||
+      extractTag(block, 'content') ||
+      ''
+    const pubDate =
+      extractTag(block, 'pubDate') ||
+      extractTag(block, 'published') ||
+      extractTag(block, 'updated') ||
+      extractTag(block, 'dc:date') ||
+      null
+
+    const imageUrl: string | null =
+      extractAttr(block, 'media:content', 'url') ||
+      extractAttr(block, 'media:thumbnail', 'url') ||
+      extractAttr(block, 'enclosure', 'url') ||
+      extractTag(block, 'image') ||
+      extractImageFromHtml(description) ||
+      null
+
+    if (!title || !link) continue
+    const cleanTitle = stripCdata(title).trim()
+    const cleanLink = stripCdata(link).trim()
+    if (!cleanTitle || !cleanLink) continue
+    if (cleanTitle.length < 8) continue
+
+    const iso = parseDateToMs(pubDate)
+
+    articles.push({
+      id: hashId(cleanLink + '|' + source.id),
+      title: decodeEntities(cleanTitle),
+      link: cleanLink,
+      description: decodeEntities(stripHtml(stripCdata(description))).trim().slice(0, 400),
+      pubDate,
+      iso,
+      imageUrl,
+      sourceId: source.id,
+      sourceName: source.name,
+      sourceHomepage: source.homepage,
+      leaning: source.leaning,
+      country: source.country,
+      category: feedCategory,
+    })
+  }
+
+  return articles
+}
+
+function extractTag(block: string, tag: string): string | null {
+  const re = new RegExp(
+    `<${escapeReg(tag)}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escapeReg(tag)}>`,
+    'i',
+  )
+  const m = block.match(re)
+  return m ? m[1] : null
+}
+
+function extractAttr(block: string, tag: string, attr: string): string | null {
+  const re = new RegExp(
+    `<${escapeReg(tag)}\\b[^>]*\\b${escapeReg(attr)}\\s*=\\s*["']([^"']+)["'][^>]*`,
+    'i',
+  )
+  const m = block.match(re)
+  return m ? m[1] : null
+}
+
+function extractImageFromHtml(html: string): string | null {
+  if (!html) return null
+  const m = html.match(/<img[^>]+src=["']([^"']+)["']/i)
+  return m ? m[1] : null
+}
+
+function escapeReg(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function stripCdata(s: string): string {
+  return s
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&lt;!\[CDATA\[([\s\S]*?)\]\]&gt;/g, '$1')
+}
+
+function stripHtml(s: string): string {
+  return s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+}
+
+function parseDateToMs(s: string | null): number {
+  if (!s) return Date.now()
+  const t = Date.parse(s)
+  if (Number.isNaN(t)) return Date.now()
+  return t
+}
+
+function hashId(s: string): string {
+  let h = 0
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
+  }
+  return 'a' + (h >>> 0).toString(36)
+}
+
+// ---------- Feed Fetcher ----------
+async function fetchFeed(
+  url: string,
+  source: NewsSource,
+  feedCategory: string,
+  signal: AbortSignal,
+): Promise<FeedArticle[]> {
+  const cached = FEED_CACHE.get(url)
+  if (cached && Date.now() - cached.ts < FEED_TTL_MS) {
+    return cached.articles
+  }
+  try {
+    const res = await fetch(url, {
+      signal,
+      headers: {
+        'User-Agent': 'GroundNewsFree/1.0 (news aggregator; contact@example.com)',
+        Accept: 'application/rss+xml, application/xml, application/atom+xml, text/xml, */*',
+      },
+      cache: 'no-store',
+    })
+    if (!res.ok) return cached?.articles ?? []
+    const xml = await res.text()
+    const articles = parseFeed(xml, source, feedCategory)
+    FEED_CACHE.set(url, { ts: Date.now(), articles })
+    return articles
+  } catch {
+    return cached?.articles ?? []
+  }
+}
+
+// ---------- Topic Clustering ----------
+function clusterTopics(articles: FeedArticle[]): TopicArticle[] {
+  const kwSets = articles.map((a) => titleKeywords(a.title))
+
+  const order = articles
+    .map((_, i) => i)
+    .sort((a, b) => articles[b].iso - articles[a].iso)
+
+  const assigned = new Array(articles.length).fill(false)
+  const topics: TopicArticle[] = []
+
+  const SIM_THRESHOLD = 0.34
+
+  for (const i of order) {
+    if (assigned[i]) continue
+    const clusterIdx: number[] = [i]
+    assigned[i] = true
+
+    for (const j of order) {
+      if (assigned[j]) continue
+      if (Math.abs(articles[i].iso - articles[j].iso) > 72 * 60 * 60 * 1000) continue
+      const sim = jaccard(kwSets[i], kwSets[j])
+      if (sim >= SIM_THRESHOLD) {
+        clusterIdx.push(j)
+        assigned[j] = true
+      }
+    }
+
+    let bestTitle = articles[clusterIdx[0]].title
+    let bestSummary = articles[clusterIdx[0]].description
+    let bestImage = articles[clusterIdx[0]].imageUrl
+    let bestKwSize = kwSets[clusterIdx[0]].size
+    let firstSeen = articles[clusterIdx[0]].iso
+    let latestSeen = articles[clusterIdx[0]].iso
+
+    let leanLeft = 0
+    let leanCenter = 0
+    let leanRight = 0
+    const seenSourceIds = new Set<string>()
+
+    const clusterArticles: FeedArticle[] = []
+    for (const idx of clusterIdx) {
+      const a = articles[idx]
+      if (seenSourceIds.has(a.sourceId)) {
+        if (a.leaning === 'left') leanLeft++
+        else if (a.leaning === 'center') leanCenter++
+        else leanRight++
+        continue
+      }
+      seenSourceIds.add(a.sourceId)
+      clusterArticles.push(a)
+      if (a.leaning === 'left') leanLeft++
+      else if (a.leaning === 'center') leanCenter++
+      else leanRight++
+
+      if (kwSets[idx].size > bestKwSize) {
+        bestKwSize = kwSets[idx].size
+        bestTitle = a.title
+        bestSummary = a.description
+      }
+      if (!bestImage && a.imageUrl) bestImage = a.imageUrl
+      if (a.iso < firstSeen) firstSeen = a.iso
+      if (a.iso > latestSeen) latestSeen = a.iso
+    }
+
+    const coverage = clusterArticles.length
+    topics.push({
+      topicId: hashId(bestTitle + '|' + firstSeen),
+      title: bestTitle,
+      summary: bestSummary,
+      imageUrl: bestImage,
+      coverage,
+      leanLeft,
+      leanCenter,
+      leanRight,
+      firstSeen,
+      latestSeen,
+      articles: clusterArticles.sort((a, b) => b.iso - a.iso),
+    })
+  }
+
+  return topics
+}
+
+// ---------- Handler ----------
+export async function GET(req: NextRequest) {
+  const sp = req.nextUrl.searchParams
+  const category = (sp.get('category') || 'top') as Category
+  const limit = Math.min(40, Math.max(5, Number(sp.get('limit') || '24')))
+  const minCoverage = Math.max(1, Math.min(8, Number(sp.get('minCoverage') || '1')))
+
+  const cacheKey = `${category}:${limit}:${minCoverage}`
+  const cached = TOPIC_CACHE.get(cacheKey)
+  if (cached && Date.now() - cached.ts < TOPIC_TTL_MS) {
+    return NextResponse.json({
+      category,
+      topics: cached.topics,
+      cached: true,
+      fetchedAt: new Date(cached.ts).toISOString(),
+      sourceCount: NEWS_SOURCES.length,
+    })
+  }
+
+  const feeds = feedsForCategory(category)
+  const ac = new AbortController()
+  const timeout = setTimeout(() => ac.abort(), 18000)
+
+  try {
+    const results = await Promise.all(
+      feeds.map((f) => fetchFeed(f.url, f.source, f.feedCategory, ac.signal)),
+    )
+    clearTimeout(timeout)
+
+    const all: FeedArticle[] = []
+    for (const r of results) all.push(...r)
+
+    const seen = new Set<string>()
+    const dedup: FeedArticle[] = []
+    for (const a of all) {
+      const key = a.sourceId + '|' + a.link
+      if (seen.has(key)) continue
+      seen.add(key)
+      dedup.push(a)
+    }
+
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000
+    const fresh = dedup.filter((a) => a.iso >= cutoff)
+
+    const topics = clusterTopics(fresh)
+    const filtered = topics
+      .filter((t) => t.coverage >= minCoverage)
+      .sort((a, b) => {
+        if (b.coverage !== a.coverage) return b.coverage - a.coverage
+        return b.latestSeen - a.latestSeen
+      })
+      .slice(0, limit)
+
+    TOPIC_CACHE.set(cacheKey, { ts: Date.now(), topics: filtered })
+
+    return NextResponse.json({
+      category,
+      topics: filtered,
+      cached: false,
+      fetchedAt: new Date().toISOString(),
+      sourceCount: NEWS_SOURCES.length,
+      articleCount: fresh.length,
+    })
+  } catch (err) {
+    clearTimeout(timeout)
+    return NextResponse.json(
+      { error: 'Failed to fetch news', detail: String(err) },
+      { status: 500 },
+    )
+  }
+}
