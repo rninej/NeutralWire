@@ -178,10 +178,17 @@ export async function detectCountryServer(
   }
 }
 
-// ---------- Client-side detection (fallback) ----------
+// ---------- Client-side detection (primary) ----------
 /**
- * Browser-side country detection via a CORS-friendly API.
- * Used when the server couldn't detect (e.g. localhost dev).
+ * Browser-side country detection via multiple CORS-friendly APIs.
+ *
+ * This is the PRIMARY detection method (not the fallback) because:
+ *  - The server runs behind a gateway that may not forward the real
+ *    client IP, so server-side detection can return the wrong country.
+ *  - The browser directly sees the user's real public IP.
+ *  - CORS-friendly APIs (ipwho.is) work from the browser.
+ *
+ * Tries ipwho.is first, then reallyfreegeoip.org as a backup.
  * Result is cached in localStorage for 24 hours.
  */
 const CLIENT_CACHE_KEY = 'neutralwire:country'
@@ -206,36 +213,102 @@ export async function detectCountryClient(): Promise<CountryInfo | null> {
     // ignore
   }
 
+  const info = await detectCountryClientFresh()
+  // Cache the result (even if null, to avoid retrying every page load).
   try {
-    // ipwho.is is CORS-friendly and free.
-    const res = await fetch('https://ipwho.is/', {
-      signal: AbortSignal.timeout(6000),
-    })
-    if (!res.ok) return null
-    const data = (await res.json()) as {
-      success: boolean
-      country_code?: string
-      country?: string
-    }
-    if (!data.success || !data.country_code) {
-      localStorage.setItem(
-        CLIENT_CACHE_KEY,
-        JSON.stringify({ ts: Date.now(), info: null }),
-      )
-      return null
-    }
-    const info: CountryInfo = {
-      code: data.country_code.toUpperCase(),
-      name: data.country || countryName(data.country_code),
-      flag: isoToFlag(data.country_code),
-    }
     localStorage.setItem(
       CLIENT_CACHE_KEY,
       JSON.stringify({ ts: Date.now(), info }),
     )
-    return info
   } catch {
-    return null
+    // ignore
+  }
+  return info
+}
+
+/**
+ * Force a fresh client-side detection (bypasses cache).
+ * Tries multiple CORS-friendly geolocation APIs in order.
+ */
+async function detectCountryClientFresh(): Promise<CountryInfo | null> {
+  // 1. ipwho.is — CORS-friendly, free, no key
+  try {
+    const res = await fetch('https://ipwho.is/', {
+      signal: AbortSignal.timeout(6000),
+    })
+    if (res.ok) {
+      const data = (await res.json()) as {
+        success: boolean
+        country_code?: string
+        country?: string
+      }
+      if (data.success && data.country_code) {
+        return {
+          code: data.country_code.toUpperCase(),
+          name: data.country || countryName(data.country_code),
+          flag: isoToFlag(data.country_code),
+        }
+      }
+    }
+  } catch {
+    // try next
+  }
+
+  // 2. reallyfreegeoip.org — CORS-friendly, free, no key
+  try {
+    const res = await fetch('https://reallyfreegeoip.org/json/', {
+      signal: AbortSignal.timeout(6000),
+    })
+    if (res.ok) {
+      const data = (await res.json()) as {
+        country_code?: string
+        country_name?: string
+      }
+      if (data.country_code) {
+        return {
+          code: data.country_code.toUpperCase(),
+          name: data.country_name || countryName(data.country_code),
+          flag: isoToFlag(data.country_code),
+        }
+      }
+    }
+  } catch {
+    // try next
+  }
+
+  // 3. Cloudflare trace — returns plaintext with loc=XX line
+  try {
+    const res = await fetch('https://www.cloudflare.com/cdn-cgi/trace', {
+      signal: AbortSignal.timeout(6000),
+    })
+    if (res.ok) {
+      const text = await res.text()
+      const match = text.match(/^loc=(\w{2})$/m)
+      if (match) {
+        const code = match[1].toUpperCase()
+        return {
+          code,
+          name: countryName(code),
+          flag: isoToFlag(code),
+        }
+      }
+    }
+  } catch {
+    // give up
+  }
+
+  return null
+}
+
+/**
+ * Clear the cached client-side country detection result.
+ * Called when the user manually picks a different country.
+ */
+export function clearCountryCache(): void {
+  try {
+    localStorage.removeItem(CLIENT_CACHE_KEY)
+  } catch {
+    // ignore
   }
 }
 
@@ -327,3 +400,17 @@ export const DEFAULT_COUNTRY: CountryInfo = {
   name: 'International',
   flag: '🌍',
 }
+
+/**
+ * Countries the user can manually pick from in the country selector.
+ * Sorted alphabetically by name. Only includes countries that have
+ * a dedicated source mapping in COUNTRY_SOURCES.
+ */
+export const SELECTABLE_COUNTRIES: CountryInfo[] = Object.keys(COUNTRY_SOURCES)
+  .filter((code) => code !== 'INT')
+  .map((code) => ({
+    code,
+    name: countryName(code),
+    flag: isoToFlag(code),
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name))

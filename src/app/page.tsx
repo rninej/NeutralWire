@@ -12,9 +12,6 @@ import {
   Filter,
   Info,
   Cloud,
-  MapPin,
-  ChevronDown,
-  ChevronRight,
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -27,9 +24,7 @@ import {
   TabsTrigger,
 } from '@/components/ui/tabs'
 import {
-  CATEGORIES,
   CATEGORY_LABELS,
-  NEWS_SOURCES,
   PRIMARY_CATEGORIES,
   SECONDARY_CATEGORIES,
   type Category,
@@ -38,6 +33,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { TopicCard } from '@/components/topic-card'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
+import { CountryPicker } from '@/components/country-picker'
 import { SearchResults } from '@/components/search-results'
 import { cn } from '@/lib/utils'
 import type { TopicArticle } from '@/lib/news-aggregator'
@@ -82,7 +78,6 @@ export default function Home() {
   // --- Category / view state ---
   const [category, setCategory] = useState<Category>('relevant')
   const [view, setView] = useState<View>('feed')
-  const [extrasOpen, setExtrasOpen] = useState(false)
 
   // --- Search state ---
   const [search, setSearch] = useState('')
@@ -111,26 +106,42 @@ export default function Home() {
   }, [category])
 
   // --- Country detection on first load ---
+  // Client-side detection is PRIMARY (runs in the user's browser, sees
+  // their real public IP). Server-side detection is unreliable behind
+  // the Caddy gateway which may not forward the real client IP.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      // Try /api/country (server-side detection) first.
+      // Check localStorage for a manual override first.
       try {
-        const res = await fetch('/api/country', { cache: 'no-store' })
-        const json: CountryInfo & { detected: boolean } = await res.json()
-        if (!cancelled && json.detected) {
-          setCountry(json)
-          return
+        const manual = localStorage.getItem('neutralwire:country-manual')
+        if (manual) {
+          const parsed = JSON.parse(manual) as CountryInfo
+          if (!cancelled) {
+            setCountry(parsed)
+            return
+          }
         }
       } catch {
-        // fall through to client detection
+        // ignore
       }
-      // Fall back to client-side detection via ipwho.is.
+
+      // Client-side auto-detection (ipwho.is → reallyfreegeoip → cloudflare trace).
       const client = await detectCountryClient()
       if (!cancelled) setCountry(client || DEFAULT_COUNTRY)
     })()
     return () => {
       cancelled = true
+    }
+  }, [])
+
+  // --- Manual country override ---
+  const handleCountryChange = React.useCallback((c: CountryInfo) => {
+    setCountry(c)
+    try {
+      localStorage.setItem('neutralwire:country-manual', JSON.stringify(c))
+    } catch {
+      // ignore
     }
   }, [])
 
@@ -303,17 +314,8 @@ export default function Home() {
             <span className="hidden sm:inline">NeutralWire</span>
           </a>
 
-          {/* Country indicator */}
-          {country && (
-            <Badge
-              variant="outline"
-              className="hidden gap-1 text-[10px] font-normal sm:inline-flex"
-              title={`Detected: ${country.name}`}
-            >
-              <MapPin className="h-3 w-3" />
-              {country.flag} {country.code}
-            </Badge>
-          )}
+          {/* Country picker (clickable, with manual override) */}
+          <CountryPicker country={country} onChange={handleCountryChange} />
 
           {/* Cache indicator */}
           <Badge
@@ -354,7 +356,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Category nav: primary tabs + expandable extras */}
+        {/* Category nav: all categories shown flat (no "More" expandable) */}
         <div className="mx-auto max-w-7xl px-4 pb-2">
           <div className="flex flex-wrap items-center gap-1">
             {PRIMARY_CATEGORIES.map((c) => (
@@ -369,38 +371,15 @@ export default function Home() {
 
             <div className="mx-1 h-5 w-px bg-border" />
 
-            <button
-              type="button"
-              onClick={() => setExtrasOpen((v) => !v)}
-              className={cn(
-                'inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted',
-                extrasOpen && 'bg-muted',
-              )}
-            >
-              More
-              {extrasOpen ? (
-                <ChevronDown className="h-3 w-3" />
-              ) : (
-                <ChevronRight className="h-3 w-3" />
-              )}
-            </button>
+            {SECONDARY_CATEGORIES.map((c) => (
+              <CategoryTab
+                key={c}
+                cat={c}
+                active={category === c}
+                onClick={() => setCategory(c)}
+              />
+            ))}
           </div>
-
-          {extrasOpen && (
-            <div className="mt-2 flex flex-wrap items-center gap-1 border-t pt-2">
-              {SECONDARY_CATEGORIES.map((c) => (
-                <CategoryTab
-                  key={c}
-                  cat={c}
-                  active={category === c}
-                  onClick={() => {
-                    setCategory(c)
-                    setExtrasOpen(false)
-                  }}
-                />
-              ))}
-            </div>
-          )}
         </div>
       </header>
 
@@ -520,15 +499,7 @@ export default function Home() {
                 </Button>
               </Card>
             ) : view === 'sources' ? (
-              <div className="space-y-4">
-                <p className="text-sm text-muted-foreground">
-                  NeutralWire aggregates {NEWS_SOURCES.length} free RSS feeds from
-                  outlets across the political spectrum. Bias labels follow public
-                  ratings from AllSides and Media Bias Fact Check — they are
-                  best-effort approximations, not definitive.
-                </p>
-                <SourceList />
-              </div>
+              <SourceList />
             ) : loading ? (
               <LoadingState />
             ) : filteredTopics.length === 0 ? (
@@ -580,31 +551,9 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t bg-muted/30 py-6 mt-auto">
-        <div className="mx-auto max-w-7xl px-4 text-xs text-muted-foreground">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <strong className="text-foreground">NeutralWire</strong> · A free,
-              open-source news aggregator built on public RSS feeds.
-            </div>
-            <div className="flex items-center gap-3">
-              <span>{NEWS_SOURCES.length} sources</span>
-              <span>·</span>
-              <span>Firebase-cached</span>
-              <span>·</span>
-              <span>No tracking</span>
-            </div>
-          </div>
-          <p className="mt-3 max-w-3xl">
-            Stories are cached in a free Firebase Realtime Database (europe-west1)
-            so the page loads instantly. The “Relevant” tab mixes your country's
-            biggest news with the top world stories, auto-detected from your IP.
-            Fresh RSS data is fetched in the background every 10 minutes per
-            category. Bias ratings shown here are best-effort approximations
-            based on public community ratings (AllSides, Media Bias Fact Check)
-            — they reflect general editorial tendency, not the stance of any
-            individual article.
-          </p>
+      <footer className="border-t bg-muted/30 py-4 mt-auto">
+        <div className="mx-auto max-w-7xl px-4 text-center text-xs text-muted-foreground">
+          NeutralWire
         </div>
       </footer>
     </div>

@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Clock, ExternalLink, Globe, ImageIcon } from 'lucide-react'
+import { Clock, ExternalLink, Globe } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -49,6 +49,9 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false }: T
 
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
   const imageUrl = pickImage(topic)
+  // Only show the image if we have a URL AND it hasn't failed to load.
+  // If there's no image, the card just shows header + description + bias bar
+  // — no placeholder icon.
   const showImage = imageUrl && !imgError
 
   return (
@@ -58,7 +61,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false }: T
         variant === 'featured' && 'md:col-span-2',
       )}
     >
-      {/* Header: title + meta (ABOVE the image) */}
+      {/* Header: title + meta (always at the top) */}
       <div className="flex flex-col gap-2 p-4 pb-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary" className="text-[10px]">
@@ -80,8 +83,8 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false }: T
         </h3>
       </div>
 
-      {/* Image (every card, if available) */}
-      {showImage ? (
+      {/* Image (only if available; no placeholder otherwise) */}
+      {showImage && (
         <div
           className={cn(
             'relative w-full overflow-hidden bg-muted',
@@ -95,25 +98,16 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false }: T
             onError={() => setImgError(true)}
           />
         </div>
-      ) : (
-        <div
-          className={cn(
-            'flex w-full items-center justify-center bg-muted/40 text-muted-foreground/50',
-            variant === 'featured' ? 'aspect-[16/9]' : 'aspect-[16/10]',
-          )}
-        >
-          <ImageIcon className="h-8 w-8" />
-        </div>
       )}
 
-      {/* Description (BELOW the image) */}
+      {/* Description (below header, or below image if image exists) */}
       {topic.summary && variant !== 'compact' && (
-        <div className="px-4 pt-3">
+        <div className={cn('px-4', showImage ? 'pt-3' : '')}>
           <p className="text-sm text-muted-foreground line-clamp-3">{topic.summary}</p>
         </div>
       )}
 
-      {/* Bias bar + meta (BELOW the description) */}
+      {/* Bias bar + meta (always at the bottom) */}
       <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
         <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
 
@@ -172,3 +166,4 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false }: T
     </Card>
   )
 }
+

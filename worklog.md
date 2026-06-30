@@ -162,3 +162,52 @@ Stage Summary:
 - 9 Firebase cache nodes now: top, world, politics, business, technology, science, health, relevant__US, mycountry__US (more added per-country as visitors arrive)
 - Files added: src/lib/country-detect.ts, src/app/api/country/route.ts, src/app/api/search/route.ts, src/components/search-results.tsx
 - Files modified: src/lib/news-sources.ts, src/lib/news-aggregator.ts, src/lib/news-cache.ts, src/app/api/news/route.ts, src/app/api/refresh/route.ts, src/app/page.tsx, src/app/layout.tsx, src/components/topic-card.tsx
+
+---
+Task ID: 4
+Agent: main (Super Z)
+Task: Fix country detection (UK user seeing wrong country), remove "More" expandable, remove image placeholder icon, remove footer descriptive text.
+
+Work Log:
+- Diagnosed country detection issue: server-side detection via request headers was unreliable behind the Caddy gateway (sandbox IP detected instead of real user IP). The client-side fallback via ipwho.is WAS working but only ran when server detection failed.
+- Fix 1 — Country detection made client-side PRIMARY:
+  - Rewrote detectCountryClient() to try 3 APIs in order: ipwho.is → reallyfreegeoip.org → cloudflare/cdn-cgi/trace
+  - Removed server-side detection as the primary path (still available as /api/country but no longer called by default)
+  - Added localStorage manual override: 'neutralwire:country-manual' key checked before auto-detection
+  - Verified: requests now show country=GB in dev log when UK user visits (confirmed via dev log: "GET /api/news?category=relevant&limit=24&minCoverage=1&country=GB 200 in 990ms")
+  - Firebase cache now has relevant__GB node populated
+- Fix 2 — Manual country picker:
+  - Created src/components/country-picker.tsx: Popover with searchable country list (50+ countries with flags)
+  - Shows current country as a button (🇬🇧 GB) in the header, clickable to open picker
+  - Selection persisted to localStorage so it survives page reloads
+  - Includes "International" option as default fallback
+  - User can override auto-detection at any time
+- Fix 3 — Removed "More" expandable:
+  - All 9 categories now shown flat in the header: Relevant, My Country | Top Stories, World, Politics, Business, Tech, Science, Health
+  - Primary categories (Relevant, My Country) separated from secondary by a divider
+  - Removed extrasOpen state and ChevronDown/ChevronRight imports
+- Fix 4 — Removed image placeholder icon:
+  - Cards without images no longer show the ImageIcon placeholder
+  - They just show: header (title + meta) → description → bias bar (no image section at all)
+  - Verified: 24 cards on page, 16 with images, 8 without — no placeholder icons visible
+- Fix 5 — Removed footer descriptive text:
+  - Footer now just says "NeutralWire" (centered, minimal)
+  - Removed all paragraphs about Firebase, caching, bias ratings, AllSides, MBFC
+  - Also removed the descriptive paragraph from the Sources view
+- Cleaned up unused imports: MapPin, ChevronDown, ChevronRight, NEWS_SOURCES, CATEGORIES
+- Lint: 0 errors, 0 warnings
+- Agent Browser verification:
+  - Country picker button shows 🇭🇰 HK (sandbox) / user can manually select 🇬🇧 United Kingdom
+  - All 9 categories visible flat (no "More" button)
+  - 8 cards without images show clean layout (no placeholder icon)
+  - Footer shows only "NeutralWire"
+  - No console errors
+
+Stage Summary:
+- Country detection now works correctly for UK users: client-side ipwho.is detects GB, cached in Firebase as relevant__GB
+- Manual country picker lets users override detection if needed (persisted to localStorage)
+- All category tabs visible without needing to click "More"
+- Cards without images are clean (header + description + bias bar only, no placeholder)
+- Footer is minimal (just "NeutralWire")
+- Files added: src/components/country-picker.tsx
+- Files modified: src/lib/country-detect.ts (client-side primary + multiple API fallbacks + SELECTABLE_COUNTRIES), src/app/page.tsx (country picker, flat categories, minimal footer, removed unused imports), src/components/topic-card.tsx (removed placeholder icon)
