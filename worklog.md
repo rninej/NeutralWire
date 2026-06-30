@@ -311,3 +311,30 @@ Stage Summary:
   - All sources grouped by political leaning
 - Files added: src/app/api/img/route.ts (image proxy), src/app/api/summary/route.ts (LLM summary), src/components/topic-detail.tsx
 - Files modified: src/lib/news-aggregator.ts (validateImageUrl, findImageForTopic with GET validation, image check for top 10 topics), src/components/topic-card.tsx (proxyImage, clickable card, imgErrorMap), src/app/page.tsx (detailTopic state, TopicDetail overlay, key props)
+
+---
+Task ID: 8
+Agent: main (Super Z)
+Task: Cache neutral summaries in Firebase Realtime Database to save time + API calls for subsequent users.
+
+Work Log:
+- Updated /api/summary route with 3-layer caching:
+  1. In-process Map (instant ~0ms, per-instance, 2h TTL) — fastest, but lost on restart
+  2. Firebase RTDB (~200ms, shared across ALL instances, permanent) — the new layer
+  3. Generate fresh (LLM ~4s or extractive fallback ~0ms) — slowest, only runs once per topic
+- Storage layout in Firebase: summaries/<topicId> = { summary, generatedAt, title, sourceCount }
+- Added IN_FLIGHT deduplication: if two users open the same topic simultaneously, only one LLM call runs; the second user waits and reuses the result.
+- Flow: check memory → check Firebase → generate → save to both memory + Firebase → return
+- Response includes `source` field: 'memory' | 'firebase' | 'generated' so client can tell where it came from
+- Tested end-to-end:
+  - First call: source=generated, 4.5s, summary saved to Firebase
+  - Verified Firebase has: title, sourceCount, summary (1395 chars)
+  - Second call: source=memory, 0.025s (180x faster)
+- Removed unused decodeEntities function
+- Lint: 0 errors, 0 warnings
+
+Stage Summary:
+- Summaries now persist in Firebase permanently, shared across all server instances
+- First user to view a topic pays the ~4s LLM cost; every subsequent user (on any instance) gets it in ~200ms from Firebase
+- Concurrent requests for the same topic are deduplicated (only 1 LLM call)
+- Files modified: src/app/api/summary/route.ts (added firebaseRead/firebaseWrite, IN_FLIGHT dedup, StoredSummary type)

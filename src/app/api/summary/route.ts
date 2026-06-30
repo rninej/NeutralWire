@@ -1,13 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
+import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-// In-process cache for summaries (keyed by topicId).
+// In-process cache for summaries (fastest, but per-instance).
 const SUMMARY_CACHE = new Map<string, { ts: number; summary: string }>()
 const SUMMARY_TTL_MS = 2 * 60 * 60 * 1000 // 2 hours
+
+// Firebase path for persisted summaries.
+// Stored as: summaries/<topicId> = { summary, generatedAt, title, sourceCount }
+// These persist across server restarts and are shared across all instances.
+const FIREBASE_ROOT = 'summaries'
+
+// Guard against concurrent summary generation for the same topicId.
+// If two users open the same topic simultaneously, only one LLM call runs;
+// the other waits and reuses the result.
+const IN_FLIGHT = new Map<string, Promise<string>>()
 
 interface SummaryRequest {
   topicId: string
@@ -20,15 +31,24 @@ interface SummaryRequest {
   }>
 }
 
+interface StoredSummary {
+  summary: string
+  generatedAt: number
+  title: string
+  sourceCount: number
+}
+
 /**
  * Generates a neutral, in-depth summary of a news topic.
  *
- * Primary: uses the z-ai LLM SDK (available in the Z.ai sandbox).
- * Fallback: if the SDK is unavailable (e.g. on Vercel/space-z.ai where
- *   the internal API isn't reachable), generates an extractive summary
- *   from the article descriptions — no external API needed.
+ * Caching layers (fastest to slowest):
+ *   1. In-process Map (2h TTL) — instant, per-server-instance
+ *   2. Firebase Realtime Database — ~200ms, shared across ALL instances
+ *   3. Generate fresh (LLM or extractive fallback)
  *
- * Both paths are cached for 2 hours per topic.
+ * Once generated, a summary is persisted to Firebase so every subsequent
+ * visitor (on any server) gets it instantly without re-running the LLM.
+ * This saves API costs and makes the detail page load fast for everyone.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -40,37 +60,78 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Check in-process cache.
-    const cached = SUMMARY_CACHE.get(body.topicId)
-    if (cached && Date.now() - cached.ts < SUMMARY_TTL_MS) {
+    // 1. Check in-process cache (instant).
+    const procCached = SUMMARY_CACHE.get(body.topicId)
+    if (procCached && Date.now() - procCached.ts < SUMMARY_TTL_MS) {
       return NextResponse.json({
         topicId: body.topicId,
-        summary: cached.summary,
+        summary: procCached.summary,
         cached: true,
+        source: 'memory',
       })
     }
 
-    // Try the LLM first. If it fails (config not found, API unreachable,
-    // etc.), fall back to the extractive summary.
-    let summary: string | null = null
+    // 2. Check Firebase (shared across instances, ~200ms).
+    const fbCached = await firebaseRead<StoredSummary>(
+      `${FIREBASE_ROOT}/${body.topicId}`,
+    )
+    if (fbCached?.summary) {
+      // Populate the in-process cache too so next time it's instant.
+      SUMMARY_CACHE.set(body.topicId, { ts: Date.now(), summary: fbCached.summary })
+      return NextResponse.json({
+        topicId: body.topicId,
+        summary: fbCached.summary,
+        cached: true,
+        source: 'firebase',
+      })
+    }
+
+    // 3. Generate fresh. Deduplicate concurrent requests for the same topic.
+    let generatePromise = IN_FLIGHT.get(body.topicId)
+    if (!generatePromise) {
+      generatePromise = (async () => {
+        // Try the LLM first. If it fails, use the extractive fallback.
+        let summary: string | null = null
+        try {
+          summary = await generateLlmSummary(body)
+        } catch (err) {
+          console.warn(
+            '[api/summary] LLM failed, using fallback:',
+            err instanceof Error ? err.message : err,
+          )
+        }
+        if (!summary) {
+          summary = generateExtractiveSummary(body)
+        }
+
+        // Persist to Firebase so other instances/users get it instantly.
+        const stored: StoredSummary = {
+          summary,
+          generatedAt: Date.now(),
+          title: body.title,
+          sourceCount: body.articles.length,
+        }
+        await firebaseWrite(`${FIREBASE_ROOT}/${body.topicId}`, stored)
+
+        // Also populate in-process cache.
+        SUMMARY_CACHE.set(body.topicId, { ts: Date.now(), summary })
+
+        return summary
+      })()
+      IN_FLIGHT.set(body.topicId, generatePromise)
+    }
+
     try {
-      summary = await generateLlmSummary(body)
-    } catch (err) {
-      console.warn('[api/summary] LLM failed, using fallback:', err instanceof Error ? err.message : err)
+      const summary = await generatePromise
+      return NextResponse.json({
+        topicId: body.topicId,
+        summary,
+        cached: false,
+        source: 'generated',
+      })
+    } finally {
+      IN_FLIGHT.delete(body.topicId)
     }
-
-    if (!summary) {
-      summary = generateExtractiveSummary(body)
-    }
-
-    // Cache the result.
-    SUMMARY_CACHE.set(body.topicId, { ts: Date.now(), summary })
-
-    return NextResponse.json({
-      topicId: body.topicId,
-      summary,
-      cached: false,
-    })
   } catch (err) {
     console.error('[api/summary] error:', err)
     return NextResponse.json(
@@ -211,13 +272,4 @@ function cleanText(s: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^./, (c) => c.toUpperCase())
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
 }
