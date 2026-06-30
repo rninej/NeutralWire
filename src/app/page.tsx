@@ -364,7 +364,6 @@ export default function Home() {
                 key={c}
                 cat={c}
                 active={category === c}
-                country={c === 'mycountry' || c === 'relevant' ? country : null}
                 onClick={() => setCategory(c)}
               />
             ))}
@@ -563,7 +562,6 @@ export default function Home() {
 function CategoryTab({
   cat,
   active,
-  country,
   onClick,
 }: {
   cat: Category
@@ -582,8 +580,6 @@ function CategoryTab({
           : 'hover:bg-muted text-foreground/80',
       )}
     >
-      {cat === 'mycountry' && country?.flag}
-      {cat === 'relevant' && country?.flag}
       {CATEGORY_LABELS[cat]}
     </button>
   )

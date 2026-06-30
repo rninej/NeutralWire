@@ -42,6 +42,8 @@ export interface TopicArticle {
   firstSeen: number
   latestSeen: number
   articles: FeedArticle[]
+  /** How many articles in this topic are from the visitor's local sources. */
+  localCoverage?: number
 }
 
 export interface CategoryCachePayload {
@@ -140,7 +142,7 @@ function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedA
       id: hashId(cleanLink + '|' + source.id),
       title: decodeEntities(cleanTitle),
       link: cleanLink,
-      description: decodeEntities(stripHtml(stripCdata(description))).trim().slice(0, 400),
+      description: cleanDescription(description),
       pubDate,
       iso,
       imageUrl,
@@ -214,6 +216,26 @@ function parseDateToMs(s: string | null): number {
   return t
 }
 
+/**
+ * Thoroughly clean an RSS description field:
+ *  1. Strip CDATA wrappers.
+ *  2. Decode HTML entities (so &lt;p&gt; becomes <p>).
+ *  3. Strip HTML tags (so <p> becomes nothing).
+ *  4. Decode entities again (in case stripping revealed new entities).
+ *  5. Collapse whitespace.
+ *
+ * This prevents encoded HTML like "&lt;p&gt;Hello&lt;/p&gt;" from showing
+ * up as literal text in the card description.
+ */
+function cleanDescription(raw: string): string {
+  let s = stripCdata(raw)
+  s = decodeEntities(s)
+  s = stripHtml(s)
+  s = decodeEntities(s)
+  s = s.replace(/\s+/g, ' ').trim()
+  return s.slice(0, 400)
+}
+
 function hashId(s: string): string {
   let h = 0
   for (let i = 0; i < s.length; i++) {
@@ -253,8 +275,28 @@ async function fetchFeed(
 }
 
 // ---------- Topic Clustering ----------
-function clusterTopics(articles: FeedArticle[]): TopicArticle[] {
+/**
+ * Cluster articles into topics based on title similarity.
+ *
+ * Two articles are clustered together if EITHER:
+ *  - Jaccard similarity of their significant keywords >= 0.22 (lowered from 0.34
+ *    to catch same-event stories worded differently), OR
+ *  - They share 3+ significant keywords (catches cases where both titles are
+ *    long and wordy, so Jaccard ratio is low even though they share key terms).
+ *
+ * Also: articles within 48h of each other (was 72h) to avoid clustering
+ * unrelated stories that happen to share common words.
+ *
+ * `localSourceIds` is used to count how many articles per topic come from
+ * the visitor's local sources — used by the Relevant tab to boost local news.
+ */
+function clusterTopics(
+  articles: FeedArticle[],
+  localSourceIds: Set<string> = new Set(),
+): TopicArticle[] {
   const kwSets = articles.map((a) => titleKeywords(a.title))
+  // Pre-compute as arrays for the "shared keyword count" check.
+  const kwArrays = kwSets.map((s) => Array.from(s))
 
   const order = articles
     .map((_, i) => i)
@@ -263,7 +305,9 @@ function clusterTopics(articles: FeedArticle[]): TopicArticle[] {
   const assigned = new Array(articles.length).fill(false)
   const topics: TopicArticle[] = []
 
-  const SIM_THRESHOLD = 0.34
+  const JACCARD_THRESHOLD = 0.22
+  const SHARED_KW_THRESHOLD = 3
+  const TIME_WINDOW_MS = 48 * 60 * 60 * 1000
 
   for (const i of order) {
     if (assigned[i]) continue
@@ -272,9 +316,28 @@ function clusterTopics(articles: FeedArticle[]): TopicArticle[] {
 
     for (const j of order) {
       if (assigned[j]) continue
-      if (Math.abs(articles[i].iso - articles[j].iso) > 72 * 60 * 60 * 1000) continue
+      if (Math.abs(articles[i].iso - articles[j].iso) > TIME_WINDOW_MS) continue
+
       const sim = jaccard(kwSets[i], kwSets[j])
-      if (sim >= SIM_THRESHOLD) {
+      if (sim >= JACCARD_THRESHOLD) {
+        clusterIdx.push(j)
+        assigned[j] = true
+        continue
+      }
+
+      // Also cluster if they share enough significant keywords.
+      // This catches same-event stories with different wording where
+      // Jaccard is low (because the union is large) but they clearly
+      // share the key entities.
+      let shared = 0
+      const setI = kwSets[i]
+      for (const w of kwArrays[j]) {
+        if (setI.has(w)) {
+          shared++
+          if (shared >= SHARED_KW_THRESHOLD) break
+        }
+      }
+      if (shared >= SHARED_KW_THRESHOLD) {
         clusterIdx.push(j)
         assigned[j] = true
       }
@@ -290,15 +353,18 @@ function clusterTopics(articles: FeedArticle[]): TopicArticle[] {
     let leanLeft = 0
     let leanCenter = 0
     let leanRight = 0
+    let localCoverage = 0
     const seenSourceIds = new Set<string>()
 
     const clusterArticles: FeedArticle[] = []
     for (const idx of clusterIdx) {
       const a = articles[idx]
+      const isLocal = localSourceIds.has(a.sourceId)
       if (seenSourceIds.has(a.sourceId)) {
         if (a.leaning === 'left') leanLeft++
         else if (a.leaning === 'center') leanCenter++
         else leanRight++
+        if (isLocal) localCoverage++
         continue
       }
       seenSourceIds.add(a.sourceId)
@@ -306,6 +372,7 @@ function clusterTopics(articles: FeedArticle[]): TopicArticle[] {
       if (a.leaning === 'left') leanLeft++
       else if (a.leaning === 'center') leanCenter++
       else leanRight++
+      if (isLocal) localCoverage++
 
       if (kwSets[idx].size > bestKwSize) {
         bestKwSize = kwSets[idx].size
@@ -330,6 +397,7 @@ function clusterTopics(articles: FeedArticle[]): TopicArticle[] {
       firstSeen,
       latestSeen,
       articles: clusterArticles.sort((a, b) => b.iso - a.iso),
+      localCoverage,
     })
   }
 
@@ -385,10 +453,28 @@ export async function aggregateCategory(
     const cutoff = Date.now() - 48 * 60 * 60 * 1000
     const fresh = dedup.filter((a) => a.iso >= cutoff)
 
-    const topics = clusterTopics(fresh)
+    const localSet = new Set(options.countrySourceIds ?? [])
+    const isRelevantMode = category === 'relevant' && localSet.size > 0
+
+    const topics = clusterTopics(fresh, isRelevantMode ? localSet : new Set())
+
+    // Sort: for `relevant` category, boost topics with local coverage so UK
+    // news rises toward the top without completely burying major
+    // international stories. The relevance score is:
+    //   coverage + (localCoverage * 2.0)
+    // So a local story with 3 sources scores 3 + 6 = 9, beating a non-local
+    // story with 5 sources (score 5). But a major international story with
+    // 10 sources (score 10) still beats it. This gives the blend the user
+    // wants: local news up near the top, but major world news still visible.
     const filtered = topics
       .filter((t) => t.coverage >= minCoverage)
       .sort((a, b) => {
+        if (isRelevantMode) {
+          const scoreA = a.coverage + (a.localCoverage ?? 0) * 2.0
+          const scoreB = b.coverage + (b.localCoverage ?? 0) * 2.0
+          if (scoreB !== scoreA) return scoreB - scoreA
+          return b.latestSeen - a.latestSeen
+        }
         if (b.coverage !== a.coverage) return b.coverage - a.coverage
         return b.latestSeen - a.latestSeen
       })

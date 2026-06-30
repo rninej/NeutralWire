@@ -45,8 +45,7 @@ export function CountryPicker({ country, onChange }: CountryPickerProps) {
           title={`Detected: ${current.name}. Click to change.`}
         >
           <MapPin className="h-3 w-3" />
-          <span className="text-base leading-none">{current.flag}</span>
-          <span className="hidden sm:inline">{current.code}</span>
+          <span className="font-semibold">{current.code}</span>
           <ChevronDown className="h-3 w-3 opacity-60" />
         </Button>
       </PopoverTrigger>

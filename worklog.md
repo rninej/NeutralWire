@@ -211,3 +211,49 @@ Stage Summary:
 - Footer is minimal (just "NeutralWire")
 - Files added: src/components/country-picker.tsx
 - Files modified: src/lib/country-detect.ts (client-side primary + multiple API fallbacks + SELECTABLE_COUNTRIES), src/app/page.tsx (country picker, flat categories, minimal footer, removed unused imports), src/components/topic-card.tsx (removed placeholder icon)
+
+---
+Task ID: 5
+Agent: main (Super Z)
+Task: Fix 4 issues: HTML in descriptions, flag emoji on mobile, UK news prioritisation, duplicate stories.
+
+Work Log:
+- Fix 1 — HTML/code leaking into card descriptions:
+  - Root cause: description cleaning order was decodeEntities(stripHtml(stripCdata(raw))) — stripHtml ran BEFORE decodeEntities, so encoded HTML like &lt;p&gt; survived stripping and then got decoded into visible <p> tags.
+  - Fix: new cleanDescription() function that does: stripCdata → decodeEntities → stripHtml → decodeEntities → collapse whitespace. Double-decode catches any entities revealed by the first decode.
+  - Verified: 0/24 descriptions contain HTML after fix.
+
+- Fix 2 — Flag emoji on mobile category tabs:
+  - Removed flag emoji from CategoryTab component entirely — tabs now just show "Relevant", "My Country" etc. with no country prefix.
+  - Updated CountryPicker trigger button to show "GB" text instead of flag emoji (just a map pin icon + country code).
+  - The flag emojis are still in the dropdown list for visual identification when picking a country, which is fine.
+
+- Fix 3 — UK news prioritisation in Relevant tab:
+  - Added localCoverage field to TopicArticle — counts how many articles in a topic come from the visitor's local sources.
+  - Modified clusterTopics() to accept a localSourceIds set and track localCoverage per topic.
+  - Modified aggregateCategory() sort: for `relevant` category with local sources, sort by (coverage + localCoverage * 2.0) instead of just coverage. This means:
+    - A UK story with 2 sources + 5 local = score 12, beats a non-UK story with 5 sources = score 5
+    - But a major international story with 17 sources = score 17, still beats it
+    - Result: UK news rises to positions 4-9, major international stays at 1-3
+  - CRITICAL FIX: applyFilters() in /api/news/route.ts was RE-SORTING topics by coverage desc, destroying the local boost. Removed the re-sort — applyFilters now only filters and slices, preserving the aggregator's sort order.
+  - Verified: GB Relevant tab now shows: 1. Trump birthright (17 src), 2. Monaco bomb (6 src), 3. South Africa (6 src), 4. Andy Burnham (2 src, 5 local), 5. Guardian defence plan (2 src, 4 local), 6. Starmer defence (2 src, 4 local), 7. Gojek (4 src), 8. Shetland tunnels (3 src, 3 local), 9. Strawberry Moon UK (1 src, 4 local)
+
+- Fix 4 — Duplicate stories in different wording:
+  - Root cause: Jaccard similarity threshold 0.34 was too strict for same-event stories with different headlines. E.g., "Trump threatens to abolish birthright citizenship" vs "Supreme Court upholds birthright citizenship" share keywords but Jaccard < 0.34 because the union is large.
+  - Fix: hybrid clustering with two conditions (either triggers a match):
+    1. Jaccard >= 0.22 (lowered from 0.34)
+    2. Shared significant keywords >= 3 (catches long-titled stories where Jaccard ratio is low but key entities match)
+  - Also narrowed time window from 72h to 48h to avoid clustering unrelated stories that happen to share common words.
+  - Verified: the Supreme Court birthright citizenship ruling is now ONE topic with 17 sources (was previously split into 3-4 separate topics). Other genuinely different Supreme Court stories (transgender sports, campaign finance) remain as separate topics.
+
+- Cleared and re-populated all Firebase caches with new clustering + description cleaning.
+- Lint: 0 errors, 0 warnings.
+- Agent Browser verification: UK news at positions 4-9 in Relevant tab, no HTML in descriptions, no flag emoji on tabs, no duplicate stories, mobile viewport clean.
+
+Stage Summary:
+- 4/4 issues fixed and verified
+- UK news now properly prioritised in Relevant tab (local boost score = coverage + localCoverage * 2.0)
+- Same-event stories with different wording now cluster into one topic (hybrid Jaccard + shared-keyword clustering)
+- No HTML/code in card descriptions (double-decode + strip approach)
+- No flag emoji on category tabs or country picker button (just text "GB")
+- Files modified: src/lib/news-aggregator.ts (cleanDescription, clusterTopics with localSourceIds + hybrid clustering, aggregateCategory with local-boost sort), src/app/api/news/route.ts (applyFilters no longer re-sorts), src/app/page.tsx (CategoryTab flag removed), src/components/country-picker.tsx (flag emoji removed from trigger button)

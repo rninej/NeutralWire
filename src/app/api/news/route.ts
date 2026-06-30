@@ -170,11 +170,10 @@ function applyFilters(
   limit: number,
   minCoverage: number,
 ): TopicArticle[] {
+  // NOTE: Do NOT re-sort here. The topics are already sorted by the
+  // aggregator (with local-boost for the `relevant` category). Re-sorting
+  // by coverage would destroy the local-news prioritisation.
   return topics
     .filter((t) => t.coverage >= minCoverage)
-    .sort((a, b) => {
-      if (b.coverage !== a.coverage) return b.coverage - a.coverage
-      return b.latestSeen - a.latestSeen
-    })
     .slice(0, limit)
 }
