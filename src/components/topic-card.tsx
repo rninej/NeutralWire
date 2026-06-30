@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { BiasBar } from '@/components/bias-bar'
-import type { TopicArticle } from '@/app/api/news/route'
+import type { TopicArticle } from '@/lib/news-aggregator'
 
 interface TopicCardProps {
   topic: TopicArticle

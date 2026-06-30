@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { useState } from 'react'
 import {
   Newspaper,
   RefreshCw,
@@ -10,6 +11,7 @@ import {
   TrendingUp,
   Filter,
   Info,
+  Cloud,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,7 +33,7 @@ import { TopicCard } from '@/components/topic-card'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
 import { cn } from '@/lib/utils'
-import type { TopicArticle } from '@/app/api/news/route'
+import type { TopicArticle } from '@/lib/news-aggregator'
 
 type View = 'feed' | 'columns' | 'sources'
 
@@ -39,9 +41,12 @@ interface NewsResponse {
   category: string
   topics: TopicArticle[]
   cached: boolean
+  fresh?: boolean
+  staleMs?: number
   fetchedAt: string
   sourceCount: number
   articleCount?: number
+  ms?: number
   error?: string
   detail?: string
 }
@@ -50,39 +55,104 @@ export default function Home() {
   const [category, setCategory] = React.useState<Category>('top')
   const [view, setView] = React.useState<View>('feed')
   const [search, setSearch] = React.useState('')
-  const [loading, setLoading] = React.useState(true)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [topics, setTopics] = React.useState<TopicArticle[]>([])
   const [fetchedAt, setFetchedAt] = React.useState<Date | null>(null)
   const [isCached, setIsCached] = React.useState(false)
+  const [isFresh, setIsFresh] = React.useState(true)
   const [articleCount, setArticleCount] = React.useState(0)
   const [minCoverage, setMinCoverage] = React.useState(1)
+  const [loadMs, setLoadMs] = React.useState<number | null>(null)
+  const [lastBgRefreshAt, setLastBgRefreshAt] = React.useState<number | null>(null)
+
+  // Track in-flight category requests so we don't show stale data when
+  // the user rapidly switches categories.
+  const reqIdRef = React.useRef(0)
 
   const fetchData = React.useCallback(async (cat: Category, mc: number) => {
+    const reqId = ++reqIdRef.current
     setLoading(true)
     setError(null)
     try {
       const url = `/api/news?category=${encodeURIComponent(cat)}&limit=24&minCoverage=${mc}`
       const res = await fetch(url, { cache: 'no-store' })
       const json: NewsResponse = await res.json()
+      if (reqId !== reqIdRef.current) return // a newer request superseded us
       if (!res.ok || json.error) {
         throw new Error(json.error || `Failed (${res.status})`)
       }
       setTopics(json.topics)
       setFetchedAt(new Date(json.fetchedAt))
-      setIsCached(json.cached)
+      setIsCached(!!json.cached)
+      setIsFresh(json.fresh !== false)
       setArticleCount(json.articleCount ?? 0)
+      setLoadMs(json.ms ?? null)
     } catch (e) {
+      if (reqId !== reqIdRef.current) return
       setError(e instanceof Error ? e.message : 'Failed to load news')
       setTopics([])
     } finally {
-      setLoading(false)
+      if (reqId === reqIdRef.current) setLoading(false)
     }
   }, [])
 
+  // Background refresh: if the server returned stale cached data, kick
+  // off an async refresh in the background. The user sees the cached
+  // data immediately, then the data quietly updates ~15s later.
+  const bgRefresh = React.useCallback(
+    async (cat: Category, mc: number) => {
+      setRefreshing(true)
+      try {
+        const url = `/api/refresh?category=${encodeURIComponent(cat)}&limit=24&minCoverage=${mc}`
+        const res = await fetch(url, { cache: 'no-store' })
+        const json: NewsResponse = await res.json()
+        if (!res.ok || json.error) return
+        // Only apply if the user hasn't switched away in the meantime.
+        if (reqIdRef.current !== 0 && cat !== categoryRef.current) return
+        setTopics(json.topics)
+        setFetchedAt(new Date(json.fetchedAt))
+        setIsCached(false)
+        setIsFresh(true)
+        setArticleCount(json.articleCount ?? 0)
+        setLastBgRefreshAt(Date.now())
+      } catch {
+        // Silent — background refresh failure is not user-visible.
+      } finally {
+        setRefreshing(false)
+      }
+    },
+    [],
+  )
+
+  // Keep a ref of the current category so bgRefresh can detect switches.
+  const categoryRef = React.useRef(category)
   React.useEffect(() => {
-    fetchData(category, minCoverage)
-  }, [category, minCoverage, fetchData])
+    categoryRef.current = category
+  }, [category])
+
+  React.useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      await fetchData(category, minCoverage)
+      if (cancelled) return
+      // If the response was stale (cached older than 10 min), trigger
+      // a background refresh automatically.
+      // We wait 2s so the page can settle before kicking off the slow fetch.
+      if (!isFresh) {
+        await new Promise((r) => setTimeout(r, 2000))
+        if (!cancelled) bgRefresh(category, minCoverage)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [category, minCoverage])
+
+  const handleRefreshClick = () => {
+    bgRefresh(category, minCoverage)
+  }
 
   // Filter topics by search query
   const filteredTopics = React.useMemo(() => {
@@ -103,8 +173,6 @@ export default function Home() {
   const featured = filteredTopics[0]
   const rest = filteredTopics.slice(1)
 
-  const handleRefresh = () => fetchData(category, minCoverage)
-
   return (
     <div className="flex min-h-screen flex-col">
       {/* Header */}
@@ -119,16 +187,46 @@ export default function Home() {
             </span>
           </a>
 
+          {/* Cache indicator */}
+          <Badge
+            variant="outline"
+            className="hidden gap-1 text-[10px] font-normal sm:inline-flex"
+            title={
+              isFresh
+                ? 'Data is fresh from RSS feeds'
+                : isCached
+                  ? 'Showing cached data from Firebase — refreshing in background'
+                  : 'Status unknown'
+            }
+          >
+            {isFresh ? (
+              <>
+                <Cloud className="h-3 w-3 text-emerald-500" />
+                Fresh
+              </>
+            ) : (
+              <>
+                <Cloud className="h-3 w-3 text-amber-500" />
+                Cached
+              </>
+            )}
+            {loadMs !== null && !loading && (
+              <span className="ml-1 opacity-60">{loadMs}ms</span>
+            )}
+          </Badge>
+
           <div className="ml-auto flex items-center gap-2">
             <Button
               variant="ghost"
               size="sm"
-              onClick={handleRefresh}
-              disabled={loading}
+              onClick={handleRefreshClick}
+              disabled={refreshing || loading}
               className="gap-1.5"
             >
-              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-              <span className="hidden sm:inline">Refresh</span>
+              <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
+              <span className="hidden sm:inline">
+                {refreshing ? 'Refreshing…' : 'Refresh'}
+              </span>
             </Button>
             <ThemeToggle />
           </div>
@@ -187,12 +285,14 @@ export default function Home() {
             <span>
               {loading
                 ? 'Loading…'
-                : `${filteredTopics.length} topics · ${articleCount} articles`}
+                : refreshing
+                  ? 'Refreshing from RSS…'
+                  : `${filteredTopics.length} topics · ${articleCount} articles`}
             </span>
             {fetchedAt && (
               <span className="hidden items-center gap-1 sm:inline-flex">
                 · updated {fetchedAt.toLocaleTimeString()}
-                {isCached && <span className="opacity-60">(cached)</span>}
+                {isCached && !isFresh && <span className="text-amber-500">(cached)</span>}
               </span>
             )}
             <select
@@ -239,7 +339,7 @@ export default function Home() {
               <div className="font-semibold">Could not load news</div>
               <div className="mt-1 text-sm text-muted-foreground">{error}</div>
             </div>
-            <Button onClick={handleRefresh} variant="outline" size="sm">
+            <Button onClick={handleRefreshClick} variant="outline" size="sm">
               <RefreshCw className="h-4 w-4" /> Try again
             </Button>
           </Card>
@@ -289,6 +389,14 @@ export default function Home() {
                 <TopicCard key={t.topicId} topic={t} />
               ))}
             </div>
+
+            {/* Background refresh hint */}
+            {refreshing && (
+              <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full border bg-background/95 px-4 py-1.5 text-xs shadow-md backdrop-blur">
+                <Loader2 className="mr-1.5 inline h-3 w-3 animate-spin" />
+                Fetching fresh headlines from RSS feeds…
+              </div>
+            )}
           </>
         )}
       </main>
@@ -305,16 +413,18 @@ export default function Home() {
             <div className="flex items-center gap-3">
               <span>{NEWS_SOURCES.length} sources</span>
               <span>·</span>
-              <span>No API keys</span>
+              <span>Firebase-cached</span>
               <span>·</span>
               <span>No tracking</span>
             </div>
           </div>
           <p className="mt-3 max-w-3xl">
-            Bias ratings shown here are best-effort approximations based on public
-            community ratings (AllSides, Media Bias Fact Check). They reflect
-            general editorial tendency, not the stance of any individual article.
-            Always read across the spectrum before forming an opinion.
+            Stories are cached in a free Firebase Realtime Database (europe-west1)
+            so the page loads instantly. Fresh RSS data is fetched in the
+            background every 10 minutes per category. Bias ratings shown here are
+            best-effort approximations based on public community ratings
+            (AllSides, Media Bias Fact Check) — they reflect general editorial
+            tendency, not the stance of any individual article.
           </p>
         </div>
       </footer>
@@ -333,7 +443,7 @@ function LoadingState() {
       </div>
       <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
-        Fetching headlines from {NEWS_SOURCES.length} sources…
+        Loading from Firebase cache…
       </div>
     </div>
   )

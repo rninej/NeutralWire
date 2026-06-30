@@ -4,7 +4,7 @@ import * as React from 'react'
 import { ExternalLink } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
-import type { TopicArticle, FeedArticle } from '@/app/api/news/route'
+import type { TopicArticle, FeedArticle } from '@/lib/news-aggregator'
 
 type Leaning = 'left' | 'center' | 'right'
 
