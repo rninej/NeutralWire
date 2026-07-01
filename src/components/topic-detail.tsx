@@ -55,6 +55,26 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
     }
   }, [])
 
+  // Push a history entry when the detail opens, so mobile swipe-back
+  // closes the overlay instead of leaving the entire site.
+  React.useEffect(() => {
+    // Only push if we're not already on a ?topic= URL (avoid double-push
+    // when opening via shared link).
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('topic') !== topic.topicId) {
+      url.searchParams.set('topic', topic.topicId)
+      window.history.pushState({ detailOpen: true }, '', url.toString())
+    }
+
+    const popstateHandler = () => {
+      onClose()
+    }
+    window.addEventListener('popstate', popstateHandler)
+    return () => {
+      window.removeEventListener('popstate', popstateHandler)
+    }
+  }, [topic.topicId, onClose])
+
   // Close on Escape.
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -239,29 +259,95 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
         </div>
 
         {/* Neutral in-depth summary */}
-        <Card className="mb-6 p-5">
-          <div className="mb-3 flex items-center gap-2">
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">Neutral Summary</h2>
-            <span className="text-[10px] text-muted-foreground">
+        <Card className="mb-6 p-5 md:p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-bold">Neutral Summary</h2>
+            <span className="text-[11px] text-muted-foreground">
               AI-generated from {topic.articles.length} sources
             </span>
           </div>
           {summaryLoading ? (
-            <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+            <div className="flex items-center gap-2 py-8 text-base text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
               Generating neutral summary…
             </div>
           ) : summaryError ? (
-            <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-              <AlertCircle className="h-4 w-4" />
+            <div className="flex items-center gap-2 py-4 text-base text-muted-foreground">
+              <AlertCircle className="h-5 w-5" />
               Could not generate summary. Showing original descriptions below.
             </div>
           ) : (
-            <div className="space-y-3 text-sm leading-relaxed text-foreground/90">
-              {summary?.split('\n\n').map((para, i) => (
-                <p key={i}>{para}</p>
-              ))}
+            <div className="space-y-4 text-base leading-relaxed text-foreground/90 md:text-[17px] md:leading-[1.7]">
+              {(() => {
+                // The LLM may use \n\n or \n between heading and paragraph.
+                // Normalise: split on \n\n first, then within each chunk,
+                // if it starts with a known heading pattern, split that off.
+                const knownHeadings = [
+                  'What Happened', 'The Context', 'Background',
+                  'Different Perspectives', 'Reactions',
+                  'What Happens Next', 'Why It Matters',
+                  'Key Facts', 'Analysis', 'Impact',
+                ]
+                const headingRe = new RegExp(
+                  `^\\*?\\*?(${knownHeadings.join('|')})\\*?\\*?\\s*\\n`,
+                  'i',
+                )
+
+                const chunks = summary?.split('\n\n') || []
+                const elements: React.ReactNode[] = []
+
+                chunks.forEach((chunk, i) => {
+                  // Check for **bold** heading on its own line.
+                  const boldMatch = chunk.match(/^\*\*(.+)\*\*$/)
+                  if (boldMatch) {
+                    elements.push(
+                      <h3 key={`h-${i}`} className="text-lg font-bold text-foreground mt-5 mb-1">
+                        {boldMatch[1]}
+                      </h3>,
+                    )
+                    return
+                  }
+
+                  // Check for known heading at the start of the chunk
+                  // followed by \n and then the paragraph.
+                  const headingMatch = chunk.match(headingRe)
+                  if (headingMatch) {
+                    const heading = headingMatch[1]
+                    const rest = chunk.slice(headingMatch[0].length)
+                    elements.push(
+                      <h3 key={`h-${i}`} className="text-lg font-bold text-foreground mt-5 mb-1">
+                        {heading}
+                      </h3>,
+                    )
+                    if (rest.trim()) {
+                      elements.push(<p key={`p-${i}`}>{rest.trim()}</p>)
+                    }
+                    return
+                  }
+
+                  // Also handle inline bold within paragraphs.
+                  const parts = chunk.split(/(\*\*[^*]+\*\*)/g)
+                  if (parts.length > 1) {
+                    elements.push(
+                      <p key={`p-${i}`}>
+                        {parts.map((part, j) => {
+                          const inlineBold = part.match(/^\*\*(.+)\*\*$/)
+                          if (inlineBold) {
+                            return <strong key={j} className="font-bold text-foreground">{inlineBold[1]}</strong>
+                          }
+                          return <span key={j}>{part}</span>
+                        })}
+                      </p>,
+                    )
+                    return
+                  }
+
+                  elements.push(<p key={`p-${i}`}>{chunk}</p>)
+                })
+
+                return elements
+              })()}
             </div>
           )}
         </Card>

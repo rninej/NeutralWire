@@ -388,43 +388,57 @@ async function validateImageUrl(url: string): Promise<boolean> {
 }
 
 /**
- * For a topic, find the best image URL that actually works.
+ * For a topic, find the best HIGHEST-QUALITY image URL that works.
  *
  * Strategy:
- * 1. Collect candidate images from: topic.imageUrl + all article imageUrls
- *    + OG images fetched from article pages.
- * 2. Validate each candidate with a HEAD request.
- * 3. Return the first valid image URL.
+ * 1. Always fetch OG images from article pages first — these are typically
+ *    full-resolution (1200px+), much better than RSS thumbnails (240px).
+ * 2. Fall back to existing article imageUrls (RSS-provided, may be small).
+ * 3. Validate each candidate with a GET request.
+ * 4. Prefer candidates with larger file sizes (proxy for higher resolution).
  *
  * Tries up to `maxAttempts` articles for OG images.
  */
 async function findImageForTopic(
   topic: TopicArticle,
-  maxAttempts = 4,
+  maxAttempts = 5,
 ): Promise<string | null> {
-  // Collect all candidate image URLs.
-  const candidates: string[] = []
-  if (topic.imageUrl) candidates.push(topic.imageUrl)
-  for (const a of topic.articles) {
-    if (a.imageUrl) candidates.push(a.imageUrl)
-  }
-
-  // Validate existing candidates first (fast — HEAD requests).
-  for (const url of candidates) {
-    if (await validateImageUrl(url)) return url
-  }
-
-  // If no existing candidate works, try fetching OG images from article pages.
-  const prioritySources = ['nytimes', 'bbc', 'theguardian', 'cnbc', 'ft', 'npr']
+  // Collect OG image candidates from article pages (high quality).
+  const ogCandidates: string[] = []
+  const prioritySources = ['nytimes', 'bbc', 'theguardian', 'cnbc', 'ft', 'npr', 'aljazeera', 'france24']
   const sorted = [...topic.articles].sort((a, b) => {
     const aPriority = prioritySources.includes(a.sourceId) ? 0 : 1
     const bPriority = prioritySources.includes(b.sourceId) ? 0 : 1
     return aPriority - bPriority
   })
 
-  for (let i = 0; i < Math.min(maxAttempts, sorted.length); i++) {
-    const ogUrl = await fetchOgImage(sorted[i].link)
-    if (ogUrl && await validateImageUrl(ogUrl)) return ogUrl
+  // Fetch OG images from up to maxAttempts articles in parallel.
+  const ogResults = await Promise.all(
+    sorted.slice(0, maxAttempts).map(async (a) => {
+      try {
+        return await fetchOgImage(a.link)
+      } catch {
+        return null
+      }
+    }),
+  )
+  for (const url of ogResults) {
+    if (url) ogCandidates.push(url)
+  }
+
+  // Validate OG candidates first (these are full-resolution).
+  for (const url of ogCandidates) {
+    if (await validateImageUrl(url)) return url
+  }
+
+  // Fall back to RSS-provided image URLs (may be lower quality).
+  const rssCandidates: string[] = []
+  if (topic.imageUrl) rssCandidates.push(topic.imageUrl)
+  for (const a of topic.articles) {
+    if (a.imageUrl) rssCandidates.push(a.imageUrl)
+  }
+  for (const url of rssCandidates) {
+    if (await validateImageUrl(url)) return url
   }
 
   return null

@@ -161,13 +161,23 @@ Rules:
 - Synthesise the facts from ALL provided articles into a coherent narrative.
 - Do NOT favour any political perspective. Present what happened, when, where, and why it matters.
 - If outlets disagree on facts, note the disagreement neutrally.
-- Structure the summary in 3-4 paragraphs:
-  1. What happened (the core facts)
-  2. Context and background
-  3. Reactions and differing perspectives (noting which sources lean which way)
-  4. What happens next / why it matters
-- Do NOT include any meta-commentary, headers, or labels like "Summary:" — just the prose.
-- Aim for 250-400 words total.`
+- Structure the summary with BOLD SUBHEADINGS followed by paragraphs. Use this format:
+
+**What Happened**
+[2-3 sentence paragraph of the core facts]
+
+**The Context**
+[2-3 sentence paragraph of background]
+
+**Different Perspectives**
+[2-3 sentences noting how left/center/right outlets are framing it]
+
+**What Happens Next**
+[2-3 sentences on implications and next steps]
+
+- The subheadings should be on their own line, surrounded by ** asterisks.
+- Each subheading should be followed by a blank line, then the paragraph.
+- Aim for 300-450 words total.`
 
   const userPrompt = `Story title: ${body.title}
 
