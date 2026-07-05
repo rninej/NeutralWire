@@ -565,29 +565,16 @@ export default function Home() {
               <BiasColumns topics={filteredTopics} />
             ) : (
               <>
-                {/* Featured story */}
-                {featured && (
-                  <div className="mb-5">
-                    <div className="mb-2 flex items-center gap-2">
-                      <Badge variant="default" className="gap-1 text-[10px]">
-                        <TrendingUp className="h-3 w-3" /> Most covered
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {featured.coverage} sources reporting
-                      </span>
-                    </div>
+                {/* Topic grid — featured story is the first card, same size as others */}
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {featured && (
                     <TopicCard
                       key={featured.topicId + (featured.imageUrl || '')}
                       topic={featured}
-                      variant="featured"
                       defaultOpen
                       onOpenDetail={setDetailTopic}
                     />
-                  </div>
-                )}
-
-                {/* Topic grid */}
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  )}
                   {rest.map((t) => (
                     <TopicCard
                       key={t.topicId + (t.imageUrl || '')}

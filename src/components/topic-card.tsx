@@ -75,7 +75,6 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
     <Card
       className={cn(
         'overflow-hidden p-0 gap-0 flex flex-col',
-        variant === 'featured' && 'md:col-span-2',
         onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
       )}
       onClick={handleCardClick}
@@ -94,8 +93,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         <h3
           className={cn(
             'font-semibold leading-snug',
-            variant === 'featured' ? 'text-lg md:text-xl' : 'text-base',
-            variant === 'compact' && 'text-sm',
+            variant === 'compact' ? 'text-sm' : 'text-base',
           )}
         >
           {topic.title}
@@ -107,7 +105,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         <div
           className={cn(
             'relative w-full overflow-hidden bg-muted',
-            variant === 'featured' ? 'aspect-[16/9]' : 'aspect-[16/10]',
+            'aspect-[16/10]',
           )}
         >
           <img

@@ -136,11 +136,17 @@ function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedA
     if (!cleanTitle || !cleanLink) continue
     if (cleanTitle.length < 8) continue
 
+    // Skip non-English articles. We check the title for common non-English
+    // characters and words. This is a lightweight heuristic — good enough
+    // to filter out French (Le Monde), German (DW sometimes), Spanish, etc.
+    const decodedTitle = decodeEntities(cleanTitle)
+    if (!isEnglish(decodedTitle)) continue
+
     const iso = parseDateToMs(pubDate)
 
     articles.push({
       id: hashId(cleanLink + '|' + source.id),
-      title: decodeEntities(cleanTitle),
+      title: decodedTitle,
       link: cleanLink,
       description: cleanDescription(description),
       pubDate,
@@ -234,6 +240,68 @@ function cleanDescription(raw: string): string {
   s = decodeEntities(s)
   s = s.replace(/\s+/g, ' ').trim()
   return s.slice(0, 400)
+}
+
+/**
+ * Lightweight English-language detector for article titles.
+ *
+ * Returns true if the title appears to be in English. Uses two checks:
+ * 1. Character-based: rejects titles with accented chars common in French
+ *    (é, è, ê, à, ç, ù), German (ä, ö, ü, ß), Spanish (ñ, ¡, ¿), etc.
+ *    These chars are rare in English news headlines.
+ * 2. Word-based: rejects titles containing common non-English function words
+ *    (le, la, les, des, du, et, dans, pour, avec, que, une — French;
+ *     der, die, das, und, nicht, ist, von, mit — German; el, la, los, las,
+ *     y, que, en, un, una, del — Spanish).
+ *
+ * This is a heuristic — it may occasionally let through a non-English title
+ * or reject a rare English title with loan words, but it's good enough to
+ * filter out the bulk of Le Monde (French) and occasional DW (German) articles.
+ */
+function isEnglish(title: string): boolean {
+  if (!title) return true
+
+  const lower = title.toLowerCase()
+
+  // Check for non-English accented characters.
+  // English headlines rarely contain these.
+  const accentChars = /[éèêëàâçùûüôöîïäßñ¿¡à]/
+  if (accentChars.test(lower)) {
+    // Allow if it's just a name (e.g. "Café"), but reject if there are
+    // 2+ accented chars (likely a non-English sentence).
+    const accentCount = (lower.match(/[éèêëàâçùûüôöîïäßñ¿¡]/g) || []).length
+    if (accentCount >= 2) return false
+  }
+
+  // Check for common non-English function words.
+  // Split into words and check each — must match whole words, not substrings.
+  const words = lower.split(/[^a-zà-ÿ]+/).filter(Boolean)
+  const frenchWords = new Set([
+    'le', 'la', 'les', 'des', 'du', 'de', 'et', 'dans', 'pour', 'avec',
+    'que', 'une', 'sur', 'pas', 'plus', 'sous', 'ces', 'ses', 'mes',
+    'nous', 'vous', 'ils', 'elles', 'est', 'sont', 'fait', 'après',
+    'contre', 'entre', 'comme', 'autre', 'sans',
+  ])
+  const germanWords = new Set([
+    'der', 'die', 'das', 'und', 'nicht', 'ist', 'von', 'mit', 'auf',
+    'für', 'ein', 'eine', 'einen', 'dem', 'den', 'des', 'im', 'zum',
+    'zur', 'auch', 'sich', 'bei', 'durch', 'über', 'aus', 'vor',
+  ])
+  const spanishWords = new Set([
+    'el', 'los', 'las', 'y', 'en', 'un', 'una', 'del', 'al', 'lo',
+    'que', 'con', 'por', 'para', 'su', 'se', 'no', 'más', 'pero',
+    'como', 'todo', 'esto', 'ese', 'aquí', 'allá',
+  ])
+
+  let nonEnglishWordCount = 0
+  for (const word of words) {
+    if (frenchWords.has(word) || germanWords.has(word) || spanishWords.has(word)) {
+      nonEnglishWordCount++
+      if (nonEnglishWordCount >= 2) return false
+    }
+  }
+
+  return true
 }
 
 function hashId(s: string): string {
