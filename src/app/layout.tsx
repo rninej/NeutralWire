@@ -21,7 +21,14 @@ export const metadata: Metadata = {
   keywords: ["news", "bias", "media bias", "neutralwire", "news aggregator", "left right center"],
   authors: [{ name: "NeutralWire" }],
   icons: {
-    icon: "/logo.svg",
+    icon: [
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [
+      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+    ],
+    shortcut: "/favicon-32.png",
   },
   openGraph: {
     title: "NeutralWire",

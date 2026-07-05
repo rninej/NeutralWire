@@ -131,17 +131,19 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   }, [topic.topicId, topic.title, topic.articles])
 
   const handleShare = async () => {
+    // Share the NeutralWire page URL, not the news provider link.
+    const shareUrl = `${window.location.origin}/?topic=${topic.topicId}`
     const shareData = {
-      title: topic.title,
+      title: `NeutralWire: ${topic.title}`,
       text: topic.summary || topic.title,
-      url: topic.articles[0]?.link || window.location.href,
+      url: shareUrl,
     }
     try {
       if (navigator.share) {
         await navigator.share(shareData)
       } else {
         await navigator.clipboard.writeText(
-          `${topic.title}\n\n${topic.articles[0]?.link || window.location.href}`,
+          `${topic.title}\n\n${shareUrl}`,
         )
         setShared(true)
         setTimeout(() => setShared(false), 2000)

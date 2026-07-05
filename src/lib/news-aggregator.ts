@@ -405,11 +405,24 @@ async function findImageForTopic(
 ): Promise<string | null> {
   // Collect OG image candidates from article pages (high quality).
   const ogCandidates: string[] = []
-  const prioritySources = ['nytimes', 'bbc', 'theguardian', 'cnbc', 'ft', 'npr', 'aljazeera', 'france24']
+  // Priority sources — ordered to PREFER sources whose images DON'T have
+  // large watermarks/logos. The Guardian's images have a huge "Guardian"
+  // logo in the corner that makes the site look like it's run by The
+  // Guardian, so we deprioritise it. BBC, NYT, France 24, and Al Jazeera
+  // tend to have cleaner images.
+  const prioritySources = [
+    'bbc', 'nytimes', 'france24', 'aljazeera', 'cnbc', 'ft', 'npr',
+    'reuters-algolia', 'dw', 'japantimes',
+  ]
+  // Sources whose images have prominent watermarks — used last.
+  const watermarkSources = ['theguardian', 'lemonde']
   const sorted = [...topic.articles].sort((a, b) => {
-    const aPriority = prioritySources.includes(a.sourceId) ? 0 : 1
-    const bPriority = prioritySources.includes(b.sourceId) ? 0 : 1
-    return aPriority - bPriority
+    const score = (id: string) => {
+      if (prioritySources.includes(id)) return 0
+      if (watermarkSources.includes(id)) return 2
+      return 1
+    }
+    return score(a.sourceId) - score(b.sourceId)
   })
 
   // Fetch OG images from up to maxAttempts articles in parallel.
@@ -525,6 +538,7 @@ function clusterTopics(
     let leanRight = 0
     let localCoverage = 0
     const seenSourceIds = new Set<string>()
+    const seenLocalSourceIds = new Set<string>()
 
     const clusterArticles: FeedArticle[] = []
     for (const idx of clusterIdx) {
@@ -534,7 +548,8 @@ function clusterTopics(
         if (a.leaning === 'left') leanLeft++
         else if (a.leaning === 'center') leanCenter++
         else leanRight++
-        if (isLocal) localCoverage++
+        // Don't double-count local coverage for duplicate articles
+        // from the same source — only count unique local sources.
         continue
       }
       seenSourceIds.add(a.sourceId)
@@ -542,7 +557,10 @@ function clusterTopics(
       if (a.leaning === 'left') leanLeft++
       else if (a.leaning === 'center') leanCenter++
       else leanRight++
-      if (isLocal) localCoverage++
+      if (isLocal && !seenLocalSourceIds.has(a.sourceId)) {
+        seenLocalSourceIds.add(a.sourceId)
+        localCoverage++
+      }
 
       if (kwSets[idx].size > bestKwSize) {
         bestKwSize = kwSets[idx].size
@@ -625,8 +643,26 @@ export async function aggregateCategory(
 
     const localSet = new Set(options.countrySourceIds ?? [])
     const isRelevantMode = category === 'relevant' && localSet.size > 0
+    const isMyCountryMode = category === 'mycountry' && localSet.size > 0
 
-    const topics = clusterTopics(fresh, isRelevantMode ? localSet : new Set())
+    const topics = clusterTopics(fresh, (isRelevantMode || isMyCountryMode) ? localSet : new Set())
+
+    // For `mycountry` mode: ONLY show topics where ALL sources are local.
+    // This is strict — if even one non-local source covers the story, it's
+    // filtered out. This ensures "My Country" shows only genuinely local
+    // news, not international stories that UK outlets happen to cover.
+    // Exception: stories with 4+ sources where at least 75% are local
+    // (allows major local stories that one international outlet picked up).
+    const relevantTopics = isMyCountryMode
+      ? topics.filter((t) => {
+          const local = t.localCoverage ?? 0
+          const total = t.coverage
+          if (total === 0) return false
+          const ratio = local / total
+          // All local, OR (4+ sources AND 75%+ local)
+          return ratio === 1 || (total >= 4 && ratio >= 0.75)
+        })
+      : topics
 
     // Sort: for `relevant` category, give LOCAL news much higher priority
     // while keeping the absolute top stories based on coverage.
@@ -647,7 +683,7 @@ export async function aggregateCategory(
     // Net effect: the major 10+ source story stays #1, but UK-focused
     // stories (even with just 2-3 sources) jump above mid-tier
     // international stories.
-    const filtered = topics
+    const filtered = relevantTopics
       .filter((t) => t.coverage >= minCoverage)
       .sort((a, b) => {
         if (isRelevantMode) {
@@ -656,6 +692,13 @@ export async function aggregateCategory(
           const scoreA = a.coverage * 10 + la * 5 + (la > 0 ? 30 : 0)
           const scoreB = b.coverage * 10 + lb * 5 + (lb > 0 ? 30 : 0)
           if (scoreB !== scoreA) return scoreB - scoreA
+          return b.latestSeen - a.latestSeen
+        }
+        // For mycountry mode, sort by local coverage first (most local = top)
+        if (isMyCountryMode) {
+          const la = a.localCoverage ?? 0
+          const lb = b.localCoverage ?? 0
+          if (lb !== la) return lb - la
           return b.latestSeen - a.latestSeen
         }
         if (b.coverage !== a.coverage) return b.coverage - a.coverage
