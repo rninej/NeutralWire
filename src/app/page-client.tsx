@@ -140,7 +140,12 @@ export default function Home() {
     startSessionTracking()
 
     // Detect PWA install and report it.
-    if (window.matchMedia('(display-mode: standalone)').matches) {
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      // iOS Safari standalone check
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true
+
+    if (isStandalone) {
       fetch('/api/pwa-installed', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -157,6 +162,39 @@ export default function Home() {
       }).catch(() => {})
     }
     window.addEventListener('appinstalled', installedHandler)
+
+    // --- Auto-request notification permission in PWA mode ---
+    // In the installed PWA, automatically ask for notification permission
+    // once per device (tracked via localStorage so we don't nag). When
+    // granted, tell the service worker to schedule the 3 daily alerts.
+    const NOTIF_ASKED_KEY = 'neutralwire:notif-asked'
+    if (isStandalone && 'Notification' in window) {
+      // Only ask if we haven't asked before AND don't already have a decision.
+      const alreadyAsked = localStorage.getItem(NOTIF_ASKED_KEY) === 'true'
+      if (!alreadyAsked && Notification.permission === 'default') {
+        // Small delay so the PWA has time to settle before the prompt.
+        setTimeout(async () => {
+          try {
+            const permission = await Notification.requestPermission()
+            localStorage.setItem(NOTIF_ASKED_KEY, 'true')
+            if (permission === 'granted' && 'serviceWorker' in navigator) {
+              const reg = await navigator.serviceWorker.ready
+              reg.active?.postMessage({ type: 'SCHEDULE_NOTIFICATIONS' })
+            }
+          } catch {
+            localStorage.setItem(NOTIF_ASKED_KEY, 'true')
+          }
+        }, 2000)
+      } else {
+        // Already asked — if granted, make sure SW is scheduling.
+        localStorage.setItem(NOTIF_ASKED_KEY, 'true')
+        if (Notification.permission === 'granted' && 'serviceWorker' in navigator) {
+          navigator.serviceWorker.ready.then((reg) => {
+            reg.active?.postMessage({ type: 'SCHEDULE_NOTIFICATIONS' })
+          }).catch(() => {})
+        }
+      }
+    }
 
     return () => {
       clearInterval(sessionInterval)
