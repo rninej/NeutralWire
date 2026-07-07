@@ -20,6 +20,20 @@ import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { getDeviceId, buildReferralUrl } from '@/lib/referral'
 
+/**
+ * Convert a base64 URL string to a Uint8Array (needed for the Push API).
+ */
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = atob(base64)
+  const output = new Uint8Array(rawData.length)
+  for (let i = 0; i < rawData.length; ++i) {
+    output[i] = rawData.charCodeAt(i)
+  }
+  return output
+}
+
 interface ReferralDialogProps {
   onClose: () => void
 }
@@ -349,9 +363,32 @@ function NotificationEnabler() {
         if (permission === 'granted') {
           setEnabled(true)
           syncToFirebase(true)
-          if ('serviceWorker' in navigator) {
+          // Subscribe to push notifications (for real background delivery).
+          if ('serviceWorker' in navigator && 'PushManager' in window) {
             const reg = await navigator.serviceWorker.ready
-            reg.active?.postMessage({ type: 'SCHEDULE_NOTIFICATIONS' })
+            let subscription = await reg.pushManager.getSubscription()
+            if (!subscription) {
+              const vapidRes = await fetch('/api/push/vapid')
+              const { publicKey } = await vapidRes.json()
+              if (publicKey) {
+                const key = urlBase64ToUint8Array(publicKey)
+                subscription = await reg.pushManager.subscribe({
+                  userVisibleOnly: true,
+                  applicationServerKey: key,
+                })
+              }
+            }
+            if (subscription) {
+              const deviceId = getDeviceId()
+              await fetch('/api/push/subscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  deviceId,
+                  subscription: subscription.toJSON(),
+                }),
+              })
+            }
           }
         }
       }

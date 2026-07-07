@@ -45,6 +45,70 @@ import type { CountryInfo } from '@/lib/country-detect'
 import { detectCountryClient, DEFAULT_COUNTRY } from '@/lib/country-detect'
 import { getDeviceId } from '@/lib/referral'
 
+/**
+ * Subscribe to push notifications via the Push API.
+ *
+ * This gets a push subscription from the browser and sends it to the
+ * server (/api/push/subscribe) which stores it in Firebase. The cron
+ * endpoint (/api/push/send) then uses it to send real background push
+ * messages that wake up the device even when the app is closed.
+ *
+ * This is the ONLY reliable way to send notifications when the PWA is
+ * not open — service worker setTimeout doesn't work because the SW gets
+ * killed by the browser.
+ */
+async function subscribeToPush(deviceId: string): Promise<void> {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return
+  if (!('PushManager' in window)) return
+
+  try {
+    const reg = await navigator.serviceWorker.ready
+
+    // Check if we already have a subscription.
+    let subscription = await reg.pushManager.getSubscription()
+    if (!subscription) {
+      // Fetch the VAPID public key from the server.
+      const vapidRes = await fetch('/api/push/vapid')
+      if (!vapidRes.ok) return
+      const { publicKey } = await vapidRes.json()
+      if (!publicKey) return
+
+      // Convert the VAPID key to a Uint8Array for the subscribe() call.
+      const applicationServerKey = urlBase64ToUint8Array(publicKey)
+      subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      })
+    }
+
+    // Send the subscription to the server.
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId,
+        subscription: subscription.toJSON(),
+      }),
+    })
+  } catch (err) {
+    console.warn('[push] subscribe failed:', err)
+  }
+}
+
+/**
+ * Convert a base64 URL string to a Uint8Array (needed for the Push API).
+ */
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = atob(base64)
+  const output = new Uint8Array(rawData.length)
+  for (let i = 0; i < rawData.length; ++i) {
+    output[i] = rawData.charCodeAt(i)
+  }
+  return output
+}
+
 type View = 'feed' | 'columns' | 'sources'
 
 interface NewsResponse {
@@ -165,9 +229,9 @@ export default function Home() {
 
     // --- Auto-request notification permission in PWA mode ---
     // In the installed PWA, automatically ask for notification permission
-    // once per device (tracked via localStorage so we don't nag). When
-    // granted, tell the service worker to schedule the 3 daily alerts
-    // AND sync the status to Firebase so the referral page shows it correctly.
+    // once per device. When granted, subscribe to push notifications via
+    // the Push API so the server can send real background push messages
+    // (which work even when the app is closed).
     const NOTIF_ASKED_KEY = 'neutralwire:notif-asked'
     if (isStandalone && 'Notification' in window) {
       const alreadyAsked = localStorage.getItem(NOTIF_ASKED_KEY) === 'true'
@@ -176,16 +240,16 @@ export default function Home() {
           try {
             const permission = await Notification.requestPermission()
             localStorage.setItem(NOTIF_ASKED_KEY, 'true')
-            // Sync the result to Firebase.
             const enabled = permission === 'granted'
+            // Sync the result to Firebase.
             fetch('/api/notifications', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ deviceId, enabled, frequency: 'daily3' }),
             }).catch(() => {})
-            if (enabled && 'serviceWorker' in navigator) {
-              const reg = await navigator.serviceWorker.ready
-              reg.active?.postMessage({ type: 'SCHEDULE_NOTIFICATIONS' })
+            // If granted, subscribe to push notifications.
+            if (enabled) {
+              await subscribeToPush(deviceId)
             }
           } catch {
             localStorage.setItem(NOTIF_ASKED_KEY, 'true')
@@ -193,18 +257,15 @@ export default function Home() {
         }, 2000)
       } else {
         localStorage.setItem(NOTIF_ASKED_KEY, 'true')
-        // If already granted, make sure Firebase knows + SW is scheduling.
+        // If already granted, make sure we have a push subscription.
         if (Notification.permission === 'granted') {
           fetch('/api/notifications', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ deviceId, enabled: true }),
           }).catch(() => {})
-          if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.ready
-              .then((reg) => reg.active?.postMessage({ type: 'SCHEDULE_NOTIFICATIONS' }))
-              .catch(() => {})
-          }
+          // Re-subscribe if needed (subscriptions can expire).
+          subscribeToPush(deviceId).catch(() => {})
         }
       }
     }

@@ -1,0 +1,20 @@
+{
+  "crons": [
+    {
+      "path": "/api/push/send?secret=neutralwire-cron-2026",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/push/send?secret=neutralwire-cron-2026",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/push/send?secret=neutralwire-cron-2026",
+      "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/push/send?secret=neutralwire-cron-2026",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

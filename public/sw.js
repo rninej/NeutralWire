@@ -133,6 +133,43 @@ async function scheduleAllNewsNotifications() {
   allNewsInterval = setInterval(check, 30 * 60 * 1000) // 30 minutes
 }
 
+// ---------- Push event handler ----------
+// This is what wakes up the service worker when a push message arrives,
+// EVEN IF THE APP IS CLOSED. The push service (FCM/APNs) delivers the
+// message to the device, which wakes up the service worker and fires
+// this event.
+self.addEventListener('push', (event) => {
+  let data = {
+    title: 'NeutralWire',
+    body: 'New update',
+    url: '/',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: 'neutralwire',
+  }
+
+  try {
+    if (event.data) {
+      data = { ...data, ...event.data.json() }
+    }
+  } catch {
+    // If JSON parse fails, try as text
+    if (event.data) {
+      data.body = event.data.text()
+    }
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: data.icon,
+      badge: data.badge,
+      tag: data.tag,
+      data: { url: data.url },
+    }),
+  )
+})
+
 // ---------- Notification click ----------
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
