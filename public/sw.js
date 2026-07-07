@@ -36,9 +36,21 @@ self.addEventListener('activate', (event) => {
 })
 
 // ---------- Message handler (from client) ----------
+let notificationFrequency = 'daily3' // 'daily3' or 'all'
+
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SCHEDULE_NOTIFICATIONS') {
     scheduleDailyNotifications()
+  }
+  if (event.data && event.data.type === 'SET_FREQUENCY') {
+    notificationFrequency = event.data.frequency || 'daily3'
+    // Re-schedule with the new frequency.
+    if (notificationFrequency === 'daily3') {
+      scheduleDailyNotifications()
+    } else {
+      // For 'all' mode, set up a more frequent check (every 30 minutes).
+      scheduleAllNewsNotifications()
+    }
   }
 })
 
@@ -75,6 +87,50 @@ async function scheduleDailyNotifications() {
       })
     }, delay)
   }
+}
+
+// ---------- All-news notification mode ----------
+// In 'all' mode, check for new stories every 30 minutes and notify
+// if there's a new top story.
+let allNewsInterval = null
+async function scheduleAllNewsNotifications() {
+  // Clear daily notifications.
+  const existing = await self.registration.getNotifications()
+  existing.forEach((n) => n.close())
+
+  // Clear any previous interval.
+  if (allNewsInterval) clearInterval(allNewsInterval)
+
+  let lastTopStoryTitle = null
+
+  // Check immediately, then every 30 minutes.
+  const check = async () => {
+    try {
+      const res = await fetch('/api/news?category=top&limit=1&minCoverage=3')
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.topics && data.topics.length > 0) {
+        const topStory = data.topics[0]
+        if (topStory.title !== lastTopStoryTitle) {
+          if (lastTopStoryTitle !== null) {
+            // New story — notify.
+            self.registration.showNotification('Breaking: ' + topStory.title.slice(0, 60), {
+              body: topStory.summary?.slice(0, 100) || 'Tap to read more.',
+              icon: '/icon-192.png',
+              badge: '/icon-192.png',
+              tag: 'breaking-news',
+              data: { url: '/?topic=' + topStory.topicId },
+            })
+          }
+          lastTopStoryTitle = topStory.title
+        }
+      }
+    } catch {
+      // silent
+    }
+  }
+  check()
+  allNewsInterval = setInterval(check, 30 * 60 * 1000) // 30 minutes
 }
 
 // ---------- Notification click ----------

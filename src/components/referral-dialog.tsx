@@ -53,36 +53,58 @@ export function ReferralDialog({ onClose }: ReferralDialogProps) {
 
   React.useEffect(() => {
     let cancelled = false
+    let pollInterval: ReturnType<typeof setInterval>
+
     ;(async () => {
       const deviceId = getDeviceId()
+      // Check localStorage for an existing code (persisted across sessions).
+      const existingCode =
+        typeof window !== 'undefined'
+          ? localStorage.getItem('neutralwire:my-referral-code')
+          : null
+
       try {
-        // Create or retrieve referral code.
+        // Create or retrieve referral code. Send existingCode so the
+        // server can verify and return it instead of generating a new one.
         const res = await fetch('/api/referral/create', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deviceId }),
+          body: JSON.stringify({ deviceId, existingCode }),
         })
         const data = await res.json()
         if (cancelled) return
         if (data.code) {
           setReferralCode(data.code)
           setReferralUrl(data.url || buildReferralUrl(data.code))
+          // Persist in localStorage so we never regenerate it.
+          localStorage.setItem('neutralwire:my-referral-code', data.code)
         }
 
-        // Fetch stats.
-        const statsRes = await fetch(`/api/referral/stats?code=${data.code}`)
-        if (statsRes.ok) {
-          const statsData = await statsRes.json()
-          if (!cancelled) setStats(statsData)
+        // Fetch stats — and poll every 10 seconds for live updates.
+        const fetchStats = async () => {
+          if (!data.code) return
+          try {
+            const statsRes = await fetch(`/api/referral/stats?code=${data.code}`)
+            if (statsRes.ok) {
+              const statsData = await statsRes.json()
+              if (!cancelled) setStats(statsData)
+            }
+          } catch {
+            // silent
+          }
         }
+        fetchStats()
+        pollInterval = setInterval(fetchStats, 10000)
       } catch {
         // silent
       } finally {
         if (!cancelled) setLoading(false)
       }
     })()
+
     return () => {
       cancelled = true
+      clearInterval(pollInterval)
     }
   }, [])
 
@@ -281,14 +303,43 @@ function Rule({
 
 function NotificationEnabler() {
   const [enabled, setEnabled] = React.useState(false)
+  const [frequency, setFrequency] = React.useState<'daily3' | 'all'>('daily3')
   const [loading, setLoading] = React.useState(false)
+  const [deviceChecked, setDeviceChecked] = React.useState(false)
 
+  // Check both browser permission AND Firebase status.
   React.useEffect(() => {
-    // Check if notifications are already enabled.
+    const deviceId = getDeviceId()
+    // Check browser permission.
     if ('Notification' in window) {
       setEnabled(Notification.permission === 'granted')
     }
+    // Check Firebase for the stored status + frequency preference.
+    fetch(`/api/notifications?deviceId=${deviceId}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.enabled) setEnabled(true)
+        if (data.frequency === 'all') setFrequency('all')
+      })
+      .catch(() => {})
+      .finally(() => setDeviceChecked(true))
   }, [])
+
+  const syncToFirebase = (
+    newEnabled: boolean,
+    newFrequency?: 'daily3' | 'all',
+  ) => {
+    const deviceId = getDeviceId()
+    fetch('/api/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId,
+        enabled: newEnabled,
+        frequency: newFrequency || frequency,
+      }),
+    }).catch(() => {})
+  }
 
   const handleEnable = async () => {
     setLoading(true)
@@ -297,17 +348,9 @@ function NotificationEnabler() {
         const permission = await Notification.requestPermission()
         if (permission === 'granted') {
           setEnabled(true)
-          // Tell the server this device has notifications enabled.
-          const deviceId = getDeviceId()
-          await fetch('/api/referral/track', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deviceId }),
-          })
-          // Schedule notifications via service worker.
+          syncToFirebase(true)
           if ('serviceWorker' in navigator) {
             const reg = await navigator.serviceWorker.ready
-            // The service worker handles scheduling.
             reg.active?.postMessage({ type: 'SCHEDULE_NOTIFICATIONS' })
           }
         }
@@ -319,24 +362,70 @@ function NotificationEnabler() {
     }
   }
 
-  if (enabled) {
+  const handleFrequencyChange = (newFreq: 'daily3' | 'all') => {
+    setFrequency(newFreq)
+    syncToFirebase(enabled, newFreq)
+    // Tell the service worker about the frequency change.
+    if ('serviceWorker' in navigator && enabled) {
+      navigator.serviceWorker.ready
+        .then((reg) =>
+          reg.active?.postMessage({
+            type: 'SET_FREQUENCY',
+            frequency: newFreq,
+          }),
+        )
+        .catch(() => {})
+    }
+  }
+
+  if (!enabled) {
     return (
-      <div className="flex items-center gap-2 text-sm text-emerald-600">
-        <Check className="h-4 w-4" />
-        Notifications enabled — you'll get 3 daily updates.
-      </div>
+      <Button size="sm" onClick={handleEnable} disabled={loading} className="gap-1.5">
+        <Bell className="h-4 w-4" />
+        {loading ? 'Enabling…' : 'Enable notifications'}
+      </Button>
     )
   }
 
   return (
-    <Button
-      size="sm"
-      onClick={handleEnable}
-      disabled={loading}
-      className="gap-1.5"
-    >
-      <Bell className="h-4 w-4" />
-      {loading ? 'Enabling…' : 'Enable notifications'}
-    </Button>
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 text-sm text-emerald-600">
+        <Check className="h-4 w-4" />
+        Notifications enabled
+      </div>
+      <div className="text-xs font-medium text-muted-foreground">
+        How often do you want news alerts?
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={() => handleFrequencyChange('daily3')}
+          className={cn(
+            'flex-1 rounded-lg border p-3 text-left transition-colors',
+            frequency === 'daily3'
+              ? 'border-foreground bg-foreground/5'
+              : 'hover:bg-muted',
+          )}
+        >
+          <div className="text-sm font-semibold">3 per day</div>
+          <div className="text-[11px] text-muted-foreground">
+            Morning, lunch & evening
+          </div>
+        </button>
+        <button
+          onClick={() => handleFrequencyChange('all')}
+          className={cn(
+            'flex-1 rounded-lg border p-3 text-left transition-colors',
+            frequency === 'all'
+              ? 'border-foreground bg-foreground/5'
+              : 'hover:bg-muted',
+          )}
+        >
+          <div className="text-sm font-semibold">All news</div>
+          <div className="text-[11px] text-muted-foreground">
+            Every new story (non-stop)
+          </div>
+        </button>
+      </div>
+    </div>
   )
 }

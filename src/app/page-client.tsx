@@ -166,18 +166,24 @@ export default function Home() {
     // --- Auto-request notification permission in PWA mode ---
     // In the installed PWA, automatically ask for notification permission
     // once per device (tracked via localStorage so we don't nag). When
-    // granted, tell the service worker to schedule the 3 daily alerts.
+    // granted, tell the service worker to schedule the 3 daily alerts
+    // AND sync the status to Firebase so the referral page shows it correctly.
     const NOTIF_ASKED_KEY = 'neutralwire:notif-asked'
     if (isStandalone && 'Notification' in window) {
-      // Only ask if we haven't asked before AND don't already have a decision.
       const alreadyAsked = localStorage.getItem(NOTIF_ASKED_KEY) === 'true'
       if (!alreadyAsked && Notification.permission === 'default') {
-        // Small delay so the PWA has time to settle before the prompt.
         setTimeout(async () => {
           try {
             const permission = await Notification.requestPermission()
             localStorage.setItem(NOTIF_ASKED_KEY, 'true')
-            if (permission === 'granted' && 'serviceWorker' in navigator) {
+            // Sync the result to Firebase.
+            const enabled = permission === 'granted'
+            fetch('/api/notifications', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ deviceId, enabled, frequency: 'daily3' }),
+            }).catch(() => {})
+            if (enabled && 'serviceWorker' in navigator) {
               const reg = await navigator.serviceWorker.ready
               reg.active?.postMessage({ type: 'SCHEDULE_NOTIFICATIONS' })
             }
@@ -186,12 +192,19 @@ export default function Home() {
           }
         }, 2000)
       } else {
-        // Already asked — if granted, make sure SW is scheduling.
         localStorage.setItem(NOTIF_ASKED_KEY, 'true')
-        if (Notification.permission === 'granted' && 'serviceWorker' in navigator) {
-          navigator.serviceWorker.ready.then((reg) => {
-            reg.active?.postMessage({ type: 'SCHEDULE_NOTIFICATIONS' })
+        // If already granted, make sure Firebase knows + SW is scheduling.
+        if (Notification.permission === 'granted') {
+          fetch('/api/notifications', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deviceId, enabled: true }),
           }).catch(() => {})
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.ready
+              .then((reg) => reg.active?.postMessage({ type: 'SCHEDULE_NOTIFICATIONS' }))
+              .catch(() => {})
+          }
         }
       }
     }
@@ -675,7 +688,6 @@ export default function Home() {
                     <TopicCard
                       key={featured.topicId + (featured.imageUrl || '')}
                       topic={featured}
-                      defaultOpen
                       onOpenDetail={setDetailTopic}
                     />
                   )}
