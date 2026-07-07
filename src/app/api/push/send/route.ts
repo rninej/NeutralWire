@@ -26,7 +26,15 @@ interface DeviceRecord {
 /**
  * Cron endpoint that sends push notifications to all subscribed devices.
  *
- * Called by Vercel Cron (see vercel.json) every hour.
+ * Called by Vercel Cron (see vercel.json) — 4 times: 8am, 1pm, 8pm for
+ * daily3 users, plus hourly for 'all news' mode.
+ *
+ * Authentication: Vercel Cron automatically sends an Authorization header
+ * with the CRON_SECRET environment variable as a Bearer token. We verify
+ * this to prevent random people from triggering sends.
+ *
+ * If CRON_SECRET is not set (e.g. in dev), we allow all requests so you
+ * can test locally.
  *
  * Logic:
  * - For 'daily3' frequency: sends at ~8am, ~1pm, ~8pm (checks the current
@@ -34,19 +42,20 @@ interface DeviceRecord {
  *   sent today for that slot).
  * - For 'all' frequency: sends whenever the top story changes (checks
  *   against the last known top story title).
- *
- * Security: protected by a CRON_SECRET query param. Vercel Cron passes
- * this automatically.
  */
 export async function GET(req: NextRequest) {
-  // Verify the cron secret (prevents random people from triggering sends).
-  const authHeader = req.headers.get('authorization')
-  const urlSecret = req.nextUrl.searchParams.get('secret')
-  const expectedSecret = process.env.CRON_SECRET || 'neutralwire-cron-2026'
+  // Verify the cron secret via the Authorization header (Vercel Cron
+  // sends this automatically when CRON_SECRET env var is set).
+  const expectedSecret = process.env.CRON_SECRET || ''
+  const authHeader = req.headers.get('authorization') || ''
 
-  if (urlSecret !== expectedSecret && authHeader !== `Bearer ${expectedSecret}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (expectedSecret) {
+    // CRON_SECRET is set — require valid auth.
+    if (authHeader !== `Bearer ${expectedSecret}`) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
   }
+  // If CRON_SECRET is not set (dev mode), allow all requests.
 
   const now = new Date()
   const hour = now.getUTCHours() // Use UTC; client renders in local time
@@ -61,8 +70,10 @@ export async function GET(req: NextRequest) {
   // Fetch the current top story (for 'all' mode + for notification content).
   let topStory: TopicArticle | null = null
   try {
+    // Use the request origin so this works on both dev and Vercel.
+    const origin = req.nextUrl.origin
     const newsRes = await fetch(
-      `http://localhost:3000/api/news?category=top&limit=1&minCoverage=3`,
+      `${origin}/api/news?category=top&limit=1&minCoverage=3`,
       { cache: 'no-store' },
     )
     if (newsRes.ok) {
