@@ -31,10 +31,26 @@ export function PwaInstallPrompt() {
     if (localStorage.getItem(DISMISS_KEY) === 'true') return
     if (window.matchMedia('(display-mode: standalone)').matches) return
 
+    // If arriving via a referral link (?ref=...), show the install prompt
+    // immediately on mobile (don't wait for beforeinstallprompt).
+    const urlParams = new URLSearchParams(window.location.search)
+    const hasRef = urlParams.get('ref')
+    const isMobile = window.innerWidth < 768
+    if (hasRef && isMobile) {
+      // Small delay so the page can render first.
+      setTimeout(() => setShowBanner(true), 1500)
+    }
+
     const handler = (e: Event) => {
       e.preventDefault() // Prevent the default browser prompt
       setDeferredPrompt(e as BeforeInstallPromptEvent)
-      setShowBanner(true)
+      // Show immediately if there's a referral, otherwise wait for the
+      // banner timer above.
+      if (hasRef) {
+        setShowBanner(true)
+      } else {
+        setShowBanner(true)
+      }
     }
 
     window.addEventListener('beforeinstallprompt', handler)

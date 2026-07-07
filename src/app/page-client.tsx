@@ -13,6 +13,7 @@ import {
   Info,
   Cloud,
   X,
+  Gift,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,6 +34,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { TopicCard } from '@/components/topic-card'
 import { TopicDetail } from '@/components/topic-detail'
 import { PwaInstallPrompt } from '@/components/pwa-install-prompt'
+import { ReferralDialog } from '@/components/referral-dialog'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
 import { CountryPicker } from '@/components/country-picker'
@@ -41,6 +43,7 @@ import { cn } from '@/lib/utils'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import type { CountryInfo } from '@/lib/country-detect'
 import { detectCountryClient, DEFAULT_COUNTRY } from '@/lib/country-detect'
+import { getDeviceId } from '@/lib/referral'
 
 type View = 'feed' | 'columns' | 'sources'
 
@@ -106,6 +109,60 @@ export default function Home() {
   useEffect(() => {
     detailTopicRef.current = detailTopic
   }, [detailTopic])
+
+  // --- Referral dialog state ---
+  const [referralOpen, setReferralOpen] = useState(false)
+
+  // --- Referral + session tracking ---
+  useEffect(() => {
+    const deviceId = getDeviceId()
+    const urlParams = new URLSearchParams(window.location.search)
+    const refCode = urlParams.get('ref')
+
+    // Track the referral click + register device.
+    fetch('/api/referral/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId, referralCode: refCode }),
+    }).catch(() => {})
+
+    // Track session activity every 15 seconds.
+    let sessionInterval: ReturnType<typeof setInterval>
+    const startSessionTracking = () => {
+      sessionInterval = setInterval(() => {
+        fetch('/api/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deviceId, seconds: 15, referralCode: refCode }),
+        }).catch(() => {})
+      }, 15000)
+    }
+    startSessionTracking()
+
+    // Detect PWA install and report it.
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      fetch('/api/pwa-installed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, referralCode: refCode }),
+      }).catch(() => {})
+    }
+
+    // Also listen for the appinstalled event.
+    const installedHandler = () => {
+      fetch('/api/pwa-installed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, referralCode: refCode }),
+      }).catch(() => {})
+    }
+    window.addEventListener('appinstalled', installedHandler)
+
+    return () => {
+      clearInterval(sessionInterval)
+      window.removeEventListener('appinstalled', installedHandler)
+    }
+  }, [])
 
   // --- Refs for race-condition protection ---
   const reqIdRef = React.useRef(0)
@@ -394,6 +451,15 @@ export default function Home() {
             <Button
               variant="ghost"
               size="sm"
+              onClick={() => setReferralOpen(true)}
+              className="gap-1.5"
+            >
+              <Gift className="h-4 w-4" />
+              <span className="hidden sm:inline">Refer</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={handleRefreshClick}
               disabled={refreshing || loading}
               className="gap-1.5"
@@ -600,6 +666,9 @@ export default function Home() {
 
       {/* PWA install prompt (mobile only, dismissible) */}
       <PwaInstallPrompt />
+
+      {/* Referral dialog */}
+      {referralOpen && <ReferralDialog onClose={() => setReferralOpen(false)} />}
 
       {/* Detail overlay */}
       {detailTopic && (
