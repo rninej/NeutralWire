@@ -54,3 +54,4 @@ server.log
 /skills/.vapid-keys
 skills/
 .vapid-keys
+tool-results/
