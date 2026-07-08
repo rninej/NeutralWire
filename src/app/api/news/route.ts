@@ -173,7 +173,25 @@ function applyFilters(
   // NOTE: Do NOT re-sort here. The topics are already sorted by the
   // aggregator (with local-boost for the `relevant` category). Re-sorting
   // by coverage would destroy the local-news prioritisation.
-  return topics
-    .filter((t) => t.coverage >= minCoverage)
-    .slice(0, limit)
+  return withUniqueTopicImages(
+    topics
+      .filter((t) => t.coverage >= minCoverage)
+      .slice(0, limit),
+  )
+}
+
+function withUniqueTopicImages(topics: TopicArticle[]): TopicArticle[] {
+  const used = new Set<string>()
+
+  return topics.map((topic) => {
+    const candidates = [
+      topic.imageUrl,
+      ...topic.articles.map((article) => article.imageUrl),
+    ].filter((url): url is string => Boolean(url))
+
+    const imageUrl = candidates.find((url) => !used.has(url)) ?? null
+    if (imageUrl) used.add(imageUrl)
+
+    return imageUrl === topic.imageUrl ? topic : { ...topic, imageUrl }
+  })
 }

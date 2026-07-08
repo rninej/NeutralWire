@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { Category } from '@/lib/news-sources'
-import { aggregateCategory } from '@/lib/news-aggregator'
+import { aggregateCategory, type TopicArticle } from '@/lib/news-aggregator'
 import {
   readCachedNews,
   refreshCategory,
@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
       category,
       country,
       countryName,
-      topics: cached?.topics ?? [],
+      topics: applyFilters(cached?.topics ?? [], limit, minCoverage),
       cached: true,
       fresh: false,
       rateLimited: true,
@@ -84,9 +84,7 @@ export async function GET(req: NextRequest) {
       category,
       country,
       countryName,
-      topics: fresh.topics
-        .filter((t) => t.coverage >= minCoverage)
-        .slice(0, limit),
+      topics: applyFilters(fresh.topics, limit, minCoverage),
       cached: false,
       fresh: true,
       sourceCount: fresh.sourceCount,
@@ -100,4 +98,27 @@ export async function GET(req: NextRequest) {
       { status: 500 },
     )
   }
+}
+
+function applyFilters(
+  topics: TopicArticle[],
+  limit: number,
+  minCoverage: number,
+): TopicArticle[] {
+  const used = new Set<string>()
+
+  return topics
+    .filter((t) => t.coverage >= minCoverage)
+    .slice(0, limit)
+    .map((topic) => {
+      const candidates = [
+        topic.imageUrl,
+        ...topic.articles.map((article) => article.imageUrl),
+      ].filter((url): url is string => Boolean(url))
+
+      const imageUrl = candidates.find((url) => !used.has(url)) ?? null
+      if (imageUrl) used.add(imageUrl)
+
+      return imageUrl === topic.imageUrl ? topic : { ...topic, imageUrl }
+    })
 }

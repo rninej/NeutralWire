@@ -8,6 +8,19 @@ export const revalidate = 0
 // Images don't change, so cache for 1 hour.
 const IMG_CACHE = new Map<string, { ts: number; blob: Buffer; contentType: string }>()
 const IMG_TTL_MS = 60 * 60 * 1000
+const IMAGE_RESPONSE_HEADERS = {
+  'Cache-Control': 'private, no-store, max-age=0',
+  'CDN-Cache-Control': 'no-store',
+  'Netlify-CDN-Cache-Control': 'no-store',
+  Vary: 'Accept',
+}
+
+function bufferBody(buffer: Buffer): ArrayBuffer {
+  return buffer.buffer.slice(
+    buffer.byteOffset,
+    buffer.byteOffset + buffer.byteLength,
+  ) as ArrayBuffer
+}
 
 /**
  * Image proxy: fetches an image URL server-side and returns it.
@@ -30,10 +43,10 @@ export async function GET(req: NextRequest) {
   // Check cache
   const cached = IMG_CACHE.get(url)
   if (cached && Date.now() - cached.ts < IMG_TTL_MS) {
-    return new NextResponse(cached.blob, {
+    return new NextResponse(bufferBody(cached.blob), {
       headers: {
         'Content-Type': cached.contentType,
-        'Cache-Control': 'public, max-age=3600',
+        ...IMAGE_RESPONSE_HEADERS,
       },
     })
   }
@@ -67,10 +80,10 @@ export async function GET(req: NextRequest) {
       IMG_CACHE.set(url, { ts: Date.now(), blob, contentType })
     }
 
-    return new NextResponse(blob, {
+    return new NextResponse(bufferBody(blob), {
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=3600',
+        ...IMAGE_RESPONSE_HEADERS,
       },
     })
   } catch {
