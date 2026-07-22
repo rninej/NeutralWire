@@ -101,7 +101,8 @@ export function PwaInstallPrompt() {
   if (installed || !showBanner) return null
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-sm rounded-xl border bg-background p-4 shadow-lg">
+    <div className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-sm rounded-xl border-2 border-transparent bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 p-[2px] shadow-lg">
+      <div className="rounded-[10px] bg-background p-4">
       <div className="flex items-start gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
           <Download className="h-5 w-5" />
@@ -198,6 +199,7 @@ export function PwaInstallPrompt() {
         >
           <X className="h-4 w-4" />
         </button>
+      </div>
       </div>
     </div>
   )

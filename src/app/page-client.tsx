@@ -35,6 +35,7 @@ import { TopicCard } from '@/components/topic-card'
 import { TopicDetail } from '@/components/topic-detail'
 import { PwaInstallPrompt } from '@/components/pwa-install-prompt'
 import { IosNotificationPrompt } from '@/components/ios-notification-prompt'
+import { PwaOnboarding } from '@/components/pwa-onboarding'
 import { ReferralDialog } from '@/components/referral-dialog'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
@@ -258,14 +259,19 @@ export default function Home() {
     const ua = window.navigator.userAgent.toLowerCase()
     const isIOS = /iphone|ipad|ipod/.test(ua) && !(window as unknown as { MSStream?: unknown }).MSStream
 
-    // Auto-request permission only on non-iOS (iOS needs a user tap).
-    // Also skip on desktop browsers (no push needed on desktop).
+    // Auto-request permission only in PWA (standalone mode), not browser tabs.
+    // Desktop browsers are also skipped.
+    const isStandaloneMode =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true
+
     const isDesktopBrowser =
       window.innerWidth >= 1024 &&
       !/android|mobile|iphone|ipad|ipod|windows phone/i.test(ua) &&
       !('ontouchstart' in window)
 
-    if (!isIOS && !isDesktopBrowser && 'Notification' in window && 'serviceWorker' in navigator) {
+    // Only request notifications in PWA (standalone) on mobile
+    if (isStandaloneMode && !isIOS && !isDesktopBrowser && 'Notification' in window && 'serviceWorker' in navigator) {
       // If permission is already granted or denied, don't ask again.
       if (Notification.permission === 'default') {
         // Request permission IMMEDIATELY (no setTimeout delay).
@@ -293,14 +299,13 @@ export default function Home() {
       }
     }
 
-    // ── PUSH SUBSCRIPTION (runs on ALL platforms including iOS) ──
-    // Only runs if permission is GRANTED. If denied/blocked, we skip
-    // entirely — no retry loop, no repeated subscribe calls.
+    // ── PUSH SUBSCRIPTION (only in PWA, not browser tabs) ──
     if (
+      isStandaloneMode &&
       'Notification' in window &&
       'serviceWorker' in navigator &&
       'PushManager' in window &&
-      Notification.permission === 'granted' // ONLY if granted — not denied/default
+      Notification.permission === 'granted'
     ) {
       fetch('/api/notifications', {
         method: 'POST',
@@ -837,6 +842,7 @@ export default function Home() {
       {/* PWA install prompt (mobile only, dismissible) */}
       <PwaInstallPrompt />
       <IosNotificationPrompt />
+      <PwaOnboarding />
 
       {/* Referral dialog */}
       {referralOpen && <ReferralDialog onClose={() => setReferralOpen(false)} />}

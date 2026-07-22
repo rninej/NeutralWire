@@ -28,14 +28,21 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b']
 
 // Multiple Gemini models — cycled through when one hits rate limits
+// New models first, then older ones as fallback
 const GEMINI_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-pro',
   'gemini-2.0-flash',
   'gemini-2.0-flash-001',
-  'gemini-2.5-flash-preview-05-20',
   'gemini-1.5-flash',
   'gemini-1.5-flash-8b',
   'gemini-1.5-pro',
 ]
+
+// Track rate-limited models to skip them in future calls (per-process)
+const rateLimitedModels = new Map<string, number>() // model → timestamp
+const RATE_LIMIT_COOLDOWN_MS = 60 * 1000 // skip a model for 60s after 429
 
 const OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it:free'
 
@@ -58,8 +65,13 @@ export function getLastProvider(): string {
  * Try multiple AI providers in order. Returns the answer or null.
  */
 export async function callAI(opts: ChatCall): Promise<string | null> {
-  // 1. Try ALL Gemini models first (free, has Google Search built in)
+  const now = Date.now()
+
+  // 1. Try ALL Gemini models first (skip rate-limited ones)
   for (const model of GEMINI_MODELS) {
+    const limitedAt = rateLimitedModels.get(`gemini-${model}`)
+    if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
+
     const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model)
     if (answer) {
       lastProvider = `Gemini ${model}`
@@ -69,6 +81,9 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
 
   // 2. Try Groq models in order
   for (const model of GROQ_MODELS) {
+    const limitedAt = rateLimitedModels.get(`groq-${model}`)
+    if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
+
     const answer = await callGroq(opts.systemPrompt, opts.userPrompt, model)
     if (answer) {
       lastProvider = `Groq ${model}`
@@ -90,8 +105,13 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
  * Try compound (web search) providers in order.
  */
 export async function callAICompound(opts: ChatCall): Promise<string | null> {
-  // 1. Try ALL Gemini models with Google Search (free, built-in grounding)
+  const now = Date.now()
+
+  // 1. Try ALL Gemini models with Google Search (skip rate-limited)
   for (const model of GEMINI_MODELS) {
+    const limitedAt = rateLimitedModels.get(`gemini-${model}`)
+    if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
+
     const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model)
     if (answer) {
       lastProvider = `Gemini ${model} (Google Search)`
@@ -152,7 +172,12 @@ async function callGroq(
     clearTimeout(timeout)
 
     if (!res.ok) {
-      console.warn(`[ai] Groq ${model} ${res.status}`)
+      if (res.status === 429) {
+        rateLimitedModels.set(`groq-${model}`, Date.now())
+        console.warn(`[ai] Groq ${model} rate-limited, skipping for ${RATE_LIMIT_COOLDOWN_MS / 1000}s`)
+      } else {
+        console.warn(`[ai] Groq ${model} ${res.status}`)
+      }
       return null
     }
 
@@ -198,7 +223,13 @@ async function callGemini(
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '')
-      console.warn(`[ai] Gemini ${res.status}: ${errText.slice(0, 200)}`)
+      // Mark model as rate-limited if 429
+      if (res.status === 429) {
+        rateLimitedModels.set(`gemini-${model}`, Date.now())
+        console.warn(`[ai] Gemini ${model} rate-limited, skipping for ${RATE_LIMIT_COOLDOWN_MS / 1000}s`)
+      } else {
+        console.warn(`[ai] Gemini ${model} ${res.status}: ${errText.slice(0, 200)}`)
+      }
       return null
     }
 

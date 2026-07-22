@@ -178,24 +178,16 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           <span className="hidden sm:inline">Close</span>
         </Button>
         <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
+          <button
+            type="button"
             onClick={handleShare}
-            className="gap-1.5"
+            className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity"
           >
-            {shared ? (
-              <>
-                <Check className="h-4 w-4 text-emerald-500" />
-                <span className="hidden sm:inline">Copied!</span>
-              </>
-            ) : (
-              <>
-                <Share2 className="h-4 w-4" />
-                <span className="hidden sm:inline">Share</span>
-              </>
-            )}
-          </Button>
+            <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
+              <Share2 className="h-3.5 w-3.5 text-purple-500" />
+              <span className="hidden sm:inline">Share</span>
+            </span>
+          </button>
         </div>
       </div>
 
