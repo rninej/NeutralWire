@@ -26,7 +26,17 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 // Models for each provider
 const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b']
-const GEMINI_MODEL = 'gemini-2.0-flash'
+
+// Multiple Gemini models — cycled through when one hits rate limits
+const GEMINI_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-001',
+  'gemini-2.5-flash-preview-05-20',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-1.5-pro',
+]
+
 const OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it:free'
 
 // Compound models (web search)
@@ -48,11 +58,13 @@ export function getLastProvider(): string {
  * Try multiple AI providers in order. Returns the answer or null.
  */
 export async function callAI(opts: ChatCall): Promise<string | null> {
-  // 1. Try Gemini FIRST (free, has Google Search built in)
-  const geminiAnswer = await callGemini(opts.systemPrompt, opts.userPrompt)
-  if (geminiAnswer) {
-    lastProvider = `Gemini ${GEMINI_MODEL}`
-    return geminiAnswer
+  // 1. Try ALL Gemini models first (free, has Google Search built in)
+  for (const model of GEMINI_MODELS) {
+    const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model)
+    if (answer) {
+      lastProvider = `Gemini ${model}`
+      return answer
+    }
   }
 
   // 2. Try Groq models in order
@@ -78,11 +90,11 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
  * Try compound (web search) providers in order.
  */
 export async function callAICompound(opts: ChatCall): Promise<string | null> {
-  // 1. Try Gemini with Google Search (free, built-in grounding)
-  if (GEMINI_API_KEY) {
-    const answer = await callGemini(opts.systemPrompt, opts.userPrompt)
+  // 1. Try ALL Gemini models with Google Search (free, built-in grounding)
+  for (const model of GEMINI_MODELS) {
+    const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model)
     if (answer) {
-      lastProvider = `Gemini ${GEMINI_MODEL} (Google Search)`
+      lastProvider = `Gemini ${model} (Google Search)`
       return answer
     }
   }
@@ -157,14 +169,15 @@ async function callGroq(
 async function callGemini(
   systemPrompt: string,
   userPrompt: string,
+  model: string = 'gemini-2.0-flash',
 ): Promise<string | null> {
   if (!GEMINI_API_KEY) return null
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 9000)
+  const timeout = setTimeout(() => controller.abort(), 8000)
 
   try {
     // Use generateContent with Google Search grounding enabled
-    const url = `${GEMINI_URL}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
+    const url = `${GEMINI_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
