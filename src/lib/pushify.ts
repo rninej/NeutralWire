@@ -91,6 +91,149 @@ async function sendViaPushify(
   return { success: sentCount > 0, sent: sentCount }
 }
 
+/**
+ * Send a personalized push notification to each device based on their
+ * interests + engagement stats.
+ *
+ * For each device:
+ *   1. Read devices/<deviceId>/interests (array of sector IDs)
+ *   2. Read devices/<deviceId>/engagement (per-sector scores 0..100)
+ *   3. Pick the best story from `candidates` matching their interests
+ *   4. Send a personalized web-push notification
+ *
+ * Falls back to `fallbackStory` for devices with no interests or no match.
+ *
+ * Returns total sent count.
+ */
+export async function sendPersonalizedWebPush(
+  candidates: Array<{
+    topicId: string
+    title: string
+    summary?: string
+    coverage: number
+    imageUrl?: string | null
+    sectors: string[]
+  }>,
+  fallbackStory: {
+    topicId: string
+    title: string
+    summary?: string
+    imageUrl?: string | null
+  },
+  origin: string,
+  slot: string,
+): Promise<{ sent: number; personalized: number; fallback: number }> {
+  const allDevices = await firebaseRead<
+    Record<
+      string,
+      DeviceRecord & {
+        interests?: string[]
+        engagement?: Record<
+          string,
+          { score: number; clicks: number; lastUpdate: number }
+        >
+      }
+    >
+  >('devices')
+  if (!allDevices) return { sent: 0, personalized: 0, fallback: 0 }
+
+  const iconUrl = `${origin}/icon-192.png`
+  const badgeUrl = `${origin}/icon-192.png`
+  const todayKey = new Date().toISOString().slice(0, 10)
+
+  let sentCount = 0
+  let personalizedCount = 0
+  let fallbackCount = 0
+  const sendPromises: Promise<void>[] = []
+
+  for (const [deviceId, device] of Object.entries(allDevices)) {
+    if (!device.pushSubscription || !device.notificationsEnabled) continue
+
+    // Pick the best story for this device
+    let bestStory = fallbackStory
+    let bestScore = -1
+    let usedPersonalization = false
+
+    const interests = device.interests || []
+    const engagement = device.engagement || {}
+
+    if (interests.length > 0 || Object.keys(engagement).length > 0) {
+      for (const c of candidates) {
+        let score = c.coverage // base
+        for (const sector of c.sectors) {
+          if (interests.includes(sector)) score += 5
+          score += (engagement[sector]?.score || 0) * 0.05
+        }
+        if (score > bestScore) {
+          bestScore = score
+          bestStory = {
+            topicId: c.topicId,
+            title: c.title,
+            summary: c.summary,
+            imageUrl: c.imageUrl,
+          }
+          usedPersonalization = true
+        }
+      }
+    }
+
+    if (usedPersonalization) personalizedCount++
+    else fallbackCount++
+
+    const imageUrl = bestStory.imageUrl
+      ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
+      : `${origin}/icon-512.png`
+
+    // Truncate title for notification body
+    let description = bestStory.title
+    if (description.length > 100) {
+      const truncated = description.slice(0, 100)
+      const lastSpace = truncated.lastIndexOf(' ')
+      description = truncated.slice(0, lastSpace > 60 ? lastSpace : 100)
+    }
+
+    const slotTitles: Record<string, string> = {
+      morning: 'Morning Briefing',
+      lunch: 'Lunch Briefing',
+      evening: 'Evening Briefing',
+    }
+
+    const notifId = `notif_${todayKey}_${slot}_${deviceId.slice(-6)}`
+    const payload = JSON.stringify({
+      title: slotTitles[slot] || 'News Update',
+      body: description,
+      url: `${origin}/?topic=${bestStory.topicId}`,
+      icon: iconUrl,
+      badge: badgeUrl,
+      image: imageUrl,
+      notifId,
+      tag: `neutralwire-${slot}`, // tag per slot so morning/lunch/evening don't overwrite
+    })
+
+    sendPromises.push(
+      webpush
+        .sendNotification(
+          device.pushSubscription as webpush.PushSubscription,
+          payload,
+          {
+            TTL: 3600,
+            urgency: 'high',
+            topic: `neutralwire-${slot}`,
+          },
+        )
+        .then(() => sentCount++)
+        .catch(() => {}),
+    )
+  }
+
+  await Promise.allSettled(sendPromises)
+  return {
+    sent: sentCount,
+    personalized: personalizedCount,
+    fallback: fallbackCount,
+  }
+}
+
 // ---------- Web-push fallback ----------
 
 interface DeviceRecord {

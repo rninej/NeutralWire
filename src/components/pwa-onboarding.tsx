@@ -3,24 +3,21 @@
 import * as React from 'react'
 import { X, Heart, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  SECTORS,
+  setInterestsLocal,
+  syncInterestsWithFirebase,
+} from '@/lib/user-interests'
+import { getDeviceId } from '@/lib/referral'
 
 const ONBOARDED_KEY = 'neutralwire:onboarded'
-const INTERESTS_KEY = 'neutralwire:interests'
 const USAGE_KEY = 'neutralwire:usage-time'
 const DONATE_SHOWN_KEY = 'neutralwire:donate-shown-at'
 const DONATE_NEXT_KEY = 'neutralwire:donate-next-delay'
 const DONATE_PRESSED_KEY = 'neutralwire:donate-pressed'
 
-const SECTORS = [
-  { id: 'politics', label: 'Politics', emoji: '🏛️' },
-  { id: 'world', label: 'World News', emoji: '🌍' },
-  { id: 'technology', label: 'Technology', emoji: '💻' },
-  { id: 'business', label: 'Business', emoji: '📈' },
-  { id: 'science', label: 'Science', emoji: '🔬' },
-  { id: 'health', label: 'Health', emoji: '🏥' },
-  { id: 'sports', label: 'Sports', emoji: '⚽' },
-  { id: 'entertainment', label: 'Entertainment', emoji: '🎬' },
-]
+// Interests are now managed via @/lib/user-interests (localStorage key
+// 'neutralwire:interests'), so the news page can read them too.
 
 /**
  * PWA Onboarding + Donation Timer.
@@ -52,9 +49,35 @@ export function PwaOnboarding() {
 
     // Load saved interests
     try {
-      const saved = localStorage.getItem(INTERESTS_KEY)
+      const saved = localStorage.getItem('neutralwire:interests')
       if (saved) setSelected(new Set(JSON.parse(saved)))
     } catch { /* ignore */ }
+
+    // Donation popup check (defined BEFORE usage to satisfy the linter).
+    const checkDonationPopup = (totalUsageMs: number) => {
+      const pressed = localStorage.getItem(DONATE_PRESSED_KEY) === 'true'
+      const shownAt = parseInt(localStorage.getItem(DONATE_SHOWN_KEY) || '0', 10)
+      let nextDelay = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
+
+      // If pressed (donated), wait 3 months
+      if (pressed) {
+        const threeMonths = 90 * 24 * 60 * 60 * 1000
+        if (Date.now() - shownAt > threeMonths) {
+          localStorage.setItem(DONATE_PRESSED_KEY, 'false')
+          localStorage.setItem(DONATE_NEXT_KEY, '0')
+          setShowDonate(true)
+        }
+        return
+      }
+
+      // First time: show after 1 hour (3600000 ms)
+      if (nextDelay === 0) nextDelay = 60 * 60 * 1000 // 1 hour
+
+      // Show if total usage exceeds shownAt + nextDelay
+      if (totalUsageMs > nextDelay && Date.now() - shownAt > nextDelay) {
+        setShowDonate(true)
+      }
+    }
 
     // ── Usage timer ──
     let usageInterval: ReturnType<typeof setInterval>
@@ -92,53 +115,22 @@ export function PwaOnboarding() {
     }
   }, [])
 
-  const checkDonationPopup = (totalUsageMs: number) => {
-    const pressed = localStorage.getItem(DONATE_PRESSED_KEY) === 'true'
-    const shownAt = parseInt(localStorage.getItem(DONATE_SHOWN_KEY) || '0', 10)
-    let nextDelay = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
-
-    // If pressed (donated), wait 3 months
-    if (pressed) {
-      const threeMonths = 90 * 24 * 60 * 60 * 1000
-      if (Date.now() - shownAt > threeMonths) {
-        localStorage.setItem(DONATE_PRESSED_KEY, 'false')
-        localStorage.setItem(DONATE_NEXT_KEY, '0')
-        setShowDonate(true)
-      }
-      return
-    }
-
-    // First time: show after 1 hour (3600000 ms)
-    if (nextDelay === 0) nextDelay = 60 * 60 * 1000 // 1 hour
-
-    // Show if total usage exceeds shownAt + nextDelay
-    if (totalUsageMs > nextDelay && Date.now() - shownAt > nextDelay) {
-      setShowDonate(true)
-    }
-  }
-
-  const handleOnboardingComplete = () => {
+  const handleOnboardingComplete = async () => {
+    const sectorsArray = Array.from(selected)
     localStorage.setItem(ONBOARDED_KEY, 'true')
-    localStorage.setItem(INTERESTS_KEY, JSON.stringify(Array.from(selected)))
+    // Save to localStorage (read by news page) AND Firebase (read by cron)
+    setInterestsLocal(sectorsArray)
     setShowOnboarding(false)
 
-    // Send interests to Firebase
-    const deviceId = localStorage.getItem('neutralwire:device-id')
+    // Sync to Firebase for per-user notifications
+    const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
     if (deviceId) {
-      fetch('/api/notifications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceId, enabled: true }),
-      }).catch(() => {})
-      // Store interests in Firebase
-      import('@/lib/firebase-server').then(() => {
-        fetch('/api/referral/track', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deviceId }),
-        }).catch(() => {})
-      }).catch(() => {})
+      syncInterestsWithFirebase(deviceId, sectorsArray).catch(() => {})
     }
+
+    // Notify the rest of the app that interests changed (so the news
+    // page can re-sort the feed immediately without a reload).
+    window.dispatchEvent(new CustomEvent('neutralwire:interests-changed'))
   }
 
   const toggleSector = (id: string) => {

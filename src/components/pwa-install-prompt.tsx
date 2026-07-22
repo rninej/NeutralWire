@@ -57,28 +57,54 @@ export function PwaInstallPrompt() {
     // Set iOS state for UI rendering
     setIsIOS(ios)
 
-    // Check dismiss cooldown.
-    const dismissedAt = localStorage.getItem(DISMISS_KEY)
-    if (dismissedAt) {
+    // Helper: check if the dismiss cooldown is active.
+    const isDismissed = () => {
+      const dismissedAt = localStorage.getItem(DISMISS_KEY)
+      if (!dismissedAt) return false
       const age = Date.now() - parseInt(dismissedAt, 10)
-      if (ios && age < DISMISS_DURATION) return // 24h cooldown on iOS
-      if (!ios && age < DISMISS_DURATION * 365) return // permanent on Android
+      if (ios && age < DISMISS_DURATION) return true // 24h cooldown on iOS
+      if (!ios && age < DISMISS_DURATION * 365) return true // permanent on Android
+      return false
     }
 
-    // Show banner:
-    // - On iOS: always show after 2 seconds (iOS has no beforeinstallprompt)
-    // - On Android: wait for beforeinstallprompt event
-    if (ios) {
-      setTimeout(() => setShowBanner(true), 2000)
+    // Helper: show the banner if not dismissed.
+    const showIfAllowed = () => {
+      if (isDismissed()) return
+      setShowBanner(true)
     }
+
+    // ── Trigger logic ──
+    // 1. If the URL has ?topic= (user opened a shared story link), show
+    //    the install prompt immediately. This is the highest-conversion
+    //    moment because the user is engaged with a specific story.
+    const urlParams = new URLSearchParams(window.location.search)
+    const hasTopicParam = urlParams.has('topic')
+
+    if (hasTopicParam) {
+      // Small delay so the topic detail renders first
+      setTimeout(showIfAllowed, 800)
+    } else if (ios) {
+      // 2. On iOS home page: show after 2 seconds
+      setTimeout(showIfAllowed, 2000)
+    }
+    // 3. On Android home page: wait for beforeinstallprompt event (below)
 
     // Listen for beforeinstallprompt (Android Chrome only).
     const handler = (e: Event) => {
       e.preventDefault()
       setDeferredPrompt(e as BeforeInstallPromptEvent)
-      setShowBanner(true)
+      showIfAllowed()
     }
     window.addEventListener('beforeinstallprompt', handler)
+
+    // Listen for the custom 'topic-opened' event (dispatched by TopicDetail
+    // when a user clicks a card to open the full story view). This catches
+    // the case where the user navigates from the home page to a story.
+    const topicOpenedHandler = () => {
+      // Slightly longer delay so the detail view is fully visible first
+      setTimeout(showIfAllowed, 1500)
+    }
+    window.addEventListener('neutralwire:topic-opened', topicOpenedHandler)
 
     const installedHandler = () => {
       setShowBanner(false)
@@ -89,6 +115,7 @@ export function PwaInstallPrompt() {
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handler)
+      window.removeEventListener('neutralwire:topic-opened', topicOpenedHandler)
       window.removeEventListener('appinstalled', installedHandler)
     }
   }, [])

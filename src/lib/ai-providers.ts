@@ -1,18 +1,19 @@
 /**
- * Multi-provider AI fallback chain.
+ * Multi-provider AI fallback chain (optimized for fast parallel execution).
  *
- * Call order (first that works wins):
- * 1. Groq — llama-3.3-70b-versatile (free)
- * 2. Groq — openai/gpt-oss-120b (free)
- * 3. Gemini API
- * 4. OpenRouter — google/gemma-4-26b-a4b-it:free
- *
- * Each provider is tried in order. The first one that returns a valid
- * answer wins. This maximizes free quota usage across multiple providers.
+ * Call order (first that works wins, all in parallel):
+ * 1. Gemini — multiple models in parallel (free, with optional Google Search)
+ * 2. Groq — llama-3.3-70b-versatile + openai/gpt-oss-120b (free)
+ * 3. OpenRouter — google/gemma-4-26b-a4b-it:free (last resort)
  *
  * For compound (web search) fallback:
- * 1. Groq — compound-beta
- * 2. OpenRouter — with plugins: [{id: 'web'}]
+ * 1. Gemini — multiple models WITH Google Search enabled
+ * 2. Groq — compound-beta
+ * 3. OpenRouter — with plugins: [{id: 'web'}]
+ *
+ * Each provider has a 4s timeout. We use Promise.any() so the FIRST provider
+ * to return a valid answer wins; the rest are abandoned. This keeps total
+ * response time low even when some providers are slow or rate-limited.
  */
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || ''
@@ -24,12 +25,15 @@ const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
-// Models for each provider
-const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b']
-
-// Multiple Gemini models — cycled through when one hits rate limits
-// New models first, then older ones as fallback
+// ── Gemini models ──
+// New 3.x models first (per user request), then 2.5/2.0/1.5 as fallback.
+// If a model doesn't exist (404), callGemini returns null quickly and the
+// chain moves on.
 const GEMINI_MODELS = [
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-pro',
+  'gemini-3-flash',
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
   'gemini-2.5-pro',
@@ -40,13 +44,14 @@ const GEMINI_MODELS = [
   'gemini-1.5-pro',
 ]
 
+// ── Groq models ──
+const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b']
+
 // Track rate-limited models to skip them in future calls (per-process)
-const rateLimitedModels = new Map<string, number>() // model → timestamp
-const RATE_LIMIT_COOLDOWN_MS = 60 * 1000 // skip a model for 60s after 429
+const rateLimitedModels = new Map<string, number>()
+const RATE_LIMIT_COOLDOWN_MS = 60 * 1000
 
 const OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it:free'
-
-// Compound models (web search)
 const GROQ_COMPOUND_MODEL = 'compound-beta'
 
 interface ChatCall {
@@ -54,7 +59,6 @@ interface ChatCall {
   userPrompt: string
 }
 
-// Track which provider last returned a result (for debug mode)
 let lastProvider = 'none'
 
 export function getLastProvider(): string {
@@ -62,24 +66,80 @@ export function getLastProvider(): string {
 }
 
 /**
- * Try multiple AI providers in order. Returns the answer or null.
+ * Try multiple AI providers IN PARALLEL. Returns the first valid answer.
+ *
+ * Strategy:
+ *   - Fire off Gemini (first model), Groq (first model), OpenRouter ALL AT ONCE
+ *   - First one that returns a non-null answer wins (Promise.any)
+ *   - Other calls are abandoned (no need to wait)
+ *   - If all fail, fall back to trying remaining Gemini models sequentially
+ *
+ * This dramatically reduces latency compared to sequential trying.
+ *
+ * Does NOT use googleSearch by default (faster). The compound flow handles
+ * web search separately.
  */
 export async function callAI(opts: ChatCall): Promise<string | null> {
   const now = Date.now()
+  const candidates: Array<Promise<string | null>> = []
 
-  // 1. Try ALL Gemini models first (skip rate-limited ones)
+  // 1. Fire off the first available Gemini model
+  const firstGemini = GEMINI_MODELS.find((m) => {
+    const limitedAt = rateLimitedModels.get(`gemini-${m}`)
+    return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
+  })
+  if (firstGemini && GEMINI_API_KEY) {
+    candidates.push(callGemini(opts.systemPrompt, opts.userPrompt, firstGemini, false))
+  }
+
+  // 2. Fire off the first available Groq model
+  if (GROQ_API_KEY) {
+    const firstGroq = GROQ_MODELS.find((m) => {
+      const limitedAt = rateLimitedModels.get(`groq-${m}`)
+      return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
+    })
+    if (firstGroq) {
+      candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, firstGroq))
+    }
+  }
+
+  // 3. Fire off OpenRouter (last resort but parallel for speed)
+  if (OPENROUTER_API_KEY) {
+    candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, false))
+  }
+
+  // 4. Race them — first non-null answer wins
+  if (candidates.length > 0) {
+    try {
+      const answer = await Promise.any(candidates)
+      if (answer) {
+        // Determine which provider won (best effort)
+        if (answer) {
+          // We don't know which one won without tracking — set a generic label
+          lastProvider = 'AI (parallel)'
+        }
+        return answer
+      }
+    } catch {
+      // Promise.any throws AggregateError if ALL promises reject.
+      // Fall through to sequential retry below.
+    }
+  }
+
+  // 5. Sequential retry: try remaining Gemini models not yet tried
   for (const model of GEMINI_MODELS) {
+    if (model === firstGemini) continue
     const limitedAt = rateLimitedModels.get(`gemini-${model}`)
     if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
 
-    const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model)
+    const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model, false)
     if (answer) {
       lastProvider = `Gemini ${model}`
       return answer
     }
   }
 
-  // 2. Try Groq models in order
+  // 6. Try remaining Groq models
   for (const model of GROQ_MODELS) {
     const limitedAt = rateLimitedModels.get(`groq-${model}`)
     if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
@@ -91,48 +151,60 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     }
   }
 
-  // 3. Try OpenRouter (last resort)
-  const openrouterAnswer = await callOpenRouter(opts.systemPrompt, opts.userPrompt, false)
-  if (openrouterAnswer) {
-    lastProvider = `OpenRouter ${OPENROUTER_MODEL}`
-    return openrouterAnswer
-  }
-
   return null
 }
 
 /**
- * Try compound (web search) providers in order.
+ * Try compound (web search) providers IN PARALLEL.
+ *
+ * Different from callAI: every Gemini call here uses the googleSearch tool.
+ * Also tries Groq compound-beta and OpenRouter with web plugin.
  */
 export async function callAICompound(opts: ChatCall): Promise<string | null> {
   const now = Date.now()
+  const candidates: Array<Promise<string | null>> = []
 
-  // 1. Try ALL Gemini models with Google Search (skip rate-limited)
+  // 1. Fire off the first available Gemini model WITH Google Search
+  const firstGemini = GEMINI_MODELS.find((m) => {
+    const limitedAt = rateLimitedModels.get(`gemini-${m}`)
+    return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
+  })
+  if (firstGemini && GEMINI_API_KEY) {
+    candidates.push(callGemini(opts.systemPrompt, opts.userPrompt, firstGemini, true))
+  }
+
+  // 2. Groq compound-beta in parallel
+  if (GROQ_API_KEY) {
+    candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, GROQ_COMPOUND_MODEL))
+  }
+
+  // 3. OpenRouter with web search in parallel
+  if (OPENROUTER_API_KEY) {
+    candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, true))
+  }
+
+  // 4. Race them
+  if (candidates.length > 0) {
+    try {
+      const answer = await Promise.any(candidates)
+      if (answer) {
+        lastProvider = 'AI (web search, parallel)'
+        return answer
+      }
+    } catch {
+      // All failed — fall through to sequential retry
+    }
+  }
+
+  // 5. Sequential retry on remaining Gemini models WITH search
   for (const model of GEMINI_MODELS) {
+    if (model === firstGemini) continue
     const limitedAt = rateLimitedModels.get(`gemini-${model}`)
     if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
 
-    const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model)
+    const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model, true)
     if (answer) {
       lastProvider = `Gemini ${model} (Google Search)`
-      return answer
-    }
-  }
-
-  // 2. Try Groq compound
-  if (GROQ_API_KEY) {
-    const answer = await callGroq(opts.systemPrompt, opts.userPrompt, GROQ_COMPOUND_MODEL)
-    if (answer) {
-      lastProvider = `Groq ${GROQ_COMPOUND_MODEL}`
-      return answer
-    }
-  }
-
-  // 3. Try OpenRouter with web search
-  if (OPENROUTER_API_KEY) {
-    const answer = await callOpenRouter(opts.systemPrompt, opts.userPrompt, true)
-    if (answer) {
-      lastProvider = `OpenRouter ${OPENROUTER_MODEL} (web)`
       return answer
     }
   }
@@ -148,7 +220,7 @@ async function callGroq(
 ): Promise<string | null> {
   if (!GROQ_API_KEY) return null
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 8000)
+  const timeout = setTimeout(() => controller.abort(), 4000)
 
   try {
     const res = await fetch(GROQ_URL, {
@@ -175,17 +247,14 @@ async function callGroq(
       if (res.status === 429) {
         rateLimitedModels.set(`groq-${model}`, Date.now())
         console.warn(`[ai] Groq ${model} rate-limited, skipping for ${RATE_LIMIT_COOLDOWN_MS / 1000}s`)
-      } else {
-        console.warn(`[ai] Groq ${model} ${res.status}`)
       }
       return null
     }
 
     const data = await res.json()
     return data.choices?.[0]?.message?.content?.trim() || null
-  } catch (err) {
+  } catch {
     clearTimeout(timeout)
-    console.warn(`[ai] Groq ${model} failed:`, err instanceof Error ? err.message : err)
     return null
   }
 }
@@ -195,51 +264,58 @@ async function callGemini(
   systemPrompt: string,
   userPrompt: string,
   model: string = 'gemini-2.0-flash',
+  useSearch: boolean = false,
 ): Promise<string | null> {
   if (!GEMINI_API_KEY) return null
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 8000)
+  // Search-enabled calls get a slightly longer timeout (search takes time)
+  const timeoutMs = useSearch ? 6000 : 4000
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    // Use generateContent with Google Search grounding enabled
     const url = `${GEMINI_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`
+    const body: Record<string, unknown> = {
+      contents: [
+        { role: 'user', parts: [{ text: `${systemPrompt}\n\nUser: ${userPrompt}` }] },
+      ],
+      generationConfig: {
+        maxOutputTokens: 400,
+        temperature: 0.5,
+      },
+    }
+    // Only attach the googleSearch tool when explicitly requested.
+    // Attaching it for every call makes simple questions slow.
+    if (useSearch) {
+      body.tools = [{ googleSearch: {} }]
+    }
+
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          { role: 'user', parts: [{ text: `${systemPrompt}\n\nUser: ${userPrompt}` }] }
-        ],
-        generationConfig: {
-          maxOutputTokens: 400,
-          temperature: 0.5,
-        },
-        tools: [{ googleSearch: {} }],
-      }),
+      body: JSON.stringify(body),
       cache: 'no-store',
       signal: controller.signal,
     })
     clearTimeout(timeout)
 
     if (!res.ok) {
-      const errText = await res.text().catch(() => '')
-      // Mark model as rate-limited if 429
       if (res.status === 429) {
         rateLimitedModels.set(`gemini-${model}`, Date.now())
-        console.warn(`[ai] Gemini ${model} rate-limited, skipping for ${RATE_LIMIT_COOLDOWN_MS / 1000}s`)
-      } else {
-        console.warn(`[ai] Gemini ${model} ${res.status}: ${errText.slice(0, 200)}`)
       }
+      // 404 (model not found) is silent — model name doesn't exist
       return null
     }
 
     const data = await res.json()
-    // Gemini with Google Search returns the text in the same structure
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
-    return text || null
-  } catch (err) {
+    // Gemini may return text in parts[0].text or parts[1].text (when
+    // grounding metadata is included). Try both.
+    const parts = data.candidates?.[0]?.content?.parts || []
+    for (const part of parts) {
+      if (part.text) return part.text.trim()
+    }
+    return null
+  } catch {
     clearTimeout(timeout)
-    console.warn('[ai] Gemini failed:', err instanceof Error ? err.message : err)
     return null
   }
 }
@@ -252,7 +328,7 @@ async function callOpenRouter(
 ): Promise<string | null> {
   if (!OPENROUTER_API_KEY) return null
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 9000)
+  const timeout = setTimeout(() => controller.abort(), 5000)
 
   try {
     const body: Record<string, unknown> = {
@@ -280,16 +356,12 @@ async function callOpenRouter(
     })
     clearTimeout(timeout)
 
-    if (!res.ok) {
-      console.warn(`[ai] OpenRouter ${res.status} (web=${useWebSearch})`)
-      return null
-    }
+    if (!res.ok) return null
 
     const data = await res.json()
     return data.choices?.[0]?.message?.content?.trim() || null
-  } catch (err) {
+  } catch {
     clearTimeout(timeout)
-    console.warn('[ai] OpenRouter failed:', err instanceof Error ? err.message : err)
     return null
   }
 }

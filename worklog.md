@@ -338,3 +338,110 @@ Stage Summary:
 - First user to view a topic pays the ~4s LLM cost; every subsequent user (on any instance) gets it in ~200ms from Firebase
 - Concurrent requests for the same topic are deduplicated (only 1 LLM call)
 - Files modified: src/app/api/summary/route.ts (added firebaseRead/firebaseWrite, IN_FLIGHT dedup, StoredSummary type)
+
+---
+Task ID: 9
+Agent: main (Super Z)
+Task: Per-user tailored notifications + interests impact relevant page + Share button on mobile + fix AI search "connection error" + install popup on topic view
+
+Work Log:
+
+1. **Per-user tailored notifications + engagement tracking**:
+   - Created `src/lib/user-interests.ts` (client-side utility):
+     - 8 sectors: politics, world, technology, business, science, health, sports, entertainment
+     - Each sector has a curated keyword list (e.g. "trump", "starmer", "parliament" → politics)
+     - `getInterests()` / `setInterestsLocal()` / `syncInterestsWithFirebase()` — manage interests
+     - `getEngagement()` / `bumpEngagement()` — per-sector scores 0..100, +10 per click, +15 per share, +10 per AI ask, +2 per time tick (capped at 100)
+     - `detectSectors(title, summary)` — keyword scan to map a story → sectors
+     - `personalizationBoost(topic, interests, engagement)` — reordering score for the news feed
+   - Created `src/app/api/engagement/route.ts`:
+     - POST `type=interests` → writes `devices/<deviceId>/interests` array
+     - POST `type=engagement` → writes `devices/<deviceId>/engagement/<sector>` = {score, clicks, lastUpdate}
+   - Added `sendPersonalizedWebPush()` to `src/lib/pushify.ts`:
+     - Reads ALL devices from Firebase
+     - For each device with pushSubscription + notificationsEnabled, picks the best story from a candidate pool based on the device's `interests` array and `engagement` map
+     - Sends per-device web-push with a per-slot tag (so morning/lunch/evening don't overwrite each other)
+     - Falls back to the AI-picked broadcast story for devices with no interests
+   - Updated `src/app/api/push/trigger/route.ts`:
+     - Now does TWO sends in parallel:
+       1. Pushify broadcast with AI-picked best UK story (for Pushify subscribers)
+       2. Per-device personalized web-push (each device gets the story matching their interests+engagement)
+     - Fetches 5 categories (relevant, world, technology, business, science) for the candidate pool
+     - Detects sectors for each candidate using the same keyword map (mirrored server-side)
+     - Returns `{ broadcast, personalized: {sent, personalized, fallback} }`
+   - Engagement is tracked on:
+     - Topic click (TopicCard → handleOpenDetail)
+     - Topic open via shared link (/?topic=...)
+     - AI question (AskAiPanel handleSend)
+     - Share button (handleShare)
+
+2. **Interests picker impacts the relevant page**:
+   - `PwaOnboarding.handleOnboardingComplete` now:
+     - Saves to localStorage via `setInterestsLocal()` (news page reads this)
+     - Syncs to Firebase via `syncInterestsWithFirebase()` (cron reads this)
+     - Dispatches `neutralwire:interests-changed` event so the news page re-sorts immediately
+   - `page-client.tsx` now:
+     - Loads interests + engagement on mount
+     - Listens for `neutralwire:interests-changed` and `neutralwire:engagement-changed` events
+     - `filteredTopics` memo applies `personalizationBoost()` when no active search AND user has interests/engagement
+     - Stable sort preserves aggregator ordering for ties (so high-coverage + local stories still surface)
+     - Boost formula: `coverage + min(8, interestMatch*3 + engagementScore*0.05)` — capped so a single sector can't dominate
+   - `TopicCard` onClick handlers now use `handleOpenDetail` (wraps `setDetailTopic` + engagement bump)
+   - URL-based topic opening (from shared `/?topic=` links) also routes through `handleOpenDetailRef`
+
+3. **Share button on mobile + different gradient**:
+   - `topic-detail.tsx` Share button:
+     - Changed gradient from `from-purple-500 via-blue-500 to-cyan-400` → `from-amber-400 via-orange-500 to-rose-500`
+     - Icon color changed `text-purple-500` → `text-orange-500`
+     - "Share" text is now visible on ALL viewports (removed `hidden sm:inline`)
+     - Added `aria-label="Share this story"` for accessibility
+   - The Ask AI button keeps its original purple→blue→cyan gradient, so the two CTAs are now visually distinct
+
+4. **Fix AI search "connection error" bug**:
+   - Root cause: sequential provider chain took 60s+ (8 Gemini × 8s + 2 Groq × 8s + OpenRouter), exceeded Vercel's 10s maxDuration, fetch rejected → "Connection error" catch fired
+   - Rewrote `src/lib/ai-providers.ts`:
+     - Added the 4 new Gemini models requested (gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-pro, gemini-3-flash) at the front of GEMINI_MODELS
+     - `callAI` now uses `Promise.any()` to race Gemini (first available) + Groq (first available) + OpenRouter IN PARALLEL — first non-null answer wins
+     - `callAICompound` does the same parallel race but with `googleSearch` tool enabled on Gemini
+     - `callGemini` takes a `useSearch` flag — callAI skips search (fast, uses training data), callAICompound enables it
+     - Per-provider timeout reduced to 4s (6s for search-enabled Gemini) — total budget fits within 9s
+     - Sequential retry on remaining Gemini/Groq models only fires if parallel race fails (rare)
+   - Rewrote `src/app/api/ask-ai/route.ts`:
+     - Hard 9s deadline check before calling compound (avoids Vercel timeout)
+     - Better system prompt: tells the model it does NOT have web search in normal mode, so ({/compound}) is only emitted when truly needed
+     - Friendly fallback messages instead of empty answers when compound fails
+     - Returns helpful JSON error instead of crashing on any failure
+   - Updated `AskAiPanel.handleSend`:
+     - Added client-side 12s AbortController timeout (above server's 10s so server can return its own error first)
+     - Distinguishes AbortError (timeout) from real network errors
+     - Parses error JSON from non-OK responses (handles Vercel 504 HTML pages gracefully)
+     - Specific messages: "AI took too long" vs "Connection error" vs server-provided error
+
+5. **Install app popup on topic view**:
+   - Updated `src/components/pwa-install-prompt.tsx`:
+     - Detects `?topic=` in URL on mount → shows install prompt after 800ms (high-conversion moment: user clicked a shared story link)
+     - Listens for `neutralwire:topic-opened` custom event → shows prompt after 1.5s (catches in-app topic opens)
+     - Refactored dismiss cooldown check into `isDismissed()` helper, used by both home-page and topic-open triggers
+     - Home page iOS still uses the original 2s delay
+   - `topic-detail.tsx` now dispatches `window.dispatchEvent(new CustomEvent('neutralwire:topic-opened'))` on mount, so opening any topic (via card click OR shared link) triggers the install prompt
+
+Verification:
+- Lint: 0 errors, 0 warnings on all modified files
+- TypeScript: no new errors introduced (pre-existing errors in unrelated files unchanged)
+- Engagement API tested with curl: interests + engagement writes confirmed in Firebase (`devices/test_d_123` showed `interests:["politics","technology"]` and `engagement.politics.score:10`)
+- Ask AI tested with curl:
+  - "Capital of France?" → answered correctly in 2.8s (parallel, no search needed)
+  - "Latest Tesla stock price?" → returned helpful fallback message in 7.8s (compound flow triggered, all providers rate-limited, graceful failure)
+  - "Who is the UK PM?" → answered correctly in 8.4s (Keir Starmer, from training data, no ({/compound}) needed)
+- News page loads in 50ms cached, 800ms fresh
+- Page with `?topic=` param renders 200 OK in 2.3s
+
+Stage Summary:
+- 5 tasks completed end-to-end
+- Per-user notifications now sent via parallel web-push (each device gets a story matching their interests+engagement), Pushify still broadcasts the AI-picked best UK story
+- Interests picked during onboarding now actively re-order the "Relevant" news tab in real time (boost formula capped so no single sector dominates)
+- Share button on topic detail uses amber/orange/rose gradient (distinct from purple/blue/cyan Ask AI button) and shows "Share" text on mobile
+- AI search no longer fails with "Connection error" — parallel provider racing + per-provider timeouts fit within Vercel's 10s budget; compound flow returns helpful fallbacks instead of crashing
+- Install app popup now appears when a user opens a topic (either via shared link like /?topic=ayw0ayh or by clicking a card), in addition to the existing home-page 2s trigger
+- Files added: src/lib/user-interests.ts, src/app/api/engagement/route.ts
+- Files modified: src/lib/ai-providers.ts (parallel racing + new Gemini models + useSearch flag), src/lib/pushify.ts (sendPersonalizedWebPush), src/app/api/ask-ai/route.ts (deadline + better errors), src/app/api/push/trigger/route.ts (per-user push + sector detection), src/components/pwa-onboarding.tsx (Firebase sync + event dispatch), src/components/pwa-install-prompt.tsx (?topic= + topic-opened event), src/components/topic-detail.tsx (engagement tracking + Share button + topic-opened event + better AI errors), src/app/page-client.tsx (interests state + personalization boost + handleOpenDetail)

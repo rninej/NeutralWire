@@ -20,6 +20,8 @@ import { Card } from '@/components/ui/card'
 import { BiasBar } from '@/components/bias-bar'
 import { cn } from '@/lib/utils'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import { getDeviceId } from '@/lib/referral'
+import { bumpEngagementForTopic } from '@/lib/user-interests'
 
 interface TopicDetailProps {
   topic: TopicArticle
@@ -68,6 +70,11 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
       url.searchParams.set('topic', topic.topicId)
       window.history.pushState({ detailOpen: true }, '', url.toString())
     }
+
+    // Notify the PWA install prompt that a topic was opened. On mobile
+    // this triggers the install popup (high-conversion moment — user is
+    // engaged with a specific story).
+    window.dispatchEvent(new CustomEvent('neutralwire:topic-opened'))
 
     const popstateHandler = () => {
       onClose()
@@ -141,6 +148,11 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
       text: topic.summary || topic.title,
       url: shareUrl,
     }
+    // Track engagement: sharing is a strong signal (+15 per sector)
+    const deviceId = getDeviceId()
+    if (deviceId) {
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'share').catch(() => {})
+    }
     try {
       if (navigator.share) {
         await navigator.share(shareData)
@@ -181,11 +193,16 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           <button
             type="button"
             onClick={handleShare}
-            className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity"
+            // Different gradient from the Ask AI button (which is
+            // purple→blue→cyan). Share uses amber→orange→rose so the two
+            // CTAs are visually distinct.
+            className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 hover:opacity-90 transition-opacity shadow-sm"
+            aria-label="Share this story"
           >
             <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
-              <Share2 className="h-3.5 w-3.5 text-purple-500" />
-              <span className="hidden sm:inline">Share</span>
+              <Share2 className="h-3.5 w-3.5 text-orange-500" />
+              {/* Show "Share" on ALL viewports (mobile + desktop) */}
+              <span>Share</span>
             </span>
           </button>
         </div>
@@ -431,10 +448,26 @@ function AskAiPanel({
     setMessages((m) => [...m, { role: 'user', content: question }])
     setLoading(true)
 
+    // Track engagement: asking AI is a strong interest signal (+10)
+    const deviceId = getDeviceId()
+    if (deviceId) {
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'ai').catch(() => {})
+      // Notify the news page to refresh its engagement cache
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
+      }, 300)
+    }
+
     // Compulsory 1.5s loading delay
     const minDelay = new Promise((resolve) => setTimeout(resolve, 1500))
 
     try {
+      // Client-side timeout: 12s (slightly above server's 10s maxDuration
+      // so the server has time to return its own error JSON before we
+      // give up).
+      const controller = new AbortController()
+      const clientTimeout = setTimeout(() => controller.abort(), 12000)
+
       const [_, res] = await Promise.all([
         minDelay,
         fetch('/api/ask-ai', {
@@ -451,16 +484,45 @@ function AskAiPanel({
             })),
             debug: debugMode,
           }),
+          signal: controller.signal,
         }),
       ])
+      clearTimeout(clientTimeout)
+
+      // Handle non-OK responses with a clear message instead of crashing
+      if (!res.ok) {
+        let errorMsg = 'The AI service is busy right now. Please try again.'
+        try {
+          const errData = await res.json()
+          if (errData?.error) errorMsg = errData.error
+        } catch {
+          // Response wasn't JSON (probably Vercel's 504 HTML page)
+          if (res.status === 504) {
+            errorMsg = 'The AI took too long to respond. Please try a shorter question.'
+          }
+        }
+        setMessages((m) => [...m, { role: 'assistant', content: errorMsg }])
+        return
+      }
+
       const data = await res.json()
       if (data.answer) {
         setMessages((m) => [...m, { role: 'assistant', content: data.answer, model: data.model }])
       } else {
         setMessages((m) => [...m, { role: 'assistant', content: data.error || 'Sorry, I could not answer that.', model: data.model }])
       }
-    } catch {
-      setMessages((m) => [...m, { role: 'assistant', content: 'Connection error. Please try again.' }])
+    } catch (err) {
+      // Distinguish abort (timeout) from real network errors
+      const isAbort = err instanceof Error && err.name === 'AbortError'
+      setMessages((m) => [
+        ...m,
+        {
+          role: 'assistant',
+          content: isAbort
+            ? 'The AI is taking too long to respond. Please try a shorter or simpler question.'
+            : 'Connection error. Please check your internet and try again.',
+        },
+      ])
     } finally {
       setLoading(false)
     }

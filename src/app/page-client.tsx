@@ -46,6 +46,13 @@ import type { TopicArticle } from '@/lib/news-aggregator'
 import type { CountryInfo } from '@/lib/country-detect'
 import { detectCountryClient, DEFAULT_COUNTRY } from '@/lib/country-detect'
 import { getDeviceId } from '@/lib/referral'
+import {
+  getInterests,
+  getEngagement,
+  personalizationBoost,
+  bumpEngagementForTopic,
+  type EngagementStats,
+} from '@/lib/user-interests'
 
 /**
  * Subscribe to push notifications via the Push API.
@@ -189,6 +196,50 @@ export default function Home() {
   useEffect(() => {
     detailTopicRef.current = detailTopic
   }, [detailTopic])
+
+  // --- User interests + engagement (for personalization) ---
+  const [interests, setInterestsState] = useState<string[]>([])
+  const [engagement, setEngagement] = useState<EngagementStats>({})
+
+  // Load interests + engagement from localStorage on mount, and refresh
+  // whenever the onboarding flow saves new interests.
+  useEffect(() => {
+    const load = () => {
+      setInterestsState(getInterests())
+      setEngagement(getEngagement())
+    }
+    load()
+    window.addEventListener('neutralwire:interests-changed', load)
+    window.addEventListener('neutralwire:engagement-changed', load)
+    // Refresh engagement every 30s so the boost stays fresh while reading
+    const interval = setInterval(load, 30000)
+    return () => {
+      window.removeEventListener('neutralwire:interests-changed', load)
+      window.removeEventListener('neutralwire:engagement-changed', load)
+      clearInterval(interval)
+    }
+  }, [])
+
+  // Track engagement when a user opens a topic detail.
+  const handleOpenDetail = React.useCallback((topic: TopicArticle) => {
+    setDetailTopic(topic)
+    const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
+    if (deviceId) {
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'click')
+      // Update local state shortly so the boost is visible next render
+      setTimeout(() => {
+        setEngagement(getEngagement())
+        window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
+      }, 200)
+    }
+  }, [])
+
+  // Keep a ref so async functions (fetchData) can call the latest
+  // handleOpenDetail without re-triggering the fetchData effect.
+  const handleOpenDetailRef = React.useRef(handleOpenDetail)
+  useEffect(() => {
+    handleOpenDetailRef.current = handleOpenDetail
+  }, [handleOpenDetail])
 
   // --- Referral dialog state ---
   const [referralOpen, setReferralOpen] = useState(false)
@@ -381,20 +432,42 @@ export default function Home() {
   }, [search])
 
   // --- Filter topics locally for instant feedback ---
+  // For the "relevant" tab (default), we also apply a personalization
+  // boost based on the user's selected interests + per-sector engagement
+  // scores. The boost RE-ORDERS topics (high-coverage stories still rank
+  // well, but stories matching user interests rise to the top).
   const filteredTopics = React.useMemo(() => {
-    if (!debouncedSearch) return topics
-    const q = debouncedSearch.toLowerCase()
-    return topics.filter(
-      (t) =>
-        t.title.toLowerCase().includes(q) ||
-        t.summary.toLowerCase().includes(q) ||
-        t.articles.some(
-          (a) =>
-            a.title.toLowerCase().includes(q) ||
-            a.sourceName.toLowerCase().includes(q),
-        ),
-    )
-  }, [topics, debouncedSearch])
+    let list = topics
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase()
+      list = list.filter(
+        (t) =>
+          t.title.toLowerCase().includes(q) ||
+          t.summary.toLowerCase().includes(q) ||
+          t.articles.some(
+            (a) =>
+              a.title.toLowerCase().includes(q) ||
+              a.sourceName.toLowerCase().includes(q),
+          ),
+      )
+    }
+
+    // Only personalise when there's no active search (otherwise the user
+    // is looking for something specific and we shouldn't hide results).
+    const hasInterests = interests.length > 0
+    const hasEngagement = Object.keys(engagement).length > 0
+    if (debouncedSearch || (!hasInterests && !hasEngagement)) {
+      return list
+    }
+
+    // Compute boost for each topic and sort descending. Stable sort
+    // preserves original order for ties (so equal-boost stories keep
+    // their aggregator ordering, which already prioritises local + fresh).
+    return list
+      .map((t) => ({ topic: t, score: personalizationBoost(t, interests, engagement) }))
+      .sort((a, b) => b.score - a.score)
+      .map((entry) => entry.topic)
+  }, [topics, debouncedSearch, interests, engagement])
 
   // Track whether local search yielded no results — triggers API search.
   useEffect(() => {
@@ -485,14 +558,15 @@ export default function Home() {
         if (topicParam && !detailTopicRef.current) {
           const found = allTopics.find((t) => t.topicId === topicParam)
           if (found) {
-            setDetailTopic(found)
+            // Use handleOpenDetail to track engagement
+            handleOpenDetailRef.current?.(found)
           } else {
             // Search ALL categories via API.
             try {
               const topicRes = await fetch(`/api/topic/${topicParam}`, { cache: 'no-store' })
               if (topicRes.ok) {
                 const topicJson = await topicRes.json()
-                if (topicJson.topic) setDetailTopic(topicJson.topic)
+                if (topicJson.topic) handleOpenDetailRef.current?.(topicJson.topic)
               }
             } catch {
               // silent
@@ -813,14 +887,14 @@ export default function Home() {
                     <TopicCard
                       key={featured.topicId + (featured.imageUrl || '')}
                       topic={featured}
-                      onOpenDetail={setDetailTopic}
+                      onOpenDetail={handleOpenDetail}
                     />
                   )}
                   {rest.map((t) => (
                     <TopicCard
                       key={t.topicId + (t.imageUrl || '')}
                       topic={t}
-                      onOpenDetail={setDetailTopic}
+                      onOpenDetail={handleOpenDetail}
                     />
                   ))}
                 </div>

@@ -5,6 +5,8 @@ import { firebaseWrite } from '@/lib/firebase-server'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+// Vercel Hobby max is 10s. Keep at 10 to match Hobby; the AI chain is
+// optimized to fit within this budget (parallel calls, 4s per provider).
 export const maxDuration = 10
 
 interface AskAiRequest {
@@ -12,22 +14,28 @@ interface AskAiRequest {
   topicTitle: string
   topicSummary: string
   topicArticles: Array<{ title: string; source: string; leaning: string }>
+  debug?: boolean
 }
 
 /**
  * Ask AI about a news story.
  *
- * Provider chain (first that works wins):
- * 1. Groq — llama-3.3-70b-versatile
- * 2. Groq — openai/gpt-oss-120b
- * 3. Gemini
- * 4. OpenRouter — google/gemma-4-26b-a4b-it:free
+ * Provider chain (all in parallel, first that works wins):
+ * 1. Gemini (multiple models, NO google search by default)
+ * 2. Groq (llama-3.3-70b, gpt-oss-120b)
+ * 3. OpenRouter (gemma free)
  *
- * If the model outputs ({/compound}), it re-routes to:
- * 1. Groq — compound-beta
- * 2. OpenRouter — with web search
+ * If the model outputs ({/compound}), it re-routes to compound (web search):
+ * 1. Gemini (WITH google search)
+ * 2. Groq compound-beta
+ * 3. OpenRouter with web plugin
+ *
+ * Total budget: ~9s to fit within Vercel Hobby's 10s maxDuration.
  */
 export async function POST(req: NextRequest) {
+  // Hard deadline: 9s (leaves 1s for response serialization)
+  const deadline = Date.now() + 9000
+
   try {
     const body = (await req.json()) as AskAiRequest
 
@@ -51,8 +59,9 @@ Rules:
 - If asked who made you or your name is, say: "I'm R9GPT, made by Arnav Jain for NeutralWire." Don't volunteer this unless asked.
 
 IMPORTANT - WEB SEARCH INDICATOR:
+- You do NOT have web search in this mode. Answer from your training data.
 - If the question requires information NOT in the story context below AND you do not know the answer from your training data, start your response with exactly: ({/compound})
-- Only use ({/compound}) when you genuinely cannot answer without web search.
+- Only use ({/compound}) when you genuinely cannot answer without web search. The system will then route you to a web-search-enabled model.
 
 Story context:
 Title: ${body.topicTitle}
@@ -61,23 +70,37 @@ Summary: ${body.topicSummary}
 Articles covering this story:
 ${articleContext}`
 
-    // ── Call AI (tries all providers in order) ──
+    // ── Call AI (parallel, NO search) ──
     let answer = await callAI({ systemPrompt, userPrompt: body.question })
     let modelUsed = getLastProvider()
 
-    // Check if the model requested compound (web search) — check both
-    // ({/compound}) and {/compound} formats
+    // Check if the model requested compound (web search)
     if (answer && (answer.startsWith('({/compound})') || answer.startsWith('{/compound}'))) {
+      // Strip the indicator
       answer = answer.replace(/^\(?(\{\/compound\})\)?\s*/g, '')
       answer = answer.replace(/^\{\/compound\}\s*/g, '')
 
-      // Try compound providers
-      const compoundAnswer = await callAICompound({ systemPrompt, userPrompt: body.question })
-      if (compoundAnswer) {
-        answer = stripSources(compoundAnswer)
-        modelUsed = getLastProvider() + ' (web search)'
+      // Only attempt compound if we still have time before the deadline
+      if (Date.now() < deadline - 1000) {
+        const compoundAnswer = await callAICompound({
+          systemPrompt: systemPrompt.replace(
+            'You do NOT have web search in this mode.',
+            'You HAVE web search available. Use it to find current information.'
+          ),
+          userPrompt: body.question,
+        })
+        if (compoundAnswer) {
+          answer = stripSources(compoundAnswer)
+          modelUsed = getLastProvider() + ' (web search)'
+        } else {
+          // Compound failed — give a helpful message instead of empty
+          answer =
+            "I couldn't find reliable information on that. Try rephrasing your question, or check back in a few minutes — the news catalog updates regularly."
+        }
       } else {
-        answer = stripSources(answer) || 'Sorry, I could not find that information.'
+        // Out of time — return a helpful message
+        answer =
+          'That question needs a web search but I ran out of time. Please try again in a moment.'
       }
     } else if (answer) {
       answer = stripSources(answer)
@@ -85,14 +108,17 @@ ${articleContext}`
 
     if (!answer) {
       return NextResponse.json(
-        { error: 'AI could not generate a response. Please try again.' },
+        {
+          error:
+            "I couldn't reach any AI provider right now. Please try again in a moment.",
+        },
         { status: 502 },
       )
     }
 
-    // Store Q&A in Firebase
+    // Store Q&A in Firebase (fire-and-forget, don't block response)
     const qaId = `qa_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    await firebaseWrite(`ask-ai/${qaId}`, {
+    void firebaseWrite(`ask-ai/${qaId}`, {
       question: body.question,
       answer,
       topicTitle: body.topicTitle,
@@ -103,7 +129,11 @@ ${articleContext}`
   } catch (err) {
     console.error('[ask-ai] error:', err)
     return NextResponse.json(
-      { error: 'Failed to process question', detail: String(err).slice(0, 200) },
+      {
+        error:
+          'The AI service is taking too long to respond. Please try again — your question has been noted.',
+        detail: String(err).slice(0, 200),
+      },
       { status: 500 },
     )
   }

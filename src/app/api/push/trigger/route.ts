@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { callAI } from '@/lib/ai-providers'
-import { sendPushifyNotification } from '@/lib/pushify'
+import {
+  sendPushifyNotification,
+  sendPersonalizedWebPush,
+} from '@/lib/pushify'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import type { TopicArticle } from '@/lib/news-aggregator'
 
@@ -11,9 +14,100 @@ export const revalidate = 0
 export const maxDuration = 10
 
 /**
+ * Sector keyword detection (mirrors src/lib/user-interests.ts SECTOR_KEYWORDS).
+ *
+ * We need this server-side because user-interests.ts is client-only (it
+ * uses localStorage). Keeping the keywords in sync here is fine — they
+ * rarely change.
+ */
+const SECTOR_KEYWORDS: Record<string, string[]> = {
+  politics: [
+    'trump', 'biden', 'starmer', 'parliament', 'congress', 'senate', 'election',
+    'vote', 'voting', 'labour', 'conservative', 'tories', 'democrat', 'republican',
+    'gop', 'mps', 'westminster', 'policy', 'government', 'minister',
+    'prime minister', 'president', 'campaign', 'poll', 'lawmaker', 'legislation',
+    'bill ', 'reform', 'cabinet', 'downing street', 'white house', 'scotus',
+    'supreme court', 'court ruling', 'impeach', 'lawsuit', 'doj', 'attorney',
+  ],
+  world: [
+    'ukraine', 'russia', 'putin', 'china', 'xi jinping', 'israel', 'gaza', 'hamas',
+    'iran', 'middle east', 'europe', 'european union', 'nato', 'un security',
+    'africa', 'asia', 'latin america', 'japan', 'india', 'modi',
+    'france', 'germany', 'macron', 'merz', 'turkey', 'erdogan', 'north korea',
+    'south korea', 'asean', 'united nations', 'refugee', 'migrant', 'ceasefire',
+    'pentagon', 'air strike', 'nuclear',
+  ],
+  technology: [
+    'ai ', 'artificial intelligence', 'openai', 'chatgpt', 'anthropic', 'claude',
+    'gemini', 'google', 'apple', 'microsoft', 'meta ', 'facebook', 'amazon',
+    'tesla', 'nvidia', 'chip', 'semiconductor', 'tiktok', 'twitter', 'x.com',
+    'elon musk', 'zuckerberg', 'iphone', 'android', 'startup', 'crypto',
+    'bitcoin', 'ethereum', 'blockchain', 'cyber', 'hack', 'data breach',
+    'algorithm', 'deepmind', 'quantum', 'robotics', 'chatbot', 'llm',
+  ],
+  business: [
+    'stock', 'market', 'shares', 'dow', 'nasdaq', 'sp 500', 'ftse', 'nikkei',
+    'economy', 'economic', 'inflation', 'interest rate', 'federal reserve',
+    'fed ', 'ecb', 'bank of england', 'gdp', 'recession', 'tariff', 'trade war',
+    'merger', 'acquisition', 'earnings', 'quarterly', 'ipo', 'billion', 'million',
+    'layoff', 'job cut', 'oil price', 'crude', 'opec', 'dow jones',
+    'hedge fund', 'wall street', 'city of london', 'banking', 'finance',
+  ],
+  science: [
+    'nasa', 'spacex', 'rocket', 'mars', 'moon', 'iss', 'space', 'astronaut',
+    'telescope', 'james webb', 'particle', 'cern', 'quantum', 'physics',
+    'chemistry', 'biology', 'genome', 'dna', 'crispr', 'researchers',
+    'scientists', 'discovery', 'breakthrough', 'nature', 'journal', 'climate',
+    'carbon', 'emissions', 'glacier', 'arctic', 'antarctic', 'species',
+    'fossil', 'dinosaur', 'earthquake', 'volcano',
+  ],
+  health: [
+    'covid', 'pandemic', 'who ', 'world health', 'vaccine', 'vaccination',
+    'hospital', 'nhs', 'fda', 'medicine', 'drug', 'pharma', 'pfizer', 'moderna',
+    'cancer', 'tumor', 'disease', 'outbreak', 'virus', 'flu', 'measles',
+    'mental health', 'depression', 'anxiety', 'wellness', 'diet', 'obesity',
+    'diabetes', 'heart', 'stroke', 'surgery', 'clinical trial', 'therapy',
+    'autism', 'adhd', 'dementia', 'alzheimer',
+  ],
+  sports: [
+    'premier league', 'champions league', 'world cup', 'euro 202', 'la liga',
+    'serie a', 'bundesliga', 'mls', 'nba', 'nfl', 'super bowl', 'nhl',
+    'wimbledon', 'french open', 'us open', 'atp', 'wta', 'fifa', 'uefa',
+    'arsenal', 'chelsea', 'liverpool', 'man city', 'man united', 'tottenham',
+    'barcelona', 'real madrid', 'bayern', 'psg', 'cricket', 'rugby', 'golf',
+    'tiger woods', 'f1', 'formula 1', 'verstappen', 'hamilton', 'boxing',
+    'ufc', 'olympics', 'tour de france', 'transfer', 'goalkeeper', 'football',
+  ],
+  entertainment: [
+    'movie', 'film', 'oscar', 'academy award', 'emmy', 'grammy', 'golden globe',
+    'netflix', 'disney', 'hbo', 'amazon prime', 'apple tv', 'spotify',
+    'taylor swift', 'beyonce', 'drake', 'kanye', 'concert', 'tour',
+    'album', 'single', 'celebrity', 'actor', 'actress', 'director', 'studio',
+    'marvel', 'dc comics', 'superhero', 'star wars', 'harry potter',
+    'youtube', 'influencer', 'streamer', 'twitch', 'reality tv',
+    'kim kardashian', 'gaming', 'videogame', 'playstation', 'xbox', 'nintendo',
+  ],
+}
+
+function detectSectors(title: string, summary: string = ''): string[] {
+  const text = `${title} ${summary}`.toLowerCase()
+  const matched = new Set<string>()
+  for (const [sector, keywords] of Object.entries(SECTOR_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (text.includes(kw)) {
+        matched.add(sector)
+        break
+      }
+    }
+  }
+  if (matched.size === 0) matched.add('world')
+  return Array.from(matched)
+}
+
+/**
  * Pick the best story for a UK audience using AI.
  *
- * Sends the list of candidate stories to the z-ai LLM with a prompt
+ * Sends the list of candidate stories to the AI with a prompt
  * asking it to pick the ONE story most likely to get a click from a
  * UK-based news reader. Falls back to keyword scoring if AI fails.
  */
@@ -73,11 +167,10 @@ ${dismissedKeywords ? `User previously dismissed: ${dismissedKeywords}` : ''}
 
 Which story number (1-${candidates.length}) will get the most clicks from UK readers? Reply with ONLY the number.`
 
-    // Use multi-provider AI chain (Groq → Gemini → OpenRouter)
+    // Use multi-provider AI chain
     const aiResponse = await callAI({ systemPrompt, userPrompt })
 
     if (aiResponse) {
-      // Extract the number from the response
       const match = aiResponse.match(/(\d+)/)
       if (match) {
         const idx = parseInt(match[1], 10) - 1
@@ -88,7 +181,6 @@ Which story number (1-${candidates.length}) will get the most clicks from UK rea
       }
     }
 
-    // AI failed or unparseable — fall through to keyword scoring
     console.warn('[trigger] AI failed, using keyword fallback')
     return pickBestStoryWithKeywords(candidates, clickHistory)
   } catch (err) {
@@ -156,7 +248,13 @@ function pickBestStoryWithKeywords(
  * Trigger endpoint for sending a SPECIFIC notification slot.
  *
  * Called by cron-job.org at morning/lunch/evening times.
- * Uses the click prediction system to pick the best story for each slot.
+ *
+ * Sends BOTH:
+ *   1. A Pushify BROADCAST notification with the AI-picked best UK story
+ *      (for all Pushify subscribers without device mapping).
+ *   2. PER-DEVICE personalized web-push notifications, where each device
+ *      gets the story from the candidate pool that best matches their
+ *      interests + engagement stats.
  *
  * Usage:
  *   GET /api/push/trigger?slot=morning&secret=<SECRET>
@@ -171,153 +269,170 @@ export async function GET(req: NextRequest) {
     const secret = req.nextUrl.searchParams.get('secret') || ''
     const expectedSecret = process.env.TRIGGER_SECRET || 'neutralwire-trigger'
 
-  if (secret !== expectedSecret) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  if (!slot || !['morning', 'lunch', 'evening'].includes(slot)) {
-    return NextResponse.json(
-      { error: 'Missing or invalid slot. Use ?slot=morning|lunch|evening' },
-      { status: 400 },
-    )
-  }
-
-  const todayKey = new Date().toISOString().slice(0, 10)
-  const origin = req.nextUrl.origin
-
-  // Fetch stories from multiple categories (reduced to 3 for speed).
-  let allStories: TopicArticle[] = []
-  const categories = ['relevant', 'world', 'technology']
-
-  try {
-    const results = await Promise.allSettled(
-      categories.map(async (cat) => {
-        const newsRes = await fetch(
-          `${origin}/api/news?category=${cat}&country=GB&limit=5&minCoverage=1`,
-          { cache: 'no-store' },
-        )
-        if (newsRes.ok) {
-          const newsData = await newsRes.json()
-          return newsData.topics || []
-        }
-        return []
-      }),
-    )
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        allStories.push(...result.value)
-      }
+    if (secret !== expectedSecret) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-  } catch {
-    // continue without
-  }
 
-  // Deduplicate by topicId (same story may appear in multiple categories)
-  const seen = new Set<string>()
-  const topStories = allStories.filter((s) => {
-    if (seen.has(s.topicId)) return false
-    seen.add(s.topicId)
-    return true
-  })
+    if (!slot || !['morning', 'lunch', 'evening'].includes(slot)) {
+      return NextResponse.json(
+        { error: 'Missing or invalid slot. Use ?slot=morning|lunch|evening' },
+        { status: 400 },
+      )
+    }
 
-  if (topStories.length === 0) {
-    return NextResponse.json({ sent: 0, error: 'No stories available' })
-  }
+    const todayKey = new Date().toISOString().slice(0, 10)
+    const origin = req.nextUrl.origin
 
-  // ── AI-powered story selection ──
-  // Load click history from Firebase (used by AI for personalisation).
-  const clickHistory = await firebaseRead<Record<string, { clicks: number; opens: number; dismisses: number }>>(
-    'notification-stats',
-  ) || {}
+    // Fetch stories from multiple categories.
+    let allStories: TopicArticle[] = []
+    const categories = ['relevant', 'world', 'technology', 'business', 'science']
 
-  // Load stories already sent today (to avoid duplicates).
-  const sentToday = await firebaseRead<string[]>(`sent-today/${todayKey}`) || []
+    try {
+      const results = await Promise.allSettled(
+        categories.map(async (cat) => {
+          const newsRes = await fetch(
+            `${origin}/api/news?category=${cat}&country=GB&limit=5&minCoverage=1`,
+            { cache: 'no-store' },
+          )
+          if (newsRes.ok) {
+            const newsData = await newsRes.json()
+            return newsData.topics || []
+          }
+          return []
+        }),
+      )
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          allStories.push(...result.value)
+        }
+      }
+    } catch {
+      // continue without
+    }
 
-  // Filter out stories already sent today.
-  const unsentStories = topStories.filter((s) => !sentToday.includes(s.topicId))
-  const candidates = unsentStories.length > 0 ? unsentStories : topStories
+    // Deduplicate by topicId
+    const seen = new Set<string>()
+    const topStories = allStories.filter((s) => {
+      if (seen.has(s.topicId)) return false
+      seen.add(s.topicId)
+      return true
+    })
 
-    // Use AI to pick the best story for UK engagement.
+    if (topStories.length === 0) {
+      return NextResponse.json({ sent: 0, error: 'No stories available' })
+    }
+
+    // Load click history from Firebase (used by AI for personalisation).
+    const clickHistory =
+      (await firebaseRead<Record<string, { clicks: number; opens: number; dismisses: number }>>(
+        'notification-stats',
+      )) || {}
+
+    // Load stories already sent today (to avoid duplicates).
+    const sentToday = (await firebaseRead<string[]>(`sent-today/${todayKey}`)) || []
+
+    // Filter out stories already sent today.
+    const unsentStories = topStories.filter((s) => !sentToday.includes(s.topicId))
+    const candidates = unsentStories.length > 0 ? unsentStories : topStories
+
+    // Use AI to pick the best story for UK engagement (broadcast).
     const bestStory = await pickBestStoryWithAI(candidates, slot, clickHistory)
 
-  // ── Image selection (simplified for speed) ──
-  // Use the story's imageUrl directly — no proxy validation (too slow).
-  // The /api/img proxy in the push payload handles validation at delivery time.
-  const imageUrl = bestStory.imageUrl
-    ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
-    : `${origin}/icon-512.png`
+    // ── 1. PUSHIFY BROADCAST (best UK story to all Pushify subscribers) ──
+    const imageUrl = bestStory.imageUrl
+      ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
+      : `${origin}/icon-512.png`
 
-  const slotTitles: Record<string, string> = {
-    morning: 'Morning Briefing',
-    lunch: 'Lunch Briefing',
-    evening: 'Evening Briefing',
-  }
+    const slotTitles: Record<string, string> = {
+      morning: 'Morning Briefing',
+      lunch: 'Lunch Briefing',
+      evening: 'Evening Briefing',
+    }
 
-  // Build FULL URL for the notification click target.
-  const clickUrl = `${origin}/?topic=${bestStory.topicId}`
+    const clickUrl = `${origin}/?topic=${bestStory.topicId}`
 
-  // ── Archive the FULL topic in Firebase so shared links work forever ──
-  // This stores the complete topic (title, summary, all articles, bias,
-  // image, etc.) under archive/<topicId>. When someone opens a shared
-  // link weeks later, /api/topic/[id] checks the archive first.
-  await firebaseWrite(`archive/${bestStory.topicId}`, {
-    ...bestStory,
-    archivedAt: Date.now(),
-  })
+    // Archive the FULL topic so shared links work forever
+    await firebaseWrite(`archive/${bestStory.topicId}`, {
+      ...bestStory,
+      archivedAt: Date.now(),
+    })
 
-  // Title = slot name (e.g. "Morning Briefing")
-  // Description = headline, limited to ~100 chars (mobile notifications
-  // cut off after ~100 chars with "..." — we truncate cleanly at a word
-  // boundary so it doesn't look broken)
-  const fullTitle = bestStory.title
-  let description = fullTitle
-  if (fullTitle.length > 100) {
-    // Truncate at the last word boundary before 100 chars
-    const truncated = fullTitle.slice(0, 100)
-    const lastSpace = truncated.lastIndexOf(' ')
-    description = truncated.slice(0, lastSpace > 60 ? lastSpace : 100)
-  }
-  const result = await sendPushifyNotification({
-    title: slotTitles[slot],
-    description: description,
-    url: clickUrl,
-    image: imageUrl,
-    notifId: `notif_${todayKey}_${slot}`,
-    origin,
-  })
+    let description = bestStory.title
+    if (description.length > 100) {
+      const truncated = description.slice(0, 100)
+      const lastSpace = truncated.lastIndexOf(' ')
+      description = truncated.slice(0, lastSpace > 60 ? lastSpace : 100)
+    }
 
-  // Record that we sent this story today (to avoid duplicates).
-  const newSentToday = [...sentToday, bestStory.topicId]
-  await firebaseWrite(`sent-today/${todayKey}`, newSentToday)
+    const pushifyResult = await sendPushifyNotification({
+      title: slotTitles[slot],
+      description: description,
+      url: clickUrl,
+      image: imageUrl,
+      notifId: `notif_${todayKey}_${slot}`,
+      origin,
+    })
 
-  // Store the notification in Firebase for click tracking.
-  const notifId = `notif_${todayKey}_${slot}`
-  await firebaseWrite(`notifications/${notifId}`, {
-    slot,
-    topicId: bestStory.topicId,
-    title: bestStory.title.slice(0, 80),
-    sentAt: Date.now(),
-    clicked: false,
-    dismissed: false,
-  })
+    // Record that we sent this story today (to avoid duplicates).
+    const newSentToday = [...sentToday, bestStory.topicId]
+    await firebaseWrite(`sent-today/${todayKey}`, newSentToday)
 
-  return NextResponse.json({
-    slot,
-    success: result.success,
-    sent: result.sent,
-    error: result.error,
-    story: bestStory.title.slice(0, 60),
-    clickUrl,
-    time: new Date().toISOString(),
-  })
-  } catch (err) {
-    // Catch ANY error and return a proper JSON response (prevents 500
-    // with empty body that cron-job.org reports as "Failed").
-    console.error('[trigger] FATAL:', err)
+    // Store the broadcast notification in Firebase for click tracking.
+    const notifId = `notif_${todayKey}_${slot}`
+    await firebaseWrite(`notifications/${notifId}`, {
+      slot,
+      topicId: bestStory.topicId,
+      title: bestStory.title.slice(0, 80),
+      sentAt: Date.now(),
+      clicked: false,
+      dismissed: false,
+    })
+
+    // ── 2. PERSONALIZED WEB-PUSH (per-device best story) ──
+    // Build the candidate pool with detected sectors for personalization.
+    // Take the top 12 stories so each device has variety to pick from.
+    const personalCandidates = candidates.slice(0, 12).map((s) => ({
+      topicId: s.topicId,
+      title: s.title,
+      summary: s.summary,
+      coverage: s.coverage,
+      imageUrl: s.imageUrl,
+      sectors: detectSectors(s.title, s.summary),
+    }))
+
+    const personalizedResult = await sendPersonalizedWebPush(
+      personalCandidates,
+      {
+        topicId: bestStory.topicId,
+        title: bestStory.title,
+        summary: bestStory.summary,
+        imageUrl: bestStory.imageUrl,
+      },
+      origin,
+      slot,
+    )
+
     return NextResponse.json({
-      error: 'Internal error',
-      detail: err instanceof Error ? err.message : String(err),
+      slot,
+      broadcast: {
+        success: pushifyResult.success,
+        sent: pushifyResult.sent,
+        error: pushifyResult.error,
+        story: bestStory.title.slice(0, 60),
+        clickUrl,
+      },
+      personalized: personalizedResult,
       time: new Date().toISOString(),
-    }, { status: 500 })
+    })
+  } catch (err) {
+    console.error('[trigger] FATAL:', err)
+    return NextResponse.json(
+      {
+        error: 'Internal error',
+        detail: err instanceof Error ? err.message : String(err),
+        time: new Date().toISOString(),
+      },
+      { status: 500 },
+    )
   }
 }
