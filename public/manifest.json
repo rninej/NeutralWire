@@ -1,0 +1,45 @@
+{
+  "name": "NeutralWire",
+  "short_name": "NeutralWire",
+  "description": "Compare how left, center, and right outlets cover the same stories. Auto-detects your country for relevant local + world news.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#000000",
+  "orientation": "portrait-primary",
+  "categories": ["news", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Relevant",
+      "short_name": "Relevant",
+      "url": "/?category=relevant",
+      "description": "Your country's news mixed with top world stories"
+    },
+    {
+      "name": "My Country",
+      "short_name": "My Country",
+      "url": "/?category=mycountry",
+      "description": "News only from your country's sources"
+    },
+    {
+      "name": "Top Stories",
+      "short_name": "Top",
+      "url": "/?category=top",
+      "description": "Most covered stories worldwide"
+    }
+  ]
+}
