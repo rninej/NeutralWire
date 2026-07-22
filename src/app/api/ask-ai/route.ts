@@ -65,9 +65,11 @@ ${articleContext}`
     let answer = await callAI({ systemPrompt, userPrompt: body.question })
     let modelUsed = getLastProvider()
 
-    // Check if the model requested compound (web search)
-    if (answer && answer.startsWith('({/compound})')) {
-      answer = answer.replace(/^\(\{\/compound\}\)\s*/, '')
+    // Check if the model requested compound (web search) — check both
+    // ({/compound}) and {/compound} formats
+    if (answer && (answer.startsWith('({/compound})') || answer.startsWith('{/compound}'))) {
+      answer = answer.replace(/^\(?(\{\/compound\})\)?\s*/g, '')
+      answer = answer.replace(/^\{\/compound\}\s*/g, '')
 
       // Try compound providers
       const compoundAnswer = await callAICompound({ systemPrompt, userPrompt: body.question })
@@ -109,7 +111,9 @@ ${articleContext}`
 
 function stripSources(answer: string): string {
   let s = answer
-  s = s.replace(/^\(\{\/compound\}\)\s*/g, '')
+  // Strip ({/compound}) indicator in any format the model might output
+  s = s.replace(/^\(?(\{\/compound\})\)?\s*/g, '')
+  s = s.replace(/^\{\/compound\}\s*/g, '')
   s = s.replace(/\[\d+\]/g, '')
   s = s.replace(/\[Source:[^\]]*\]/gi, '')
   s = s.replace(/\(Source:[^)]*\)/gi, '')

@@ -48,7 +48,14 @@ export function getLastProvider(): string {
  * Try multiple AI providers in order. Returns the answer or null.
  */
 export async function callAI(opts: ChatCall): Promise<string | null> {
-  // 1. Try Groq models in order
+  // 1. Try Gemini FIRST (free, has Google Search built in)
+  const geminiAnswer = await callGemini(opts.systemPrompt, opts.userPrompt)
+  if (geminiAnswer) {
+    lastProvider = `Gemini ${GEMINI_MODEL}`
+    return geminiAnswer
+  }
+
+  // 2. Try Groq models in order
   for (const model of GROQ_MODELS) {
     const answer = await callGroq(opts.systemPrompt, opts.userPrompt, model)
     if (answer) {
@@ -57,14 +64,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     }
   }
 
-  // 2. Try Gemini
-  const geminiAnswer = await callGemini(opts.systemPrompt, opts.userPrompt)
-  if (geminiAnswer) {
-    lastProvider = `Gemini ${GEMINI_MODEL}`
-    return geminiAnswer
-  }
-
-  // 3. Try OpenRouter
+  // 3. Try OpenRouter (last resort)
   const openrouterAnswer = await callOpenRouter(opts.systemPrompt, opts.userPrompt, false)
   if (openrouterAnswer) {
     lastProvider = `OpenRouter ${OPENROUTER_MODEL}`
