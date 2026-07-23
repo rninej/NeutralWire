@@ -13,6 +13,7 @@ import {
   type NewsSource,
 } from '@/lib/news-sources'
 import { callAI } from '@/lib/ai-providers'
+import { firebaseRead, firebasePatch } from '@/lib/firebase-server'
 
 // ---------- Types ----------
 export interface FeedArticle {
@@ -239,30 +240,89 @@ function isTopicAboutCountry(
 // than keyword matching — it understands context (e.g. "Burnham" is a UK
 // politician, not just a city) and can rank stories by importance + recency.
 //
-// Falls back to keyword filtering (isTopicAboutCountry) if the AI fails.
+// DEFAULT-DENY model (important!):
+//   New topics from the RSS feed are HIDDEN from "My Country" until the AI
+//   explicitly approves them. This prevents the bug where a freshly-fetched
+//   non-UK story (e.g. Trump from BBC) briefly appears at the top until the
+//   AI removes it.
+//
+//   Flow:
+//     1. Load the set of AI-approved topicIds from Firebase
+//        (ai-country-approved/<countryCode>/<topicId> = timestamp)
+//     2. Topics already in the approved set → return immediately (fast path)
+//     3. Topics NOT in the approved set → send to AI for vetting
+//     4. AI responds with approved topicIds + ranking
+//     5. Write newly-approved topicIds to Firebase (persist across instances)
+//     6. Return ONLY AI-approved topics in AI-ranked order
+//     7. If AI fails → return ONLY previously-approved topics (NOT keyword
+//        fallback — keyword fallback would let non-UK stories through)
 
-// In-process cache so we don't call the AI on every refresh. The cache key
-// is the country code; we store the topicIds that passed + their rank.
+// In-process cache (per-instance, fast). Backed by Firebase for persistence.
 interface AICacheEntry {
   ts: number
+  approvedTopicIds: Set<string> // topicIds the AI approved
   rankedTopicIds: string[] // topicIds in AI-ranked order
 }
 const AI_FILTER_CACHE = new Map<string, AICacheEntry>()
 const AI_FILTER_CACHE_TTL_MS = 8 * 60 * 1000 // 8 min (matches news cache TTL)
 
+// Firebase path for AI-approved topicIds per country.
+// ai-country-approved/<CC>/<topicId> = timestamp
+const AI_APPROVED_PATH = (cc: string) => `ai-country-approved/${cc.toUpperCase()}`
+
+/**
+ * Load the set of AI-approved topicIds for a country from Firebase.
+ * Returns a Set of topicId strings.
+ */
+async function loadApprovedTopicIds(countryCode: string): Promise<Set<string>> {
+  try {
+    const data = await firebaseRead<Record<string, number>>(AI_APPROVED_PATH(countryCode))
+    if (!data) return new Set()
+    return new Set(Object.keys(data))
+  } catch {
+    return new Set()
+  }
+}
+
+/**
+ * Persist newly-approved topicIds to Firebase so they survive across
+ * serverless instances. We only need to write the NEW ones (not already
+ * in Firebase) to keep writes small.
+ */
+async function persistApprovedTopicIds(
+  countryCode: string,
+  topicIds: string[],
+): Promise<void> {
+  if (topicIds.length === 0) return
+  const patch: Record<string, number> = {}
+  const now = Date.now()
+  for (const id of topicIds) {
+    patch[id] = now
+  }
+  try {
+    await firebasePatch(AI_APPROVED_PATH(countryCode), patch)
+  } catch {
+    // silent — best-effort
+  }
+}
+
 /**
  * Use the AI fallback chain to filter + rank topics by country relevance.
  *
- * Sends all topic titles + summaries to the AI with a prompt asking:
- *   1. Which stories are ABOUT the given country?
- *   2. Rank them by importance (most important first) + recency (newer first)
+ * DEFAULT-DENY: Topics not yet approved by the AI are HIDDEN. They only
+ * appear after the AI explicitly vets them. This prevents non-UK stories
+ * from briefly appearing at the top of "My Country" when new RSS articles
+ * arrive.
  *
- * Returns the filtered + reordered list of topics. Falls back to keyword
- * filtering (isTopicAboutCountry) if the AI fails or returns unparseable output.
- *
- * The result is cached per-country for 8 minutes to avoid calling the AI
- * on every page load (the aggregator runs once per refresh, but the cache
- * protects against rapid successive refreshes).
+ * Flow:
+ *   1. Load AI-approved topicIds from Firebase (persistent)
+ *   2. Split topics into ALREADY-APPROVED (cached) and NEEDS-VETTING (new)
+ *   3. Send ALL topics to the AI for vetting + ranking (so the AI sees the
+ *      full picture and can rank newly-approved ones against existing ones)
+ *   4. Write newly-approved topicIds to Firebase
+ *   5. Return ONLY AI-approved topics in AI-ranked order
+ *   6. If AI fails → return ONLY previously-approved topics (no keyword
+ *      fallback — that would let non-UK stories through)
  */
 async function aiFilterAndRankCountryTopics(
   topics: TopicArticle[],
@@ -271,22 +331,40 @@ async function aiFilterAndRankCountryTopics(
   if (topics.length === 0) return topics
 
   const countryName = COUNTRY_DISPLAY_NAMES[countryCode.toUpperCase()] || countryCode
+  const cc = countryCode.toUpperCase()
 
-  // Check cache — if we have a recent AI result, use it.
-  // Match by topicIds: if the cached topicIds are still in the current
-  // topic list, reuse the ranking.
-  const cached = AI_FILTER_CACHE.get(countryCode.toUpperCase())
-  if (cached && Date.now() - cached.ts < AI_FILTER_CACHE_TTL_MS) {
+  // 1. Load previously-approved topicIds from Firebase (persistent).
+  const previouslyApproved = await loadApprovedTopicIds(countryCode)
+
+  // 2. Check in-process cache. If recent, we can return immediately for
+  //    topics that were approved. But we still need to vet any NEW topics
+  //    that arrived since the last AI call.
+  const cached = AI_FILTER_CACHE.get(cc)
+  const cacheFresh = cached && Date.now() - cached.ts < AI_FILTER_CACHE_TTL_MS
+
+  // Identify NEW topics: not in Firebase-approved set AND not in cache.
+  // These need AI vetting before they can be shown.
+  const newTopics = topics.filter(
+    (t) => !previouslyApproved.has(t.topicId) && (!cacheFresh || !cached!.approvedTopicIds.has(t.topicId)),
+  )
+
+  // If there are no new topics AND we have a fresh cache, use the cached
+  // ranking (fast path — no AI call needed).
+  if (newTopics.length === 0 && cacheFresh && cached) {
     const topicMap = new Map(topics.map((t) => [t.topicId, t]))
     const ranked = cached.rankedTopicIds
       .map((id) => topicMap.get(id))
       .filter((t): t is TopicArticle => t !== undefined)
-    if (ranked.length > 0) return ranked
+    if (ranked.length > 0) {
+      console.log(`[ai-filter] Cache hit for ${cc} (${ranked.length} topics, 0 new)`)
+      return ranked
+    }
   }
 
-  // Build the story list for the AI. Include title + short summary +
-  // age in hours so the AI can factor recency into its ranking.
-  // Limit to 30 stories to keep the prompt manageable.
+  // 3. Send ALL topics to the AI for vetting + ranking.
+  //    The AI sees the full list and decides which are ABOUT the country.
+  //    Previously-approved topics are likely to be re-approved; new topics
+  //    get vetted for the first time.
   const now = Date.now()
   const storyList = topics.slice(0, 30).map((t, i) => {
     const ageH = Math.round((now - t.latestSeen) / (60 * 60 * 1000))
@@ -325,8 +403,23 @@ Which story numbers (1-${topics.slice(0, 30).length}) are ABOUT ${countryName}? 
     const aiResponse = await callAI({ systemPrompt, userPrompt })
 
     if (!aiResponse) {
-      console.warn(`[ai-filter] AI returned no response for ${countryCode}, falling back to keywords`)
-      return topics.filter((t) => isTopicAboutCountry(t, countryCode))
+      // AI FAILED — return ONLY previously-approved topics (default-deny).
+      // Do NOT fall back to keyword filtering — that would let non-UK
+      // stories through. Instead, return the cached/known-good list.
+      console.warn(`[ai-filter] AI returned no response for ${cc}, returning ${previouslyApproved.size} previously-approved topics only`)
+      const approvedSet = previouslyApproved
+      const topicMap = new Map(topics.map((t) => [t.topicId, t]))
+      // Return previously-approved topics in coverage order (best we can do
+      // without the AI's ranking)
+      const result = topics
+        .filter((t) => approvedSet.has(t.topicId))
+        .sort((a, b) => b.coverage - a.coverage)
+      if (result.length > 0) return result
+      // If we have NO previously-approved topics AND the AI failed, return
+      // empty (don't show anything unvetted). This is better than showing
+      // non-UK stories.
+      console.warn(`[ai-filter] No previously-approved topics for ${cc}, returning empty list (default-deny)`)
+      return []
     }
 
     // Parse the comma-separated list of numbers
@@ -339,36 +432,60 @@ Which story numbers (1-${topics.slice(0, 30).length}) are ABOUT ${countryName}? 
       .filter((n) => !isNaN(n) && n >= 1 && n <= topics.slice(0, 30).length)
 
     if (numbers.length === 0) {
-      console.warn(`[ai-filter] AI returned no valid numbers for ${countryCode}, falling back to keywords`)
-      return topics.filter((t) => isTopicAboutCountry(t, countryCode))
+      // AI returned nothing parseable — return previously-approved only.
+      console.warn(`[ai-filter] AI returned no valid numbers for ${cc}, returning ${previouslyApproved.size} previously-approved topics`)
+      const approvedSet = previouslyApproved
+      return topics
+        .filter((t) => approvedSet.has(t.topicId))
+        .sort((a, b) => b.coverage - a.coverage)
     }
 
     // Map numbers back to topics (1-based → 0-based index)
     const rankedTopics: TopicArticle[] = []
+    const newlyApproved: string[] = []
     for (const n of numbers) {
       const topic = topics[n - 1]
       if (topic && !rankedTopics.find((t) => t.topicId === topic.topicId)) {
         rankedTopics.push(topic)
+        // Track which ones are newly approved (not in Firebase yet)
+        if (!previouslyApproved.has(topic.topicId)) {
+          newlyApproved.push(topic.topicId)
+        }
       }
     }
 
     if (rankedTopics.length === 0) {
-      console.warn(`[ai-filter] AI returned no matching topics for ${countryCode}, falling back to keywords`)
-      return topics.filter((t) => isTopicAboutCountry(t, countryCode))
+      // AI approved nothing — return previously-approved only.
+      console.warn(`[ai-filter] AI approved no topics for ${cc}, returning ${previouslyApproved.size} previously-approved`)
+      const approvedSet = previouslyApproved
+      return topics
+        .filter((t) => approvedSet.has(t.topicId))
+        .sort((a, b) => b.coverage - a.coverage)
     }
 
-    console.log(`[ai-filter] AI filtered ${rankedTopics.length}/${topics.length} topics for ${countryCode}`)
+    console.log(`[ai-filter] AI approved ${rankedTopics.length}/${topics.length} topics for ${cc} (${newlyApproved.length} new)`)
 
-    // Cache the result
-    AI_FILTER_CACHE.set(countryCode.toUpperCase(), {
+    // 4. Persist newly-approved topicIds to Firebase (default-deny persistence)
+    if (newlyApproved.length > 0) {
+      await persistApprovedTopicIds(countryCode, newlyApproved)
+    }
+
+    // 5. Update in-process cache
+    const allApproved = new Set([...previouslyApproved, ...rankedTopics.map((t) => t.topicId)])
+    AI_FILTER_CACHE.set(cc, {
       ts: Date.now(),
+      approvedTopicIds: allApproved,
       rankedTopicIds: rankedTopics.map((t) => t.topicId),
     })
 
     return rankedTopics
   } catch (err) {
-    console.warn(`[ai-filter] AI failed for ${countryCode}, falling back to keywords:`, err)
-    return topics.filter((t) => isTopicAboutCountry(t, countryCode))
+    // AI threw — return previously-approved only (default-deny).
+    console.warn(`[ai-filter] AI failed for ${cc}, returning ${previouslyApproved.size} previously-approved:`, err)
+    const approvedSet = previouslyApproved
+    return topics
+      .filter((t) => approvedSet.has(t.topicId))
+      .sort((a, b) => b.coverage - a.coverage)
   }
 }
 
