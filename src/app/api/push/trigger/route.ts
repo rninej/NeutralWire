@@ -1,16 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { callAI } from '@/lib/ai-providers'
-import {
-  sendPushifyNotification,
-  sendPersonalizedWebPush,
-} from '@/lib/pushify'
-import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { sendPersonalizedWebPush } from '@/lib/pushify'
+import { firebaseRead, firebaseWrite, firebasePatch } from '@/lib/firebase-server'
 import type { TopicArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-// Vercel Hobby max is 10s, Pro is 60s. Set to 10 to match Hobby.
+// Vercel Hobby max is 10s. Per-device push fan-out is fast (parallel web-push)
+// so 10s is plenty even for hundreds of devices.
 export const maxDuration = 10
 
 /**
@@ -107,9 +105,8 @@ function detectSectors(title: string, summary: string = ''): string[] {
 /**
  * Pick the best story for a UK audience using AI.
  *
- * Sends the list of candidate stories to the AI with a prompt
- * asking it to pick the ONE story most likely to get a click from a
- * UK-based news reader. Falls back to keyword scoring if AI fails.
+ * Used to choose the FALLBACK story (for devices with no interests, or
+ * when no personalized match exists).
  */
 async function pickBestStoryWithAI(
   stories: TopicArticle[],
@@ -124,7 +121,6 @@ async function pickBestStoryWithAI(
   if (candidates.length === 1) return candidates[0]
 
   try {
-    // Build a compact list of stories for the AI to evaluate
     const storyList = candidates
       .map((s, i) => {
         const local = s.localCoverage || 0
@@ -132,7 +128,6 @@ async function pickBestStoryWithAI(
       })
       .join('\n')
 
-    // Include click history so AI knows what the user has clicked/dismissed before
     const clickedKeywords = Object.entries(clickHistory)
       .filter(([, stats]) => (stats.clicks || 0) > 0)
       .map(([kw, stats]) => `${kw}(${stats.clicks} clicks)`)
@@ -167,7 +162,6 @@ ${dismissedKeywords ? `User previously dismissed: ${dismissedKeywords}` : ''}
 
 Which story number (1-${candidates.length}) will get the most clicks from UK readers? Reply with ONLY the number.`
 
-    // Use multi-provider AI chain
     const aiResponse = await callAI({ systemPrompt, userPrompt })
 
     if (aiResponse) {
@@ -189,9 +183,6 @@ Which story number (1-${candidates.length}) will get the most clicks from UK rea
   }
 }
 
-/**
- * Keyword-based fallback story selection (used if AI fails).
- */
 function pickBestStoryWithKeywords(
   stories: TopicArticle[],
   clickHistory: Record<string, { clicks: number; dismisses: number }>,
@@ -244,17 +235,99 @@ function pickBestStoryWithKeywords(
   return best
 }
 
+// ── Global sent-history constants ──
+// Stories are kept in the global sent-history for 14 days, then pruned.
+// 14 days × 3 slots/day = max 42 entries per device, well within Firebase
+// free-tier limits. After 14 days a story is "fresh again" — but in practice
+// the same topicId never reappears because news cycles move on.
+const GLOBAL_HISTORY_TTL_MS = 14 * 24 * 60 * 60 * 1000
+
+/**
+ * Load the global sent-history map from Firebase.
+ *
+ * Storage: `notification-sent-history/<topicId> = timestamp`
+ *
+ * Returns a Set of topicIds sent within the TTL window.
+ */
+async function loadGlobalHistory(): Promise<{
+  sentSet: Set<string>
+  raw: Record<string, number>
+}> {
+  const raw =
+    (await firebaseRead<Record<string, number>>('notification-sent-history')) || {}
+  const now = Date.now()
+  const sentSet = new Set<string>()
+  for (const [topicId, ts] of Object.entries(raw)) {
+    if (now - ts < GLOBAL_HISTORY_TTL_MS) {
+      sentSet.add(topicId)
+    }
+  }
+  return { sentSet, raw }
+}
+
+/**
+ * Add a topicId to the global sent-history with the current timestamp.
+ * Called after a successful send so future triggers skip it.
+ */
+async function recordGlobalHistory(topicIds: Set<string>): Promise<void> {
+  if (topicIds.size === 0) return
+  const now = Date.now()
+  const patch: Record<string, number> = {}
+  for (const id of topicIds) {
+    patch[id] = now
+  }
+  try {
+    await firebasePatch('notification-sent-history', patch)
+  } catch {
+    // silent — best-effort
+  }
+}
+
+/**
+ * Prune entries older than TTL from the global sent-history.
+ * Runs occasionally to keep the Firebase node small.
+ */
+async function pruneGlobalHistory(
+  raw: Record<string, number>,
+): Promise<void> {
+  const now = Date.now()
+  const stale: string[] = []
+  for (const [topicId, ts] of Object.entries(raw)) {
+    if (now - ts >= GLOBAL_HISTORY_TTL_MS) {
+      stale.push(topicId)
+    }
+  }
+  if (stale.length === 0) return
+  // Firebase REST doesn't support bulk delete via PATCH with null, so we
+  // delete each one individually. This is fast enough for ~42 entries.
+  for (const id of stale) {
+    try {
+      await fetch(
+        `https://neutralwire-2f24e-default-rtdb.europe-west1.firebasedatabase.app/notification-sent-history/${id}.json`,
+        { method: 'DELETE' },
+      )
+    } catch {
+      // silent
+    }
+  }
+}
+
 /**
  * Trigger endpoint for sending a SPECIFIC notification slot.
  *
- * Called by cron-job.org at morning/lunch/evening times.
+ * Called by cron-job.org at morning/lunch/evening times (8am, 1pm, 8pm).
  *
- * Sends BOTH:
- *   1. A Pushify BROADCAST notification with the AI-picked best UK story
- *      (for all Pushify subscribers without device mapping).
- *   2. PER-DEVICE personalized web-push notifications, where each device
- *      gets the story from the candidate pool that best matches their
- *      interests + engagement stats.
+ * Sends EXACTLY ONE personalized notification per device — no Pushify
+ * broadcast, no duplicate sends. Each device receives the story from the
+ * candidate pool that best matches their interests + engagement stats.
+ *
+ * ABSOLUTE "NEVER TWICE" GUARANTEE:
+ *   Before sending, every candidate is filtered against TWO history layers:
+ *     1. Global history (notification-sent-history/<topicId>) — any story
+ *        sent to ANY user in the last 14 days is excluded.
+ *     2. Per-device history (devices/<deviceId>/sentHistory) — any story
+ *        sent to THIS specific user ever is excluded.
+ *   After sending, the chosen topicIds are added to both layers.
  *
  * Usage:
  *   GET /api/push/trigger?slot=morning&secret=<SECRET>
@@ -328,70 +401,22 @@ export async function GET(req: NextRequest) {
         'notification-stats',
       )) || {}
 
-    // Load stories already sent today (to avoid duplicates).
-    const sentToday = (await firebaseRead<string[]>(`sent-today/${todayKey}`)) || []
+    // ── GLOBAL NEVER-TWICE HISTORY ──
+    // Stories sent to ANY user in the last 14 days are excluded from the
+    // candidate pool entirely. This is the primary deduplication layer.
+    const { sentSet: globalHistory, raw: rawHistory } = await loadGlobalHistory()
 
-    // Filter out stories already sent today.
-    const unsentStories = topStories.filter((s) => !sentToday.includes(s.topicId))
-    const candidates = unsentStories.length > 0 ? unsentStories : topStories
+    // Filter out globally-sent stories
+    const freshStories = topStories.filter((s) => !globalHistory.has(s.topicId))
+    const candidates = freshStories.length > 0 ? freshStories : topStories
 
-    // Use AI to pick the best story for UK engagement (broadcast).
-    const bestStory = await pickBestStoryWithAI(candidates, slot, clickHistory)
+    // Pick the fallback story (AI-picked best UK story). This is used only
+    // for devices with no interests/engagement OR when no candidate matches.
+    const fallbackStory = await pickBestStoryWithAI(candidates, slot, clickHistory)
 
-    // ── 1. PUSHIFY BROADCAST (best UK story to all Pushify subscribers) ──
-    const imageUrl = bestStory.imageUrl
-      ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
-      : `${origin}/icon-512.png`
-
-    const slotTitles: Record<string, string> = {
-      morning: 'Morning Briefing',
-      lunch: 'Lunch Briefing',
-      evening: 'Evening Briefing',
-    }
-
-    const clickUrl = `${origin}/?topic=${bestStory.topicId}`
-
-    // Archive the FULL topic so shared links work forever
-    await firebaseWrite(`archive/${bestStory.topicId}`, {
-      ...bestStory,
-      archivedAt: Date.now(),
-    })
-
-    let description = bestStory.title
-    if (description.length > 100) {
-      const truncated = description.slice(0, 100)
-      const lastSpace = truncated.lastIndexOf(' ')
-      description = truncated.slice(0, lastSpace > 60 ? lastSpace : 100)
-    }
-
-    const pushifyResult = await sendPushifyNotification({
-      title: slotTitles[slot],
-      description: description,
-      url: clickUrl,
-      image: imageUrl,
-      notifId: `notif_${todayKey}_${slot}`,
-      origin,
-    })
-
-    // Record that we sent this story today (to avoid duplicates).
-    const newSentToday = [...sentToday, bestStory.topicId]
-    await firebaseWrite(`sent-today/${todayKey}`, newSentToday)
-
-    // Store the broadcast notification in Firebase for click tracking.
-    const notifId = `notif_${todayKey}_${slot}`
-    await firebaseWrite(`notifications/${notifId}`, {
-      slot,
-      topicId: bestStory.topicId,
-      title: bestStory.title.slice(0, 80),
-      sentAt: Date.now(),
-      clicked: false,
-      dismissed: false,
-    })
-
-    // ── 2. PERSONALIZED WEB-PUSH (per-device best story) ──
-    // Build the candidate pool with detected sectors for personalization.
-    // Take the top 12 stories so each device has variety to pick from.
-    const personalCandidates = candidates.slice(0, 12).map((s) => ({
+    // ── Build candidate pool for personalized picks ──
+    // Take up to 15 stories with detected sectors.
+    const personalCandidates = candidates.slice(0, 15).map((s) => ({
       topicId: s.topicId,
       title: s.title,
       summary: s.summary,
@@ -400,28 +425,65 @@ export async function GET(req: NextRequest) {
       sectors: detectSectors(s.title, s.summary),
     }))
 
+    // ── Archive the fallback topic so shared links work forever ──
+    await firebaseWrite(`archive/${fallbackStory.topicId}`, {
+      ...fallbackStory,
+      archivedAt: Date.now(),
+    })
+
+    // ── SEND: One personalized notification per device ──
+    // No Pushify broadcast — each device gets exactly ONE push, tailored
+    // to its interests and engagement, and never the same story twice.
     const personalizedResult = await sendPersonalizedWebPush(
       personalCandidates,
       {
-        topicId: bestStory.topicId,
-        title: bestStory.title,
-        summary: bestStory.summary,
-        imageUrl: bestStory.imageUrl,
+        topicId: fallbackStory.topicId,
+        title: fallbackStory.title,
+        summary: fallbackStory.summary,
+        imageUrl: fallbackStory.imageUrl,
       },
       origin,
       slot,
+      globalHistory,
     )
+
+    // ── Record sent topicIds in the global history ──
+    // This prevents ANY future trigger (morning/lunch/evening, today or
+    // any day in the next 14 days) from sending these stories again.
+    if (personalizedResult.sentTopicIds.size > 0) {
+      await recordGlobalHistory(personalizedResult.sentTopicIds)
+    }
+
+    // ── Periodic cleanup: prune stale entries from global history ──
+    // Run only when the history has grown past 50 entries (cheap check).
+    if (Object.keys(rawHistory).length > 50) {
+      // Fire-and-forget — don't block the response
+      pruneGlobalHistory(rawHistory).catch(() => {})
+    }
+
+    // ── Click tracking: store one notification entry per sent topicId ──
+    // (Used by /api/notification/track for click prediction stats.)
+    for (const topicId of personalizedResult.sentTopicIds) {
+      const notifId = `notif_${todayKey}_${slot}_${topicId.slice(-6)}`
+      const topic = personalCandidates.find((c) => c.topicId === topicId) || fallbackStory
+      await firebaseWrite(`notifications/${notifId}`, {
+        slot,
+        topicId,
+        title: topic.title.slice(0, 80),
+        sentAt: Date.now(),
+        clicked: false,
+        dismissed: false,
+      })
+    }
 
     return NextResponse.json({
       slot,
-      broadcast: {
-        success: pushifyResult.success,
-        sent: pushifyResult.sent,
-        error: pushifyResult.error,
-        story: bestStory.title.slice(0, 60),
-        clickUrl,
-      },
-      personalized: personalizedResult,
+      sent: personalizedResult.sent,
+      personalized: personalizedResult.personalized,
+      fallback: personalizedResult.fallback,
+      sentTopicIds: Array.from(personalizedResult.sentTopicIds),
+      candidateCount: personalCandidates.length,
+      globalHistoryFiltered: topStories.length - freshStories.length,
       time: new Date().toISOString(),
     })
   } catch (err) {

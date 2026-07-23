@@ -10,7 +10,7 @@
  */
 
 import webpush from 'web-push'
-import { firebaseRead } from '@/lib/firebase-server'
+import { firebaseRead, firebasePatch } from '@/lib/firebase-server'
 import { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } from '@/lib/vapid'
 
 const PUSHIFY_API_KEY =
@@ -98,12 +98,21 @@ async function sendViaPushify(
  * For each device:
  *   1. Read devices/<deviceId>/interests (array of sector IDs)
  *   2. Read devices/<deviceId>/engagement (per-sector scores 0..100)
- *   3. Pick the best story from `candidates` matching their interests
- *   4. Send a personalized web-push notification
+ *   3. Read devices/<deviceId>/sentHistory (map of topicId → timestamp)
+ *   4. Filter candidates to EXCLUDE any topicId in:
+ *        - globalHistory (stories sent to ANY user before)
+ *        - device.sentHistory (stories sent to THIS user before)
+ *   5. Pick the best story from the remaining candidates
+ *   6. Send a personalized web-push notification
+ *   7. Record the chosen topicId in device.sentHistory
  *
- * Falls back to `fallbackStory` for devices with no interests or no match.
+ * Falls back to fallbackStory ONLY if no candidates remain after filtering.
  *
- * Returns total sent count.
+ * Returns:
+ *   - sent: total notifications delivered
+ *   - personalized: count of devices that got a personalized pick
+ *   - fallback: count of devices that got the fallback story
+ *   - sentTopicIds: SET of all topicIds actually sent (for global history)
  */
 export async function sendPersonalizedWebPush(
   candidates: Array<{
@@ -122,7 +131,13 @@ export async function sendPersonalizedWebPush(
   },
   origin: string,
   slot: string,
-): Promise<{ sent: number; personalized: number; fallback: number }> {
+  globalHistory: Set<string> = new Set(),
+): Promise<{
+  sent: number
+  personalized: number
+  fallback: number
+  sentTopicIds: Set<string>
+}> {
   const allDevices = await firebaseRead<
     Record<
       string,
@@ -132,10 +147,11 @@ export async function sendPersonalizedWebPush(
           string,
           { score: number; clicks: number; lastUpdate: number }
         >
+        sentHistory?: Record<string, number>
       }
     >
   >('devices')
-  if (!allDevices) return { sent: 0, personalized: 0, fallback: 0 }
+  if (!allDevices) return { sent: 0, personalized: 0, fallback: 0, sentTopicIds: new Set() }
 
   const iconUrl = `${origin}/icon-192.png`
   const badgeUrl = `${origin}/icon-192.png`
@@ -144,13 +160,25 @@ export async function sendPersonalizedWebPush(
   let sentCount = 0
   let personalizedCount = 0
   let fallbackCount = 0
+  const sentTopicIds = new Set<string>()
+  const deviceHistoryUpdates: Array<{ deviceId: string; topicId: string }> = []
   const sendPromises: Promise<void>[] = []
 
   for (const [deviceId, device] of Object.entries(allDevices)) {
     if (!device.pushSubscription || !device.notificationsEnabled) continue
 
+    // Per-device sent history (defense in depth — even if a story somehow
+    // slips past the global filter, this user never sees it twice).
+    const deviceHistory = new Set(Object.keys(device.sentHistory || {}))
+
+    // Filter candidates: exclude anything in global OR device history.
+    // This is the "absolutely never twice" guarantee.
+    const availableCandidates = candidates.filter(
+      (c) => !globalHistory.has(c.topicId) && !deviceHistory.has(c.topicId),
+    )
+
     // Pick the best story for this device
-    let bestStory = fallbackStory
+    let bestStory: { topicId: string; title: string; summary?: string; imageUrl?: string | null } | null = null
     let bestScore = -1
     let usedPersonalization = false
 
@@ -158,7 +186,7 @@ export async function sendPersonalizedWebPush(
     const engagement = device.engagement || {}
 
     if (interests.length > 0 || Object.keys(engagement).length > 0) {
-      for (const c of candidates) {
+      for (const c of availableCandidates) {
         let score = c.coverage // base
         for (const sector of c.sectors) {
           if (interests.includes(sector)) score += 5
@@ -177,8 +205,35 @@ export async function sendPersonalizedWebPush(
       }
     }
 
+    // If no personalized match, try any available candidate (sorted by coverage)
+    if (!bestStory && availableCandidates.length > 0) {
+      const fallbackPick = availableCandidates
+        .slice()
+        .sort((a, b) => b.coverage - a.coverage)[0]
+      bestStory = {
+        topicId: fallbackPick.topicId,
+        title: fallbackPick.title,
+        summary: fallbackPick.summary,
+        imageUrl: fallbackPick.imageUrl,
+      }
+    }
+
+    // Last resort: use the provided fallbackStory (only if it's not already
+    // in either history — otherwise skip this device entirely)
+    if (!bestStory) {
+      if (globalHistory.has(fallbackStory.topicId) || deviceHistory.has(fallbackStory.topicId)) {
+        // Skip — don't send a duplicate
+        continue
+      }
+      bestStory = fallbackStory
+    }
+
     if (usedPersonalization) personalizedCount++
     else fallbackCount++
+
+    // Record this topicId as sent (for both per-device and global history)
+    sentTopicIds.add(bestStory.topicId)
+    deviceHistoryUpdates.push({ deviceId, topicId: bestStory.topicId })
 
     const imageUrl = bestStory.imageUrl
       ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
@@ -227,10 +282,30 @@ export async function sendPersonalizedWebPush(
   }
 
   await Promise.allSettled(sendPromises)
+
+  // ── Persist per-device sent history ──
+  // Each device gets the newly-sent topicId added to its sentHistory map.
+  // This is a defense-in-depth layer on top of the global history — even
+  // if a story somehow slips past the global filter, this user still
+  // never sees it twice.
+  let historyWritten = 0
+  for (const { deviceId, topicId } of deviceHistoryUpdates) {
+    try {
+      const ok = await firebasePatch(`devices/${deviceId}/sentHistory`, {
+        [topicId]: Date.now(),
+      })
+      if (ok) historyWritten++
+    } catch {
+      // silent — best-effort
+    }
+  }
+  console.log(`[pushify] sentHistory written: ${historyWritten}/${deviceHistoryUpdates.length}`)
+
   return {
     sent: sentCount,
     personalized: personalizedCount,
     fallback: fallbackCount,
+    sentTopicIds,
   }
 }
 
