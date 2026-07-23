@@ -12,6 +12,7 @@ import {
   type Leaning,
   type NewsSource,
 } from '@/lib/news-sources'
+import { callAI } from '@/lib/ai-providers'
 
 // ---------- Types ----------
 export interface FeedArticle {
@@ -231,6 +232,175 @@ function isTopicAboutCountry(
     }
   }
   return false
+}
+
+// ---------- AI-based country filtering + ranking ----------
+// Used by the "My Country" tab as the PRIMARY filter. The AI is much smarter
+// than keyword matching — it understands context (e.g. "Burnham" is a UK
+// politician, not just a city) and can rank stories by importance + recency.
+//
+// Falls back to keyword filtering (isTopicAboutCountry) if the AI fails.
+
+// In-process cache so we don't call the AI on every refresh. The cache key
+// is the country code; we store the topicIds that passed + their rank.
+interface AICacheEntry {
+  ts: number
+  rankedTopicIds: string[] // topicIds in AI-ranked order
+}
+const AI_FILTER_CACHE = new Map<string, AICacheEntry>()
+const AI_FILTER_CACHE_TTL_MS = 8 * 60 * 1000 // 8 min (matches news cache TTL)
+
+/**
+ * Use the AI fallback chain to filter + rank topics by country relevance.
+ *
+ * Sends all topic titles + summaries to the AI with a prompt asking:
+ *   1. Which stories are ABOUT the given country?
+ *   2. Rank them by importance (most important first) + recency (newer first)
+ *
+ * Returns the filtered + reordered list of topics. Falls back to keyword
+ * filtering (isTopicAboutCountry) if the AI fails or returns unparseable output.
+ *
+ * The result is cached per-country for 8 minutes to avoid calling the AI
+ * on every page load (the aggregator runs once per refresh, but the cache
+ * protects against rapid successive refreshes).
+ */
+async function aiFilterAndRankCountryTopics(
+  topics: TopicArticle[],
+  countryCode: string,
+): Promise<TopicArticle[]> {
+  if (topics.length === 0) return topics
+
+  const countryName = COUNTRY_DISPLAY_NAMES[countryCode.toUpperCase()] || countryCode
+
+  // Check cache — if we have a recent AI result, use it.
+  // Match by topicIds: if the cached topicIds are still in the current
+  // topic list, reuse the ranking.
+  const cached = AI_FILTER_CACHE.get(countryCode.toUpperCase())
+  if (cached && Date.now() - cached.ts < AI_FILTER_CACHE_TTL_MS) {
+    const topicMap = new Map(topics.map((t) => [t.topicId, t]))
+    const ranked = cached.rankedTopicIds
+      .map((id) => topicMap.get(id))
+      .filter((t): t is TopicArticle => t !== undefined)
+    if (ranked.length > 0) return ranked
+  }
+
+  // Build the story list for the AI. Include title + short summary +
+  // age in hours so the AI can factor recency into its ranking.
+  // Limit to 30 stories to keep the prompt manageable.
+  const now = Date.now()
+  const storyList = topics.slice(0, 30).map((t, i) => {
+    const ageH = Math.round((now - t.latestSeen) / (60 * 60 * 1000))
+    const summary = (t.summary || '').slice(0, 120)
+    return `${i + 1}. [${ageH}h old, ${t.coverage} sources] ${t.title}${summary ? ` — ${summary}` : ''}`
+  }).join('\n')
+
+  const systemPrompt = `You are a ${countryName} news editor for NeutralWire, a neutral news aggregator. Your job is to decide which stories are genuinely ABOUT ${countryName} and should appear in the "${countryName} News" section.
+
+RULES for inclusion:
+- A story is ABOUT ${countryName} if it covers ${countryName} politics, ${countryName} events, ${countryName} people, ${countryName} places, ${countryName} institutions, or ${countryName} culture.
+- A story from a ${countryName} outlet about FOREIGN events (e.g. BBC covering Trump, US elections, Middle East wars) is NOT about ${countryName} — exclude it.
+- A story about a ${countryName} politician, city, institution, law, or cultural event IS about ${countryName} — include it even if foreign outlets covered it.
+- When in doubt, ask: "Would a person in ${countryName} reading this feel it's directly about their country?" If no, exclude.
+
+RANKING:
+- Rank included stories by IMPORTANCE (major breaking news = highest) and RECENCY (newer = higher).
+- A 2-hour-old major story ranks above a 30-minute-old minor story.
+- A 24-hour-old major story ranks above a 2-hour-old trivial story.
+- Use your judgment — the goal is the most important + freshest stories first.
+
+OUTPUT FORMAT:
+- Return ONLY a comma-separated list of story numbers (1-${topics.slice(0, 30).length}) in ranked order.
+- Only include stories that are ABOUT ${countryName}.
+- Most important/newest first.
+- Example: 3,1,7,5,12
+- No explanation, no other text, JUST the numbers.`
+
+  const userPrompt = `Country: ${countryName}
+Stories:
+${storyList}
+
+Which story numbers (1-${topics.slice(0, 30).length}) are ABOUT ${countryName}? Return them as a comma-separated list in ranked order (most important/newest first). ONLY the numbers.`
+
+  try {
+    const aiResponse = await callAI({ systemPrompt, userPrompt })
+
+    if (!aiResponse) {
+      console.warn(`[ai-filter] AI returned no response for ${countryCode}, falling back to keywords`)
+      return topics.filter((t) => isTopicAboutCountry(t, countryCode))
+    }
+
+    // Parse the comma-separated list of numbers
+    const numbers = aiResponse
+      .replace(/[^0-9,\s]/g, ' ')
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((s) => parseInt(s, 10))
+      .filter((n) => !isNaN(n) && n >= 1 && n <= topics.slice(0, 30).length)
+
+    if (numbers.length === 0) {
+      console.warn(`[ai-filter] AI returned no valid numbers for ${countryCode}, falling back to keywords`)
+      return topics.filter((t) => isTopicAboutCountry(t, countryCode))
+    }
+
+    // Map numbers back to topics (1-based → 0-based index)
+    const rankedTopics: TopicArticle[] = []
+    for (const n of numbers) {
+      const topic = topics[n - 1]
+      if (topic && !rankedTopics.find((t) => t.topicId === topic.topicId)) {
+        rankedTopics.push(topic)
+      }
+    }
+
+    if (rankedTopics.length === 0) {
+      console.warn(`[ai-filter] AI returned no matching topics for ${countryCode}, falling back to keywords`)
+      return topics.filter((t) => isTopicAboutCountry(t, countryCode))
+    }
+
+    console.log(`[ai-filter] AI filtered ${rankedTopics.length}/${topics.length} topics for ${countryCode}`)
+
+    // Cache the result
+    AI_FILTER_CACHE.set(countryCode.toUpperCase(), {
+      ts: Date.now(),
+      rankedTopicIds: rankedTopics.map((t) => t.topicId),
+    })
+
+    return rankedTopics
+  } catch (err) {
+    console.warn(`[ai-filter] AI failed for ${countryCode}, falling back to keywords:`, err)
+    return topics.filter((t) => isTopicAboutCountry(t, countryCode))
+  }
+}
+
+// Display names for the AI prompt
+const COUNTRY_DISPLAY_NAMES: Record<string, string> = {
+  GB: 'United Kingdom',
+  UK: 'United Kingdom',
+  US: 'United States',
+  CA: 'Canada',
+  AU: 'Australia',
+  IE: 'Ireland',
+  NZ: 'New Zealand',
+  IN: 'India',
+  DE: 'Germany',
+  FR: 'France',
+  ES: 'Spain',
+  IT: 'Italy',
+  NL: 'Netherlands',
+  JP: 'Japan',
+  KR: 'South Korea',
+  CN: 'China',
+  BR: 'Brazil',
+  MX: 'Mexico',
+  RU: 'Russia',
+  UA: 'Ukraine',
+  IL: 'Israel',
+  AE: 'United Arab Emirates',
+  SA: 'Saudi Arabia',
+  TR: 'Turkey',
+  ZA: 'South Africa',
+  NG: 'Nigeria',
+  EG: 'Egypt',
 }
 
 // ---------- RSS Parsing ----------
@@ -897,26 +1067,28 @@ export async function aggregateCategory(
 
     const topics = clusterTopics(fresh, (isRelevantMode || isMyCountryMode) ? localSet : new Set())
 
-    // For `mycountry` mode: filter by CONTENT, not just by source.
+    // For `mycountry` mode: use the AI fallback chain to filter + rank
+    // topics by country relevance.
     //
-    // OLD BEHAVIOUR (broken): showed any story where all sources were UK-based.
-    //   → BBC/Guardian cover Trump all day → Trump showed up in "My Country".
+    // The AI is much smarter than keyword matching — it understands context
+    // (e.g. "Burnham" is a UK politician, not just a city name) and can
+    // rank stories by importance + recency.
     //
-    // NEW BEHAVIOUR: a story must be ABOUT the visitor's country (detected
-    //   via title/summary keywords like "starmer", "nhs", "premier league")
-    //   to appear in "My Country". Source origin is no longer the primary
-    //   filter — content is.
+    // Flow:
+    //   1. Send all topic titles + summaries + age to the AI
+    //   2. AI returns a comma-separated list of story numbers that are
+    //      ABOUT the visitor's country, in ranked order
+    //   3. We map those numbers back to topics and return them
+    //   4. If AI fails, fall back to keyword filtering (isTopicAboutCountry)
     //
-    // We still prefer local sources (a story from BBC about UK politics is
-    // more likely to be UK-relevant than the same story from NYT), but the
-    // CONTENT check is the gatekeeper. This means:
-    //   ✅ "Starmer addresses parliament" from BBC → shown
-    //   ✅ "Starmer addresses parliament" from NYT → shown (content is UK)
-    //   ❌ "Trump signs executive order" from BBC → filtered out
-    //   ❌ "Trump signs executive order" from NYT → filtered out
-    const relevantTopics = isMyCountryMode && countryCode
-      ? topics.filter((t) => isTopicAboutCountry(t, countryCode))
-      : topics
+    // The AI result is cached per-country for 8 minutes to avoid calling
+    // the AI on every page load.
+    let relevantTopics: TopicArticle[]
+    if (isMyCountryMode && countryCode) {
+      relevantTopics = await aiFilterAndRankCountryTopics(topics, countryCode)
+    } else {
+      relevantTopics = topics
+    }
 
     // Sort: for `relevant` category, give LOCAL news much higher priority
     // while keeping the absolute top stories based on coverage.
@@ -937,28 +1109,37 @@ export async function aggregateCategory(
     // Net effect: the major 10+ source story stays #1, but UK-focused
     // stories (even with just 2-3 sources) jump above mid-tier
     // international stories.
-    const filtered = relevantTopics
-      .filter((t) => t.coverage >= minCoverage)
-      .sort((a, b) => {
-        if (isRelevantMode) {
-          const la = a.localCoverage ?? 0
-          const lb = b.localCoverage ?? 0
-          const scoreA = a.coverage * 10 + la * 5 + (la > 0 ? 30 : 0)
-          const scoreB = b.coverage * 10 + lb * 5 + (lb > 0 ? 30 : 0)
-          if (scoreB !== scoreA) return scoreB - scoreA
+    // For `mycountry` mode, the AI has ALREADY ranked the topics by
+    // importance + recency. We should NOT re-sort — just filter by
+    // minCoverage and slice to limit. The AI's order is the final order.
+    //
+    // For `relevant` mode, we still use the local-boost sort (the AI
+    // filter is only for `mycountry`).
+    //
+    // For other categories, sort by coverage desc then recency desc.
+    let filtered: TopicArticle[]
+    if (isMyCountryMode) {
+      // AI already ranked — just filter + slice, preserve AI order
+      filtered = relevantTopics
+        .filter((t) => t.coverage >= minCoverage)
+        .slice(0, limit)
+    } else {
+      filtered = relevantTopics
+        .filter((t) => t.coverage >= minCoverage)
+        .sort((a, b) => {
+          if (isRelevantMode) {
+            const la = a.localCoverage ?? 0
+            const lb = b.localCoverage ?? 0
+            const scoreA = a.coverage * 10 + la * 5 + (la > 0 ? 30 : 0)
+            const scoreB = b.coverage * 10 + lb * 5 + (lb > 0 ? 30 : 0)
+            if (scoreB !== scoreA) return scoreB - scoreA
+            return b.latestSeen - a.latestSeen
+          }
+          if (b.coverage !== a.coverage) return b.coverage - a.coverage
           return b.latestSeen - a.latestSeen
-        }
-        // For mycountry mode, sort by local coverage first (most local = top)
-        if (isMyCountryMode) {
-          const la = a.localCoverage ?? 0
-          const lb = b.localCoverage ?? 0
-          if (lb !== la) return lb - la
-          return b.latestSeen - a.latestSeen
-        }
-        if (b.coverage !== a.coverage) return b.coverage - a.coverage
-        return b.latestSeen - a.latestSeen
-      })
-      .slice(0, limit)
+        })
+        .slice(0, limit)
+    }
 
     // Image validation + fallback: for the top N topics, validate that the
     // existing imageUrl actually works (many CDNs return 401/403). If it

@@ -26,22 +26,19 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 // ── Gemini models ──
-// New 3.x models first (per user request), then 2.5/2.0/1.5 as fallback.
-// If a model doesn't exist (404), callGemini returns null quickly and the
-// chain moves on.
+// Only include models that actually exist (verified via API).
+// Deprecated models (1.5-*) and non-existent models (3.1-pro, 3-flash)
+// have been removed to avoid wasting time on 404s.
+// gemini-2.5-flash/flash-lite are marked "no longer available to new users"
+// but may still work on some accounts — kept as last resort.
 const GEMINI_MODELS = [
   'gemini-3.5-flash',
   'gemini-3.5-flash-lite',
-  'gemini-3.1-pro',
-  'gemini-3-flash',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
   'gemini-2.5-pro',
   'gemini-2.0-flash',
   'gemini-2.0-flash-001',
-  'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
-  'gemini-1.5-pro',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
 ]
 
 // ── Groq models ──
@@ -108,20 +105,25 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, false))
   }
 
-  // 4. Race them — first non-null answer wins
+  // 4. Race them — first NON-NULL answer wins.
+  // We can't use Promise.any directly because it returns the first resolved
+  // value even if it's null. Instead, we wrap each promise to reject on null
+  // so Promise.any only resolves when a real answer comes through.
   if (candidates.length > 0) {
+    const wrappedCandidates = candidates.map((p, i) =>
+      p.then((result) => {
+        if (result) return result
+        throw new Error(`candidate ${i} returned null`)
+      }),
+    )
     try {
-      const answer = await Promise.any(candidates)
+      const answer = await Promise.any(wrappedCandidates)
       if (answer) {
-        // Determine which provider won (best effort)
-        if (answer) {
-          // We don't know which one won without tracking — set a generic label
-          lastProvider = 'AI (parallel)'
-        }
+        lastProvider = 'AI (parallel)'
         return answer
       }
     } catch {
-      // Promise.any throws AggregateError if ALL promises reject.
+      // All candidates returned null or rejected.
       // Fall through to sequential retry below.
     }
   }
@@ -246,7 +248,10 @@ async function callGroq(
     if (!res.ok) {
       if (res.status === 429) {
         rateLimitedModels.set(`groq-${model}`, Date.now())
-        console.warn(`[ai] Groq ${model} rate-limited, skipping for ${RATE_LIMIT_COOLDOWN_MS / 1000}s`)
+        console.warn(`[ai] Groq ${model} rate-limited`)
+      } else {
+        const errText = await res.text().catch(() => '')
+        console.warn(`[ai] Groq ${model} ${res.status}: ${errText.slice(0, 200)}`)
       }
       return null
     }
@@ -301,8 +306,11 @@ async function callGemini(
     if (!res.ok) {
       if (res.status === 429) {
         rateLimitedModels.set(`gemini-${model}`, Date.now())
+        console.warn(`[ai] Gemini ${model} rate-limited`)
+      } else {
+        const errText = await res.text().catch(() => '')
+        console.warn(`[ai] Gemini ${model} ${res.status}: ${errText.slice(0, 200)}`)
       }
-      // 404 (model not found) is silent — model name doesn't exist
       return null
     }
 
@@ -356,12 +364,17 @@ async function callOpenRouter(
     })
     clearTimeout(timeout)
 
-    if (!res.ok) return null
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      console.warn(`[ai] OpenRouter ${res.status} (web=${useWebSearch}): ${errText.slice(0, 200)}`)
+      return null
+    }
 
     const data = await res.json()
     return data.choices?.[0]?.message?.content?.trim() || null
-  } catch {
+  } catch (err) {
     clearTimeout(timeout)
+    console.warn('[ai] OpenRouter failed:', err instanceof Error ? err.message : err)
     return null
   }
 }
