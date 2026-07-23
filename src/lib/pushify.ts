@@ -165,43 +165,68 @@ export async function sendPersonalizedWebPush(
   const deviceHistoryUpdates: Array<{ deviceId: string; topicId: string }> = []
   const sendPromises: Promise<void>[] = []
 
+  // ── TWO-PASS APPROACH ──
+  // Pass 1: Compute personalized picks for devices that HAVE interests/engagement.
+  //         Collect those picks into a "lending pool".
+  // Pass 2: For devices with NO interests/engagement (new PWA users who skipped
+  //         the preferences popup), randomly borrow a pick from the lending pool.
+  //         This ensures new users still get 3 daily notifications that feel
+  //         personalized, even before they set their own preferences.
+
+  interface DevicePick {
+    deviceId: string
+    device: DeviceRecord & {
+      interests?: string[]
+      engagement?: Record<string, { score: number; clicks: number; lastUpdate: number }>
+      sentHistory?: Record<string, number>
+    }
+    bestStory: {
+      topicId: string
+      title: string
+      summary?: string
+      imageUrl?: string | null
+    }
+    usedPersonalization: boolean
+  }
+
+  const picksWithInterests: DevicePick[] = [] // lending pool
+  const picksNoInterests: Array<{ deviceId: string; device: DevicePick['device'] }> = []
+
+  // ── PASS 1: Compute picks for devices WITH interests ──
   for (const [deviceId, device] of Object.entries(allDevices)) {
     if (!device.pushSubscription || !device.notificationsEnabled) continue
 
-    // Per-device sent history (defense in depth — even if a story somehow
-    // slips past the global filter, this user never sees it twice).
-    const deviceHistory = new Set(Object.keys(device.sentHistory || {}))
+    const interests = device.interests || []
+    const engagement = device.engagement || {}
+    const hasPersonalization = interests.length > 0 || Object.keys(engagement).length > 0
 
-    // Filter candidates: exclude anything in global OR device history.
-    // This is the "absolutely never twice" guarantee.
+    if (!hasPersonalization) {
+      // Defer to pass 2 — this device has no interests yet
+      picksNoInterests.push({ deviceId, device })
+      continue
+    }
+
+    const deviceHistory = new Set(Object.keys(device.sentHistory || {}))
     const availableCandidates = candidates.filter(
       (c) => !globalHistory.has(c.topicId) && !deviceHistory.has(c.topicId),
     )
 
-    // Pick the best story for this device
-    let bestStory: { topicId: string; title: string; summary?: string; imageUrl?: string | null } | null = null
+    let bestStory: DevicePick['bestStory'] | null = null
     let bestScore = -1
-    let usedPersonalization = false
 
-    const interests = device.interests || []
-    const engagement = device.engagement || {}
-
-    if (interests.length > 0 || Object.keys(engagement).length > 0) {
-      for (const c of availableCandidates) {
-        let score = c.coverage // base
-        for (const sector of c.sectors) {
-          if (interests.includes(sector)) score += 5
-          score += (engagement[sector]?.score || 0) * 0.05
-        }
-        if (score > bestScore) {
-          bestScore = score
-          bestStory = {
-            topicId: c.topicId,
-            title: c.title,
-            summary: c.summary,
-            imageUrl: c.imageUrl,
-          }
-          usedPersonalization = true
+    for (const c of availableCandidates) {
+      let score = c.coverage
+      for (const sector of c.sectors) {
+        if (interests.includes(sector)) score += 5
+        score += (engagement[sector]?.score || 0) * 0.05
+      }
+      if (score > bestScore) {
+        bestScore = score
+        bestStory = {
+          topicId: c.topicId,
+          title: c.title,
+          summary: c.summary,
+          imageUrl: c.imageUrl,
         }
       }
     }
@@ -219,20 +244,94 @@ export async function sendPersonalizedWebPush(
       }
     }
 
-    // Last resort: use the provided fallbackStory (only if it's not already
-    // in either history — otherwise skip this device entirely)
+    // Last resort: use the provided fallbackStory
     if (!bestStory) {
       if (globalHistory.has(fallbackStory.topicId) || deviceHistory.has(fallbackStory.topicId)) {
-        // Skip — don't send a duplicate
-        continue
+        continue // Skip — don't send a duplicate
       }
       bestStory = fallbackStory
     }
 
+    picksWithInterests.push({
+      deviceId,
+      device,
+      bestStory,
+      usedPersonalization: true,
+    })
+  }
+
+  // ── PASS 2: Lend picks to devices WITHOUT interests ──
+  // For each new/unconfigured device, randomly pick a story from the
+  // lending pool (picksWithInterests). This gives them a "sampled"
+  // personalized notification — what another user with interests is
+  // reading right now.
+  //
+  // We build a list of unique stories from the lending pool so the new
+  // user doesn't always get the same one as another specific user.
+  const lendingPoolStories = picksWithInterests.map((p) => p.bestStory)
+
+  const picksBorrowed: DevicePick[] = []
+  for (const { deviceId, device } of picksNoInterests) {
+    const deviceHistory = new Set(Object.keys(device.sentHistory || {}))
+
+    let bestStory: DevicePick['bestStory'] | null = null
+
+    // Try to borrow from the lending pool — pick a random story that
+    // this user hasn't seen yet (not in global or device history)
+    if (lendingPoolStories.length > 0) {
+      // Shuffle the lending pool and pick the first one this user hasn't seen
+      const shuffled = [...lendingPoolStories].sort(() => Math.random() - 0.5)
+      for (const story of shuffled) {
+        if (!globalHistory.has(story.topicId) && !deviceHistory.has(story.topicId)) {
+          bestStory = story
+          break
+        }
+      }
+    }
+
+    // If no borrowable story (all in history), try any available candidate
+    if (!bestStory) {
+      const availableCandidates = candidates.filter(
+        (c) => !globalHistory.has(c.topicId) && !deviceHistory.has(c.topicId),
+      )
+      if (availableCandidates.length > 0) {
+        const fallbackPick = availableCandidates
+          .slice()
+          .sort((a, b) => b.coverage - a.coverage)[0]
+        bestStory = {
+          topicId: fallbackPick.topicId,
+          title: fallbackPick.title,
+          summary: fallbackPick.summary,
+          imageUrl: fallbackPick.imageUrl,
+        }
+      }
+    }
+
+    // Last resort: use the provided fallbackStory
+    if (!bestStory) {
+      if (globalHistory.has(fallbackStory.topicId) || deviceHistory.has(fallbackStory.topicId)) {
+        continue // Skip — don't send a duplicate
+      }
+      bestStory = fallbackStory
+    }
+
+    picksBorrowed.push({
+      deviceId,
+      device,
+      bestStory,
+      usedPersonalization: false, // borrowed, not truly personalized
+    })
+  }
+
+  // ── COMBINE + SEND ──
+  const allPicks = [...picksWithInterests, ...picksBorrowed]
+
+  for (const pick of allPicks) {
+    const { deviceId, device, bestStory, usedPersonalization } = pick
+
     if (usedPersonalization) personalizedCount++
     else fallbackCount++
 
-    // Record this topicId as sent (for both per-device and global history)
     sentTopicIds.add(bestStory.topicId)
     deviceHistoryUpdates.push({ deviceId, topicId: bestStory.topicId })
 
@@ -240,7 +339,6 @@ export async function sendPersonalizedWebPush(
       ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
       : `${origin}/icon-512.png`
 
-    // Truncate title for notification body
     let description = bestStory.title
     if (description.length > 100) {
       const truncated = description.slice(0, 100)
@@ -263,13 +361,10 @@ export async function sendPersonalizedWebPush(
       badge: badgeUrl,
       image: imageUrl,
       notifId,
-      tag: `neutralwire-${slot}`, // tag per slot so morning/lunch/evening don't overwrite
+      tag: `neutralwire-${slot}`,
     })
 
     if (dryRun) {
-      // In dry-run mode, count the "send" as successful but don't actually
-      // call web-push. This lets us test the full personalization flow
-      // without spamming real devices.
       sentCount++
     } else {
       sendPromises.push(
@@ -288,6 +383,8 @@ export async function sendPersonalizedWebPush(
       )
     }
   }
+
+  console.log(`[pushify] Picks: ${picksWithInterests.length} personalized, ${picksBorrowed.length} borrowed (new users)`)
 
   if (!dryRun) {
     await Promise.allSettled(sendPromises)
