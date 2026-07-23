@@ -365,39 +365,53 @@ async function aiFilterAndRankCountryTopics(
   //    The AI sees the full list and decides which are ABOUT the country.
   //    Previously-approved topics are likely to be re-approved; new topics
   //    get vetted for the first time.
+  //    Send up to 40 stories (was 30) to ensure enough UK content gets through.
   const now = Date.now()
-  const storyList = topics.slice(0, 30).map((t, i) => {
+  const aiTopics = topics.slice(0, 40)
+  const storyList = aiTopics.map((t, i) => {
     const ageH = Math.round((now - t.latestSeen) / (60 * 60 * 1000))
     const summary = (t.summary || '').slice(0, 120)
     return `${i + 1}. [${ageH}h old, ${t.coverage} sources] ${t.title}${summary ? ` — ${summary}` : ''}`
   }).join('\n')
 
-  const systemPrompt = `You are a ${countryName} news editor for NeutralWire, a neutral news aggregator. Your job is to decide which stories are genuinely ABOUT ${countryName} and should appear in the "${countryName} News" section.
+  const systemPrompt = `You are a ${countryName} news editor for NeutralWire, a neutral news aggregator. Your job is to decide which stories should appear in the "${countryName} News" section.
 
-RULES for inclusion:
-- A story is ABOUT ${countryName} if it covers ${countryName} politics, ${countryName} events, ${countryName} people, ${countryName} places, ${countryName} institutions, or ${countryName} culture.
-- A story from a ${countryName} outlet about FOREIGN events (e.g. BBC covering Trump, US elections, Middle East wars) is NOT about ${countryName} — exclude it.
-- A story about a ${countryName} politician, city, institution, law, or cultural event IS about ${countryName} — include it even if foreign outlets covered it.
-- When in doubt, ask: "Would a person in ${countryName} reading this feel it's directly about their country?" If no, exclude.
+INCLUSION RULES (be GENEROUS — aim for 15-25 stories, not just 5-10):
+- INCLUDE any story that is ABOUT ${countryName}: ${countryName} politics, events, people, places, institutions, culture, sport, business, or weather.
+- INCLUDE stories about ${countryName} politicians, cities, laws, companies, or cultural events — even if foreign outlets covered them.
+- INCLUDE stories that SIGNIFICANTLY AFFECT ${countryName}: major trade deals, wars involving ${countryName} allies, climate agreements, international treaties ${countryName} is part of, global economic shifts that impact ${countryName}.
+- INCLUDE stories about ${countryName} people abroad (e.g. a ${countryName} citizen involved in a major international event).
+- INCLUDE ${countryName} sport, entertainment, and lifestyle stories.
+- INCLUDE ${countryName} court cases, crime, and policing stories.
+
+EXCLUSION RULES (be strict ONLY about these):
+- EXCLUDE pure foreign politics that don't affect ${countryName} (e.g. Trump's daily statements, US poll numbers, US committee hearings, foreign election campaigns).
+- EXCLUDE foreign domestic news with no ${countryName} angle (e.g. a US state law change, a Japanese local election).
+- EXCLUDE generic world news with no ${countryName} connection (e.g. a Middle East ceasefire update that doesn't mention ${countryName}).
+
+KEY DISTINCTION:
+- BBC covering Trump's latest tweet → EXCLUDE (foreign politics, no UK angle)
+- BBC covering a UK politician's response to Trump → INCLUDE (UK angle)
+- BBC covering a Middle East war where UK troops are involved → INCLUDE (UK angle)
+- BBC covering a Middle East war with no UK involvement → EXCLUDE (no UK angle)
 
 RANKING:
 - Rank included stories by IMPORTANCE (major breaking news = highest) and RECENCY (newer = higher).
 - A 2-hour-old major story ranks above a 30-minute-old minor story.
 - A 24-hour-old major story ranks above a 2-hour-old trivial story.
-- Use your judgment — the goal is the most important + freshest stories first.
 
 OUTPUT FORMAT:
-- Return ONLY a comma-separated list of story numbers (1-${topics.slice(0, 30).length}) in ranked order.
-- Only include stories that are ABOUT ${countryName}.
+- Return ONLY a comma-separated list of story numbers (1-${aiTopics.length}) in ranked order.
+- Include ALL stories that match the inclusion rules above — don't be stingy.
 - Most important/newest first.
-- Example: 3,1,7,5,12
+- Example: 3,1,7,5,12,2,8,15
 - No explanation, no other text, JUST the numbers.`
 
   const userPrompt = `Country: ${countryName}
 Stories:
 ${storyList}
 
-Which story numbers (1-${topics.slice(0, 30).length}) are ABOUT ${countryName}? Return them as a comma-separated list in ranked order (most important/newest first). ONLY the numbers.`
+Which story numbers (1-${aiTopics.length}) should appear in the "${countryName} News" section? Be generous — include all stories that are about ${countryName} or significantly affect it. Return them as a comma-separated list in ranked order (most important/newest first). ONLY the numbers.`
 
   try {
     const aiResponse = await callAI({ systemPrompt, userPrompt })
@@ -429,7 +443,7 @@ Which story numbers (1-${topics.slice(0, 30).length}) are ABOUT ${countryName}? 
       .map((s) => s.trim())
       .filter((s) => s.length > 0)
       .map((s) => parseInt(s, 10))
-      .filter((n) => !isNaN(n) && n >= 1 && n <= topics.slice(0, 30).length)
+      .filter((n) => !isNaN(n) && n >= 1 && n <= aiTopics.length)
 
     if (numbers.length === 0) {
       // AI returned nothing parseable — return previously-approved only.
@@ -444,7 +458,7 @@ Which story numbers (1-${topics.slice(0, 30).length}) are ABOUT ${countryName}? 
     const rankedTopics: TopicArticle[] = []
     const newlyApproved: string[] = []
     for (const n of numbers) {
-      const topic = topics[n - 1]
+      const topic = aiTopics[n - 1]
       if (topic && !rankedTopics.find((t) => t.topicId === topic.topicId)) {
         rankedTopics.push(topic)
         // Track which ones are newly approved (not in Firebase yet)
