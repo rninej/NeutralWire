@@ -96,6 +96,143 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : inter / union
 }
 
+// ---------- Content-based country relevance ----------
+// Used by the "My Country" tab to filter stories by TOPIC content, not just
+// by source. A story from BBC about Trump is NOT UK news — it's US politics
+// that a UK outlet happens to cover. A story about Starmer, the NHS, or
+// Premier League IS UK news regardless of which outlet covers it.
+//
+// Maps ISO country codes → keyword lists. A topic is "about country X" if
+// its title OR summary contains at least one keyword from X's list.
+const COUNTRY_KEYWORDS: Record<string, string[]> = {
+  GB: [
+    // Government & politics
+    'uk ', 'uk,', 'uk.', 'uk\'s', 'britain', 'british', 'england', 'english',
+    'scotland', 'scottish', 'wales', 'welsh', 'northern ireland', 'london',
+    'westminster', 'parliament', 'downing street', 'whitehall', 'mps', 'mp ',
+    'starmer', 'sunak', 'farage', 'corbyn', 'may ', 'johnson', 'truss',
+    'labour party', 'conservative party', 'tories', 'tory ', 'snp', 'lib dem',
+    'reform uk', 'greens', 'no 10', 'number 10',
+    // Institutions
+    'nhs', 'met police', 'scotland yard', 'bank of england', 'ofcom', 'ofsted',
+    'bbc', 'royal mail', 'british army', 'raf', 'royal navy', 'mi5', 'mi6',
+    // Royals
+    'king charles', 'queen camilla', 'prince william', 'princess kate',
+    'prince harry', 'meghan', 'royal family', 'buckingham palace',
+    'kensington palace', 'windsor',
+    // Geography
+    'manchester', 'birmingham', 'leeds', 'liverpool', 'bristol', 'sheffield',
+    'newcastle', 'nottingham', 'southampton', 'portsmouth', 'bournemouth',
+    'reading', 'oxford', 'cambridge', 'brighton', 'cardiff', 'edinburgh',
+    'glasgow', 'belfast', 'derry', 'aberdeen', 'dundee', 'york', 'bath',
+    'exeter', 'plymouth', 'swansea', 'coventry', 'leicester', 'bradford',
+    'stirling', 'inverness', 'norwich', 'ipswich',
+    // Events / culture
+    'premier league', 'champions league', 'fa cup', 'wimbledon', 'the open',
+    'grand national', 'epsom derby', 'glastonbury', 'proms', 'bafta',
+    'budget', 'chancellor', 'autumn statement', 'spring statement',
+    'brexit', 'eurostar', 'hs2', 'crossrail', 'elizabeth line',
+    'big ben', 'tower of london', 'stonehenge', 'lake district',
+    'channel tunnel', 'isle of wight', 'jersey', 'guernsey', 'shetland',
+    // More UK-specific
+    'commonwealth games', 'ashes', 'river city', 'eastenders', 'coronation street',
+    'strictly come dancing', 'match of the day', 'test match special',
+    'city of london', 'square mile', 'thames', 'big ben',
+    'burnham', 'sarwar', 'healey', 'miatta fahnbulleh', 'royal commission',
+    'british isles', 'united kingdom',
+    // UK politicians (current)
+    'rachel reeves', 'angela rayner', 'david lammy', 'yvette cooper',
+    'wes streeting', 'ed davey', 'penny mordaunt', 'kemi badenoch',
+    'sadiq khan', 'andy burnham', 'anas sarwar', 'john swinney',
+    'humza yousaf', 'mark drakeford', 'vaughan gething',
+    // UK-specific terms
+    'council tax', 'business rates', 'vat cut', 'income tax',
+    'house of commons', 'house of lords', 'select committee',
+    'green belt', 'national trust', 'english heritage',
+    'luker wilde', 'frank whittle', 'raf', 'dambusters',
+    'cobham', 'farnborough', 'goodwood', 'silverstone',
+  ],
+  US: [
+    'us ', 'us,', 'us.', 'us\'s', 'america', 'american', 'united states',
+    'washington', 'white house', 'capitol', 'congress', 'senate', 'house of representatives',
+    'supreme court', 'scotus', 'pentagon', 'cia', 'fbi', 'doj',
+    'trump', 'biden', 'harris', 'obama', 'clinton', 'bush',
+    'republican', 'democrat', 'gop', 'dnc', 'rnc',
+    'new york', 'los angeles', 'chicago', 'houston', 'phoenix', 'philadelphia',
+    'san antonio', 'san diego', 'dallas', 'san francisco', 'seattle', 'boston',
+    'denver', 'atlanta', 'miami', 'detroit', 'minneapolis', 'phoenix',
+    'tampa', 'austin', 'portland', 'las vegas', 'nashville', 'memphis',
+    'new orleans', 'cleveland', 'pittsburgh', 'cincinnati', 'baltimore',
+    'milwaukee', 'kansas city', 'omaha', 'salt lake city', 'honolulu',
+    'anchorage', 'des moines',
+    'nfl', 'nba', 'mlb', 'nhl', 'super bowl', 'world series', 'march madness',
+    'federal reserve', 'wall street', 'dow jones', 'nasdaq', 's&p 500',
+    'pentagon', 'state department', 'department of', 'us treasury',
+    '9/11', 'january 6', 'jan 6', 'capitol riot',
+  ],
+  CA: [
+    'canada', 'canadian', 'ottawa', 'toronto', 'vancouver', 'montreal',
+    'calgary', 'edmonton', 'winnipeg', 'halifax', 'quebec city', 'hamilton',
+    'parliament hill', 'trudeau', 'carney', 'liberal party of canada',
+    'conservative party of canada', 'ndp', 'bloc quebecois',
+    'raptors', 'maple leafs', 'canucks', 'blue jays', 'expos',
+    'rcmp', 'bank of canada',
+  ],
+  AU: [
+    'australia', 'australian', 'aussie', 'canberra', 'sydney', 'melbourne',
+    'brisbane', 'perth', 'adelaide', 'gold coast', 'newcastle', 'canberra',
+    'hobart', 'darwin', 'parliament house', 'albanese', 'dutton',
+    'liberal party of australia', 'labor party', 'coalition',
+    'afl', 'nrl', 'aussie rules', 'wallabies', 'kangaroos',
+    'reserve bank of australia', 'centrelink', ' medicare',
+    'great barrier reef', 'uluru', 'outback',
+  ],
+}
+
+/**
+ * Detect whether a topic is "about" a given country based on its title
+ * and summary content. Returns true if at least one country-specific
+ * keyword is found.
+ *
+ * This is the KEY fix for the "My Country" tab — previously it showed
+ * any story from UK sources (BBC, Guardian) including Trump news. Now
+ * it only shows stories whose CONTENT is actually about the UK.
+ *
+ * Some keywords are matched as whole words (using word boundaries) to
+ * avoid false positives — e.g. "tory" must not match inside "history",
+ * "factory", "victory", etc.
+ */
+function isTopicAboutCountry(
+  topic: TopicArticle,
+  countryCode: string,
+): boolean {
+  const keywords = COUNTRY_KEYWORDS[countryCode.toUpperCase()]
+  if (!keywords) return true // unknown country — don't filter (show everything)
+  const text = ` ${topic.title} ${topic.summary} `.toLowerCase()
+
+  // Keywords that need word-boundary matching (short words that are
+  // substrings of common words — "tory" → "history", "may" → "mayor", etc.)
+  const wordBoundaryKeywords = new Set([
+    'tory', 'tories', 'mp ', 'mps', 'may ', 'labour', 'raf', 'nhs',
+    'us ', 'us,', 'us.', 'uk ', 'uk,', 'uk.', 'mp',
+  ])
+
+  for (const kw of keywords) {
+    if (wordBoundaryKeywords.has(kw)) {
+      // Word-boundary match: the keyword must be surrounded by non-letter
+      // characters (space, punctuation, start/end of text).
+      const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      // \b doesn't work well with trailing space, so use a custom pattern:
+      // match the keyword followed by a non-letter or end of string
+      const re = new RegExp(`(?:^|[^a-z])${escaped.replace(/ $/, '')}(?:[^a-z]|$)`, 'i')
+      if (re.test(text)) return true
+    } else {
+      if (text.includes(kw)) return true
+    }
+  }
+  return false
+}
+
 // ---------- RSS Parsing ----------
 function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedArticle[] {
   const articles: FeedArticle[] = []
@@ -720,6 +857,7 @@ export async function aggregateCategory(
     limit?: number
     minCoverage?: number
     countrySourceIds?: string[]
+    countryCode?: string
   } = {},
 ): Promise<{ topics: TopicArticle[]; articleCount: number; sourceCount: number }> {
   const limit = options.limit ?? 24
@@ -753,26 +891,31 @@ export async function aggregateCategory(
     const fresh = dedup.filter((a) => a.iso >= cutoff)
 
     const localSet = new Set(options.countrySourceIds ?? [])
+    const countryCode = options.countryCode || ''
     const isRelevantMode = category === 'relevant' && localSet.size > 0
     const isMyCountryMode = category === 'mycountry' && localSet.size > 0
 
     const topics = clusterTopics(fresh, (isRelevantMode || isMyCountryMode) ? localSet : new Set())
 
-    // For `mycountry` mode: ONLY show topics where ALL sources are local.
-    // This is strict — if even one non-local source covers the story, it's
-    // filtered out. This ensures "My Country" shows only genuinely local
-    // news, not international stories that UK outlets happen to cover.
-    // Exception: stories with 4+ sources where at least 75% are local
-    // (allows major local stories that one international outlet picked up).
-    const relevantTopics = isMyCountryMode
-      ? topics.filter((t) => {
-          const local = t.localCoverage ?? 0
-          const total = t.coverage
-          if (total === 0) return false
-          const ratio = local / total
-          // All local, OR (4+ sources AND 75%+ local)
-          return ratio === 1 || (total >= 4 && ratio >= 0.75)
-        })
+    // For `mycountry` mode: filter by CONTENT, not just by source.
+    //
+    // OLD BEHAVIOUR (broken): showed any story where all sources were UK-based.
+    //   → BBC/Guardian cover Trump all day → Trump showed up in "My Country".
+    //
+    // NEW BEHAVIOUR: a story must be ABOUT the visitor's country (detected
+    //   via title/summary keywords like "starmer", "nhs", "premier league")
+    //   to appear in "My Country". Source origin is no longer the primary
+    //   filter — content is.
+    //
+    // We still prefer local sources (a story from BBC about UK politics is
+    // more likely to be UK-relevant than the same story from NYT), but the
+    // CONTENT check is the gatekeeper. This means:
+    //   ✅ "Starmer addresses parliament" from BBC → shown
+    //   ✅ "Starmer addresses parliament" from NYT → shown (content is UK)
+    //   ❌ "Trump signs executive order" from BBC → filtered out
+    //   ❌ "Trump signs executive order" from NYT → filtered out
+    const relevantTopics = isMyCountryMode && countryCode
+      ? topics.filter((t) => isTopicAboutCountry(t, countryCode))
       : topics
 
     // Sort: for `relevant` category, give LOCAL news much higher priority

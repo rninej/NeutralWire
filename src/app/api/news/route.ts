@@ -76,6 +76,7 @@ export async function GET(req: NextRequest) {
         limit: 40,
         minCoverage: 1,
         countrySourceIds,
+        countryCode: country,
       })
       const payload = {
         updatedAt: Date.now(),
@@ -116,6 +117,7 @@ export async function GET(req: NextRequest) {
           limit: 40,
           minCoverage: 1,
           countrySourceIds,
+          countryCode: country,
         }),
       )
       if (fresh) {
@@ -140,6 +142,7 @@ export async function GET(req: NextRequest) {
               limit: 40,
               minCoverage: 1,
               countrySourceIds,
+              countryCode: country,
             }),
           )
         } catch (err) {

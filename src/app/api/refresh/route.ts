@@ -72,6 +72,7 @@ export async function GET(req: NextRequest) {
         limit: 40,
         minCoverage: 1,
         countrySourceIds,
+        countryCode: country,
       }),
     )
     if (!fresh) {

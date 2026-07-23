@@ -132,6 +132,7 @@ export async function sendPersonalizedWebPush(
   origin: string,
   slot: string,
   globalHistory: Set<string> = new Set(),
+  dryRun: boolean = false,
 ): Promise<{
   sent: number
   personalized: number
@@ -265,41 +266,55 @@ export async function sendPersonalizedWebPush(
       tag: `neutralwire-${slot}`, // tag per slot so morning/lunch/evening don't overwrite
     })
 
-    sendPromises.push(
-      webpush
-        .sendNotification(
-          device.pushSubscription as webpush.PushSubscription,
-          payload,
-          {
-            TTL: 3600,
-            urgency: 'high',
-            topic: `neutralwire-${slot}`,
-          },
-        )
-        .then(() => sentCount++)
-        .catch(() => {}),
-    )
+    if (dryRun) {
+      // In dry-run mode, count the "send" as successful but don't actually
+      // call web-push. This lets us test the full personalization flow
+      // without spamming real devices.
+      sentCount++
+    } else {
+      sendPromises.push(
+        webpush
+          .sendNotification(
+            device.pushSubscription as webpush.PushSubscription,
+            payload,
+            {
+              TTL: 3600,
+              urgency: 'high',
+              topic: `neutralwire-${slot}`,
+            },
+          )
+          .then(() => sentCount++)
+          .catch(() => {}),
+      )
+    }
   }
 
-  await Promise.allSettled(sendPromises)
+  if (!dryRun) {
+    await Promise.allSettled(sendPromises)
+  }
 
   // ── Persist per-device sent history ──
   // Each device gets the newly-sent topicId added to its sentHistory map.
   // This is a defense-in-depth layer on top of the global history — even
   // if a story somehow slips past the global filter, this user still
   // never sees it twice.
-  let historyWritten = 0
-  for (const { deviceId, topicId } of deviceHistoryUpdates) {
-    try {
-      const ok = await firebasePatch(`devices/${deviceId}/sentHistory`, {
-        [topicId]: Date.now(),
-      })
-      if (ok) historyWritten++
-    } catch {
-      // silent — best-effort
+  // Skip in dry-run mode.
+  if (!dryRun) {
+    let historyWritten = 0
+    for (const { deviceId, topicId } of deviceHistoryUpdates) {
+      try {
+        const ok = await firebasePatch(`devices/${deviceId}/sentHistory`, {
+          [topicId]: Date.now(),
+        })
+        if (ok) historyWritten++
+      } catch {
+        // silent — best-effort
+      }
     }
+    console.log(`[pushify] sentHistory written: ${historyWritten}/${deviceHistoryUpdates.length}`)
+  } else {
+    console.log(`[pushify] DRY RUN — would have sent ${sentCount} notifications, ${deviceHistoryUpdates.length} sentHistory updates`)
   }
-  console.log(`[pushify] sentHistory written: ${historyWritten}/${deviceHistoryUpdates.length}`)
 
   return {
     sent: sentCount,

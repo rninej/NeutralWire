@@ -11,6 +11,14 @@ export const revalidate = 0
 // so 10s is plenty even for hundreds of devices.
 export const maxDuration = 10
 
+// Hardcoded production origin. We MUST NOT use `req.nextUrl.origin` here
+// because in dev the trigger runs against `localhost:3000` — push
+// notifications sent with localhost URLs are useless (phones can't reach
+// localhost). Always use the production URL so notification clicks always
+// land on neutralwire.vercel.app.
+const PRODUCTION_ORIGIN =
+  process.env.NEXT_PUBLIC_SITE_URL || 'https://neutralwire.vercel.app'
+
 /**
  * Sector keyword detection (mirrors src/lib/user-interests.ts SECTOR_KEYWORDS).
  *
@@ -329,6 +337,18 @@ async function pruneGlobalHistory(
  *        sent to THIS specific user ever is excluded.
  *   After sending, the chosen topicIds are added to both layers.
  *
+ * DRY RUN MODE:
+ *   GET /api/push/trigger?slot=morning&secret=<SECRET>&dry=1
+ *   Runs the ENTIRE flow (fetch stories, AI pick, per-device scoring,
+ *   history filtering) but does NOT send any actual push notifications
+ *   and does NOT record anything in sent-history. Use this for testing.
+ *
+ * URL FIX:
+ *   All notification click URLs and image URLs use PRODUCTION_ORIGIN
+ *   (https://neutralwire.vercel.app), NOT req.nextUrl.origin. This ensures
+ *   notifications always link to the live site even when the trigger is
+ *   called from localhost or a preview URL.
+ *
  * Usage:
  *   GET /api/push/trigger?slot=morning&secret=<SECRET>
  */
@@ -341,6 +361,9 @@ export async function GET(req: NextRequest) {
       | null
     const secret = req.nextUrl.searchParams.get('secret') || ''
     const expectedSecret = process.env.TRIGGER_SECRET || 'neutralwire-trigger'
+    // ?dry=1 — run the full flow but don't send any pushes or record history.
+    // Use this for testing. NEVER test without it.
+    const dryRun = req.nextUrl.searchParams.get('dry') === '1'
 
     if (secret !== expectedSecret) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -354,9 +377,16 @@ export async function GET(req: NextRequest) {
     }
 
     const todayKey = new Date().toISOString().slice(0, 10)
-    const origin = req.nextUrl.origin
+    // ALWAYS use the production origin for notification URLs. In dev,
+    // req.nextUrl.origin is localhost — phones can't reach that.
+    const origin = PRODUCTION_ORIGIN
 
-    // Fetch stories from multiple categories.
+    if (dryRun) {
+      console.log('[trigger] DRY RUN mode — no pushes will be sent, no history recorded')
+    }
+
+    // Fetch stories from multiple categories. Use the production origin
+    // so we get the same cached data the live site sees.
     let allStories: TopicArticle[] = []
     const categories = ['relevant', 'world', 'technology', 'business', 'science']
 
@@ -392,7 +422,7 @@ export async function GET(req: NextRequest) {
     })
 
     if (topStories.length === 0) {
-      return NextResponse.json({ sent: 0, error: 'No stories available' })
+      return NextResponse.json({ sent: 0, error: 'No stories available', dryRun })
     }
 
     // Load click history from Firebase (used by AI for personalisation).
@@ -426,14 +456,20 @@ export async function GET(req: NextRequest) {
     }))
 
     // ── Archive the fallback topic so shared links work forever ──
-    await firebaseWrite(`archive/${fallbackStory.topicId}`, {
-      ...fallbackStory,
-      archivedAt: Date.now(),
-    })
+    // (Only in real runs — dry runs don't write to Firebase)
+    if (!dryRun) {
+      await firebaseWrite(`archive/${fallbackStory.topicId}`, {
+        ...fallbackStory,
+        archivedAt: Date.now(),
+      })
+    }
 
     // ── SEND: One personalized notification per device ──
     // No Pushify broadcast — each device gets exactly ONE push, tailored
     // to its interests and engagement, and never the same story twice.
+    //
+    // In dry-run mode, sendPersonalizedWebPush skips the actual web-push
+    // sendNotification() call AND skips writing to per-device sentHistory.
     const personalizedResult = await sendPersonalizedWebPush(
       personalCandidates,
       {
@@ -445,45 +481,52 @@ export async function GET(req: NextRequest) {
       origin,
       slot,
       globalHistory,
+      dryRun,
     )
 
     // ── Record sent topicIds in the global history ──
     // This prevents ANY future trigger (morning/lunch/evening, today or
     // any day in the next 14 days) from sending these stories again.
-    if (personalizedResult.sentTopicIds.size > 0) {
+    // Skip in dry-run mode.
+    if (!dryRun && personalizedResult.sentTopicIds.size > 0) {
       await recordGlobalHistory(personalizedResult.sentTopicIds)
     }
 
     // ── Periodic cleanup: prune stale entries from global history ──
     // Run only when the history has grown past 50 entries (cheap check).
-    if (Object.keys(rawHistory).length > 50) {
-      // Fire-and-forget — don't block the response
+    // Skip in dry-run mode.
+    if (!dryRun && Object.keys(rawHistory).length > 50) {
       pruneGlobalHistory(rawHistory).catch(() => {})
     }
 
     // ── Click tracking: store one notification entry per sent topicId ──
     // (Used by /api/notification/track for click prediction stats.)
-    for (const topicId of personalizedResult.sentTopicIds) {
-      const notifId = `notif_${todayKey}_${slot}_${topicId.slice(-6)}`
-      const topic = personalCandidates.find((c) => c.topicId === topicId) || fallbackStory
-      await firebaseWrite(`notifications/${notifId}`, {
-        slot,
-        topicId,
-        title: topic.title.slice(0, 80),
-        sentAt: Date.now(),
-        clicked: false,
-        dismissed: false,
-      })
+    // Skip in dry-run mode.
+    if (!dryRun) {
+      for (const topicId of personalizedResult.sentTopicIds) {
+        const notifId = `notif_${todayKey}_${slot}_${topicId.slice(-6)}`
+        const topic = personalCandidates.find((c) => c.topicId === topicId) || fallbackStory
+        await firebaseWrite(`notifications/${notifId}`, {
+          slot,
+          topicId,
+          title: topic.title.slice(0, 80),
+          sentAt: Date.now(),
+          clicked: false,
+          dismissed: false,
+        })
+      }
     }
 
     return NextResponse.json({
       slot,
+      dryRun,
       sent: personalizedResult.sent,
       personalized: personalizedResult.personalized,
       fallback: personalizedResult.fallback,
       sentTopicIds: Array.from(personalizedResult.sentTopicIds),
       candidateCount: personalCandidates.length,
       globalHistoryFiltered: topStories.length - freshStories.length,
+      fallbackStory: fallbackStory.title.slice(0, 80),
       time: new Date().toISOString(),
     })
   } catch (err) {
