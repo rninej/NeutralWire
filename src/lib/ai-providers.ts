@@ -54,6 +54,8 @@ const GROQ_COMPOUND_MODEL = 'compound-beta'
 interface ChatCall {
   systemPrompt: string
   userPrompt: string
+  /** Optional max output tokens. Default 400. Set higher for long summaries. */
+  maxTokens?: number
 }
 
 let lastProvider = 'none'
@@ -78,6 +80,7 @@ export function getLastProvider(): string {
  */
 export async function callAI(opts: ChatCall): Promise<string | null> {
   const now = Date.now()
+  const maxTokens = opts.maxTokens ?? 400
   const candidates: Array<Promise<string | null>> = []
 
   // 1. Fire off the first available Gemini model
@@ -86,7 +89,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
   })
   if (firstGemini && GEMINI_API_KEY) {
-    candidates.push(callGemini(opts.systemPrompt, opts.userPrompt, firstGemini, false))
+    candidates.push(callGemini(opts.systemPrompt, opts.userPrompt, firstGemini, false, maxTokens))
   }
 
   // 2. Fire off the first available Groq model
@@ -96,13 +99,13 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
       return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
     })
     if (firstGroq) {
-      candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, firstGroq))
+      candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, firstGroq, maxTokens))
     }
   }
 
   // 3. Fire off OpenRouter (last resort but parallel for speed)
   if (OPENROUTER_API_KEY) {
-    candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, false))
+    candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, false, maxTokens))
   }
 
   // 4. Race them — first NON-NULL answer wins.
@@ -134,7 +137,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     const limitedAt = rateLimitedModels.get(`gemini-${model}`)
     if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
 
-    const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model, false)
+    const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model, false, maxTokens)
     if (answer) {
       lastProvider = `Gemini ${model}`
       return answer
@@ -146,7 +149,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     const limitedAt = rateLimitedModels.get(`groq-${model}`)
     if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
 
-    const answer = await callGroq(opts.systemPrompt, opts.userPrompt, model)
+    const answer = await callGroq(opts.systemPrompt, opts.userPrompt, model, maxTokens)
     if (answer) {
       lastProvider = `Groq ${model}`
       return answer
@@ -219,6 +222,7 @@ async function callGroq(
   systemPrompt: string,
   userPrompt: string,
   model: string,
+  maxTokens: number = 400,
 ): Promise<string | null> {
   if (!GROQ_API_KEY) return null
   const controller = new AbortController()
@@ -237,7 +241,7 @@ async function callGroq(
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        max_tokens: 400,
+        max_tokens: maxTokens,
         temperature: 0.5,
       }),
       cache: 'no-store',
@@ -270,6 +274,7 @@ async function callGemini(
   userPrompt: string,
   model: string = 'gemini-2.0-flash',
   useSearch: boolean = false,
+  maxTokens: number = 400,
 ): Promise<string | null> {
   if (!GEMINI_API_KEY) return null
   const controller = new AbortController()
@@ -284,7 +289,7 @@ async function callGemini(
         { role: 'user', parts: [{ text: `${systemPrompt}\n\nUser: ${userPrompt}` }] },
       ],
       generationConfig: {
-        maxOutputTokens: 400,
+        maxOutputTokens: maxTokens,
         temperature: 0.5,
       },
     }
@@ -333,6 +338,7 @@ async function callOpenRouter(
   systemPrompt: string,
   userPrompt: string,
   useWebSearch: boolean,
+  maxTokens: number = 400,
 ): Promise<string | null> {
   if (!OPENROUTER_API_KEY) return null
   const controller = new AbortController()
@@ -345,7 +351,7 @@ async function callOpenRouter(
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      max_tokens: 400,
+      max_tokens: maxTokens,
       temperature: 0.5,
     }
     if (useWebSearch) body.plugins = [{ id: 'web' }]
