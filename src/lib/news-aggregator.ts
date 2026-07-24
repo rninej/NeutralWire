@@ -870,6 +870,131 @@ function cleanDescription(raw: string): string {
   return s.slice(0, 400)
 }
 
+// ---------- AI title shortening ----------
+// Titles >15 words are sent to the AI to be shortened to a concise headline.
+// Cached per-topicId in Firebase (title-rewrites/<topicId>) so we don't
+// re-call the AI on every refresh.
+
+// In-process cache (per-instance, fast).
+const TITLE_REWRITE_CACHE = new Map<string, string>()
+const TITLE_REWRITE_CACHE_TS = new Map<string, number>()
+const TITLE_REWRITE_CACHE_TTL_MS = 30 * 60 * 1000 // 30 min
+
+/**
+ * Count words in a string.
+ */
+function wordCount(s: string): number {
+  return s.trim().split(/\s+/).filter(Boolean).length
+}
+
+/**
+ * Check if a title needs shortening (>15 words).
+ */
+function titleNeedsShortening(title: string): boolean {
+  return wordCount(title) > 15
+}
+
+/**
+ * Shorten long titles using the AI fallback chain.
+ *
+ * For each topic with >15 words, calls callAI with a prompt asking for a
+ * concise 6-12 word headline that preserves the key facts.
+ *
+ * Result is cached in Firebase (title-rewrites/<topicId>) and in-process
+ * so subsequent loads are instant.
+ *
+ * Operates IN PLACE on the topics array — modifies topic.title.
+ * Runs in parallel for speed (batches of 5 to avoid rate limits).
+ */
+async function shortenLongTitles(topics: TopicArticle[]): Promise<void> {
+  // Find topics that need shortening
+  const toShorten = topics.filter((t) => titleNeedsShortening(t.title))
+  if (toShorten.length === 0) return
+
+  console.log(`[title-rewrite] ${toShorten.length} topics have >15 word titles, shortening...`)
+
+  // Load existing rewrites from Firebase (one read for all)
+  const existingRewrites = await firebaseRead<Record<string, string>>('title-rewrites')
+  const rewriteMap = new Map<string, string>()
+  if (existingRewrites) {
+    for (const [id, title] of Object.entries(existingRewrites)) {
+      rewriteMap.set(id, title)
+    }
+  }
+
+  const newlyRewritten: Array<{ topicId: string; title: string }> = []
+
+  // Process in batches of 5 to avoid hammering the AI providers
+  const batchSize = 5
+  for (let i = 0; i < toShorten.length; i += batchSize) {
+    const batch = toShorten.slice(i, i + batchSize)
+    await Promise.allSettled(
+      batch.map(async (topic) => {
+        // Check in-process cache first
+        const cachedTs = TITLE_REWRITE_CACHE_TS.get(topic.topicId)
+        const cachedTitle = TITLE_REWRITE_CACHE.get(topic.topicId)
+        if (cachedTitle && cachedTs && Date.now() - cachedTs < TITLE_REWRITE_CACHE_TTL_MS) {
+          topic.title = cachedTitle
+          return
+        }
+
+        // Check Firebase cache
+        const fbCached = rewriteMap.get(topic.topicId)
+        if (fbCached) {
+          topic.title = fbCached
+          TITLE_REWRITE_CACHE.set(topic.topicId, fbCached)
+          TITLE_REWRITE_CACHE_TS.set(topic.topicId, Date.now())
+          return
+        }
+
+        // Call AI to shorten
+        try {
+          const shortened = await callAI({
+            systemPrompt: `You are a news headline editor. Your job is to shorten long news headlines into concise, punchy headlines that preserve ALL the key facts.
+
+Rules:
+- Keep it 6-12 words.
+- Preserve the most important facts (who, what, where, when if critical).
+- Remove filler words ("the", "a", "says", "reports", "according to").
+- Do NOT add information that isn't in the original.
+- Do NOT add quotes around the result.
+- Do NOT add "Headline:" or any prefix.
+- Output ONLY the shortened headline, nothing else.`,
+            userPrompt: `Original headline (${wordCount(topic.title)} words):
+${topic.title}
+
+Shorten to 6-12 words:`,
+            maxTokens: 60,
+          })
+
+          if (shortened && wordCount(shortened) <= 15 && shortened.length < topic.title.length) {
+            topic.title = shortened.trim().replace(/^["']|["']$/g, '')
+            TITLE_REWRITE_CACHE.set(topic.topicId, topic.title)
+            TITLE_REWRITE_CACHE_TS.set(topic.topicId, Date.now())
+            newlyRewritten.push({ topicId: topic.topicId, title: topic.title })
+          }
+        } catch {
+          // silent — keep original title
+        }
+      }),
+    )
+  }
+
+  // Persist newly rewritten titles to Firebase (one patch for all)
+  if (newlyRewritten.length > 0) {
+    const patch: Record<string, string> = {}
+    for (const { topicId, title } of newlyRewritten) {
+      patch[topicId] = title
+    }
+    try {
+      await firebasePatch('title-rewrites', patch)
+      console.log(`[title-rewrite] Rewrote ${newlyRewritten.length} titles + persisted to Firebase`)
+    } catch {
+      // silent — best-effort
+    }
+  }
+}
+
 /**
  * Lightweight English-language detector for article titles.
  *
@@ -1433,6 +1558,14 @@ export async function aggregateCategory(
     // article images or OG images.
     //
     // This runs in parallel for the top 10 topics to keep it fast.
+    //
+    // ── AI title shortening ──
+    // Also runs before image validation: any topic with a title >15 words
+    // is sent to the AI to be shortened to a concise 6-12 word headline.
+    // Cached in Firebase (title-rewrites/<topicId>) so it only runs once
+    // per topic. Runs in parallel for speed.
+    await shortenLongTitles(filtered)
+
     const topicsForImageCheck = filtered.slice(0, 10)
     await Promise.all(
       topicsForImageCheck.map(async (topic) => {
