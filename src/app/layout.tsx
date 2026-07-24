@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Analytics } from "@vercel/analytics/next";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -21,6 +22,10 @@ export const metadata: Metadata = {
   keywords: ["news", "bias", "media bias", "neutralwire", "news aggregator", "left right center"],
   authors: [{ name: "NeutralWire" }],
   manifest: "/manifest.json",
+  // Google Search Console verification
+  verification: {
+    google: "0i1WWZTYihBkJCw9G-oKv_H-C1uA-c0hGlOgZKyhlig",
+  },
   icons: {
     icon: [
       { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
@@ -102,6 +107,8 @@ export default function RootLayout({
             `,
           }}
         />
+        {/* Vercel Analytics — page view tracking */}
+        <Analytics />
       </body>
     </html>
   );

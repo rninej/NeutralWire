@@ -1078,7 +1078,11 @@ function CategoryTab({
       type="button"
       onClick={onClick}
       className={cn(
-        'inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+        // Smaller text + tighter padding on mobile so all 10 categories
+        // (Relevant, My Country, Top Stories, World, Politics, Business,
+        // Tech, Science, Health, Sports) fit in 2 lines.
+        // sm: restores normal size on wider screens.
+        'inline-flex items-center gap-1 rounded-md whitespace-nowrap text-[11px] px-2 py-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors',
         active
           ? 'bg-foreground text-background'
           : 'hover:bg-muted text-foreground/80',
