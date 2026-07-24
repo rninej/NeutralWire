@@ -15,15 +15,18 @@ interface TopicCardProps {
   onOpenDetail?: (topic: TopicArticle) => void
 }
 
-function timeAgo(ms: number): string {
-  const diff = Date.now() - ms
-  const m = Math.floor(diff / 60000)
-  if (m < 1) return 'just now'
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  return `${d}d ago`
+/**
+ * Format a timestamp as a fixed date/time string.
+ * Shows '24 Jul, 14:30' — doesn't change between renders.
+ */
+function formatTime(ms: number): string {
+  const d = new Date(ms)
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const date = d.getDate()
+  const month = months[d.getMonth()]
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${date} ${month}, ${hh}:${mm}`
 }
 
 const LEANING_BADGE: Record<string, { label: string; cls: string }> = {
@@ -87,7 +90,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
           </Badge>
           <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
             <Clock className="h-3 w-3" />
-            {timeAgo(topic.latestSeen)}
+            {formatTime(topic.latestSeen)}
           </span>
         </div>
         <h3

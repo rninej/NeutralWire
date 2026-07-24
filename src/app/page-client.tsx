@@ -898,6 +898,7 @@ export default function Home() {
             query={debouncedSearch}
             loading={apiSearchLoading}
             result={apiSearchResult}
+            onOpenTopic={handleOpenDetail}
           />
         ) : (
           <>
@@ -927,7 +928,7 @@ export default function Home() {
                 </span>
                 {fetchedAt && (
                   <span className="hidden items-center gap-1 sm:inline-flex">
-                    · updated {fetchedAt.toLocaleTimeString()}
+                    · updated {fetchedAt.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                     {isCached && !isFresh && (
                       <span className="text-amber-500">(cached)</span>
                     )}

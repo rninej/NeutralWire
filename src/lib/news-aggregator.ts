@@ -395,15 +395,20 @@ KEY DISTINCTION:
 - BBC covering a Middle East war where UK troops are involved → INCLUDE (UK angle)
 - BBC covering a Middle East war with no UK involvement → EXCLUDE (no UK angle)
 
-RANKING:
-- Rank included stories by IMPORTANCE (major breaking news = highest) and RECENCY (newer = higher).
-- A 2-hour-old major story ranks above a 30-minute-old minor story.
-- A 24-hour-old major story ranks above a 2-hour-old trivial story.
+RANKING (IMPORTANCE > RECENCY):
+- Rank included stories by IMPORTANCE first (broadest coverage + biggest impact).
+- COVERAGE is the #1 ranking signal: a story covered by 13 sources ALWAYS ranks
+  above a story covered by 2 sources, regardless of age.
+- Recency is a TIE-BREAKER only: among stories with similar coverage, newer wins.
+- A 12-hour-old story with 13 sources ranks ABOVE a 30-minute-old story with 2 sources.
+- This keeps the day's biggest stories at the top all day, not just the latest.
+- Major breaking news (wars, resignations, historic events) gets a boost even
+  with fewer sources.
 
 OUTPUT FORMAT:
 - Return ONLY a comma-separated list of story numbers (1-${aiTopics.length}) in ranked order.
 - Include ALL stories that match the inclusion rules above — don't be stingy.
-- Most important/newest first.
+- Most important (highest coverage + biggest impact) first.
 - Example: 3,1,7,5,12,2,8,15
 - No explanation, no other text, JUST the numbers.`
 
@@ -411,7 +416,7 @@ OUTPUT FORMAT:
 Stories:
 ${storyList}
 
-Which story numbers (1-${aiTopics.length}) should appear in the "${countryName} News" section? Be generous — include all stories that are about ${countryName} or significantly affect it. Return them as a comma-separated list in ranked order (most important/newest first). ONLY the numbers.`
+Which story numbers (1-${aiTopics.length}) should appear in the "${countryName} News" section? Be generous — include all stories that are about ${countryName} or significantly affect it. Rank by IMPORTANCE first (broadest coverage + biggest impact), then recency as tie-breaker. Return them as a comma-separated list. ONLY the numbers.`
 
   try {
     const aiResponse = await callAI({ systemPrompt, userPrompt })

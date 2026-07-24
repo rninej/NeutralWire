@@ -36,14 +36,20 @@ const LEANING_BADGE: Record<string, { label: string; cls: string }> = {
   right: { label: 'Right', cls: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300' },
 }
 
-function timeAgo(ms: number): string {
-  const diff = Date.now() - ms
-  const m = Math.floor(diff / 60000)
-  if (m < 1) return 'just now'
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
+/**
+ * Format a timestamp as a fixed date/time string.
+ * Shows 'Mon 24 Jul, 14:30' — doesn't change between renders.
+ */
+function formatTime(ms: number): string {
+  const d = new Date(ms)
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const day = days[d.getDay()]
+  const date = d.getDate()
+  const month = months[d.getMonth()]
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${day} ${date} ${month}, ${hh}:${mm}`
 }
 
 export function TopicDetail({ topic, onClose }: TopicDetailProps) {
@@ -276,7 +282,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           </Badge>
           <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
             <Clock className="h-3 w-3" />
-            Updated {timeAgo(topic.latestSeen)}
+            Updated {formatTime(topic.latestSeen)}
           </span>
           {topic.localCoverage && topic.localCoverage > 0 && (
             <Badge variant="outline" className="text-[10px]">
@@ -350,7 +356,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           {summaryLoading ? (
             <div className="flex items-center gap-2 py-8 text-base text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />
-              Generating neutral summary…
+              Loading…
             </div>
           ) : summaryError ? (
             <div className="flex items-center gap-2 py-4 text-base text-muted-foreground">
@@ -697,7 +703,7 @@ function SourceGroup({
               <span className="opacity-50">·</span>
               {a.country}
               <span className="opacity-50">·</span>
-              {timeAgo(a.iso)}
+              {formatTime(a.iso)}
               <ExternalLink className="ml-auto h-2.5 w-2.5" />
             </div>
           </a>
