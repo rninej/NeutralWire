@@ -1,7 +1,7 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-const CACHE_NAME = 'neutralwire-v5'
+const CACHE_NAME = 'neutralwire-v6'
 const STATIC_ASSETS = ['/', '/manifest.json', '/favicon-32.png']
 
 // ---------- Install ----------
@@ -110,6 +110,12 @@ self.addEventListener('push', (event) => {
 // Also tracks the click for the prediction system.
 //
 // Handles action buttons (Like/Dislike) at the bottom of the notification.
+//
+// REDUNDANCY: Three layers ensure the topic always opens:
+//   1. If a client is open: post a 'open-topic' message AND navigate it
+//   2. If no client is open: openWindow(url)
+//   3. If both fail: the client-side topic-watcher effect will catch the
+//      ?topic= param on next page load
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
 
@@ -117,20 +123,28 @@ self.addEventListener('notificationclick', (event) => {
   const notifId = event.notification.data?.notifId
   const topicTitle = event.notification.data?.topicTitle || ''
 
+  // Extract topicId from the URL (?topic=xxx)
+  let topicId = null
+  try {
+    const urlObj = new URL(url, self.location.origin)
+    topicId = urlObj.searchParams.get('topic')
+  } catch {
+    // url might be relative — try parsing it
+    const match = url.match(/[?&]topic=([^&]+)/)
+    if (match) topicId = match[1]
+  }
+
   // Handle action buttons (Like / Dislike)
   if (event.action === 'like' || event.action === 'dislike') {
-    // Track the like/dislike — this bumps engagement for the story's sectors
-    // so future notifications + the Relevant tab get more/less of this topic.
     fetch('/api/notification/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         notifId,
-        action: event.action, // 'like' or 'dislike'
+        action: event.action,
         title: topicTitle,
       }),
     }).catch(() => {})
-    // Don't open the app — just record the feedback silently.
     return
   }
 
@@ -148,17 +162,79 @@ self.addEventListener('notificationclick', (event) => {
   }
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      // If the app is already open, focus it and navigate to the URL.
+    (async () => {
+      const clients = await self.clients.matchAll({
+        type: 'window',
+        includeUncontrolled: true,
+      })
+
+      // Find a client that's on our origin.
+      let targetClient = null
       for (const client of clients) {
         if (client.url.includes(self.location.origin)) {
-          client.navigate(url)
-          return client.focus()
+          targetClient = client
+          break
         }
       }
-      // Otherwise open a new window with the story URL.
-      return self.clients.openWindow(url)
-    }),
+
+      if (targetClient) {
+        // ── LAYER 1: App is already open ──
+        // Post a message so the client knows to open the topic (works even
+        // if navigate() silently fails or doesn't trigger a React re-render).
+        try {
+          targetClient.postMessage({
+            type: 'open-topic',
+            topicId,
+            url,
+            notifId,
+          })
+        } catch {
+          // postMessage might fail if client is unresponsive
+        }
+
+        // ALSO navigate the client to the URL (redundancy — if postMessage
+        // works, great; if not, navigate ensures the URL changes).
+        try {
+          await targetClient.navigate(url)
+        } catch {
+          // navigate can fail if the client is mid-navigation or crashed.
+          // The client-side topic-watcher will handle it on next load.
+        }
+
+        try {
+          await targetClient.focus()
+        } catch {
+          // focus can fail on some browsers — silent
+        }
+        return
+      }
+
+      // ── LAYER 2: No open client — open a new window ──
+      try {
+        const newClient = await self.clients.openWindow(url)
+        // Post a message to the new client too (in case it loads fast
+        // enough to receive it before the page renders).
+        if (newClient && topicId) {
+          // Wait a moment for the client to be ready
+          setTimeout(() => {
+            try {
+              newClient.postMessage({
+                type: 'open-topic',
+                topicId,
+                url,
+                notifId,
+              })
+            } catch {
+              // silent
+            }
+          }, 1500)
+        }
+      } catch {
+        // openWindow can fail if popups are blocked. In that case the
+        // client-side topic-watcher won't help either — nothing more we
+        // can do.
+      }
+    })(),
   )
 })
 

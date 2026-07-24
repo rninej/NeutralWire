@@ -490,6 +490,56 @@ export async function GET(req: NextRequest) {
     // Skip in dry-run mode.
     if (!dryRun && personalizedResult.sentTopicIds.size > 0) {
       await recordGlobalHistory(personalizedResult.sentTopicIds)
+
+      // ── Archive ALL sent topics so notification links work forever ──
+      // When a user taps a notification, the client calls /api/topic/[id]
+      // which checks the archive first. Without this, a personalized pick
+      // that wasn't the fallback story wouldn't be in the archive, and
+      // /api/topic/[id] would return 404 if the topic expired from the
+      // live cache (after 48h).
+      //
+      // We archive the FULL topic object (title, summary, articles, image,
+      // bias counts) so the detail view renders correctly even months later.
+      const sentTopicMap = new Map(personalCandidates.map((c) => [c.topicId, c]))
+      // Also include the fallback story in case it wasn't in personalCandidates
+      if (!sentTopicMap.has(fallbackStory.topicId)) {
+        sentTopicMap.set(fallbackStory.topicId, {
+          topicId: fallbackStory.topicId,
+          title: fallbackStory.title,
+          summary: fallbackStory.summary || '',
+          coverage: 0,
+          imageUrl: fallbackStory.imageUrl,
+          sectors: [],
+        })
+      }
+      const archivePromises: Promise<boolean>[] = []
+      for (const topicId of personalizedResult.sentTopicIds) {
+        const candidate = sentTopicMap.get(topicId)
+        if (candidate) {
+          // Build a minimal TopicArticle-compatible object for the archive.
+          // The full topic (with articles, lean counts, etc.) is only
+          // available in personalCandidates as a slimmed-down version, but
+          // /api/topic/[id] checks the live cache first, so this archive
+          // entry only needs to be a fallback for expired topics.
+          archivePromises.push(
+            firebaseWrite(`archive/${topicId}`, {
+              topicId: candidate.topicId,
+              title: candidate.title,
+              summary: candidate.summary || '',
+              imageUrl: candidate.imageUrl || null,
+              coverage: candidate.coverage,
+              leanLeft: 0,
+              leanCenter: 0,
+              leanRight: 0,
+              firstSeen: Date.now(),
+              latestSeen: Date.now(),
+              articles: [],
+              archivedAt: Date.now(),
+            }),
+          )
+        }
+      }
+      await Promise.allSettled(archivePromises)
     }
 
     // ── Periodic cleanup: prune stale entries from global history ──

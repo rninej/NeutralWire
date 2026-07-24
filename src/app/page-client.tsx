@@ -241,6 +241,115 @@ export default function Home() {
     handleOpenDetailRef.current = handleOpenDetail
   }, [handleOpenDetail])
 
+  // --- REDUNDANT topic-open watcher (foolproof) ---
+  // Multiple layers ensure the topic ALWAYS opens when ?topic= is in the URL
+  // or when the SW posts an 'open-topic' message.
+  //
+  // Failure modes this covers:
+  //   1. App already open + SW navigate() doesn't trigger React re-render
+  //      → SW posts 'open-topic' message, caught here
+  //   2. ?topic= param present but fetchData hasn't loaded the topic yet
+  //      → this effect polls the /api/topic/[id] endpoint with retry
+  //   3. Topic not in current category's cache
+  //      → /api/topic/[id] searches ALL categories + the archive
+  //   4. /api/topic/[id] fails transiently
+  //      → retries with backoff (1s, 2s, 4s)
+  //   5. User navigates back/forward changing the URL
+  //      → popstate listener re-triggers the topic-open flow
+  useEffect(() => {
+    let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    const openTopicFromUrl = async () => {
+      const urlParams = new URLSearchParams(window.location.search)
+      const topicId = urlParams.get('topic')
+      if (!topicId) return
+
+      // Already open? Don't re-open.
+      if (detailTopicRef.current?.topicId === topicId) return
+
+      // First, check if the topic is already in the loaded topics list
+      // (fastest path — no API call needed).
+      const found = topics.find((t) => t.topicId === topicId)
+      if (found) {
+        handleOpenDetailRef.current?.(found)
+        return
+      }
+
+      // Not in the loaded list — fetch from /api/topic/[id]
+      // Retry with exponential backoff: 0ms, 1000ms, 2000ms, 4000ms
+      const delays = [0, 1000, 2000, 4000]
+      for (let i = 0; i < delays.length; i++) {
+        if (cancelled) return
+        if (i > 0) {
+          await new Promise((resolve) => {
+            retryTimer = setTimeout(resolve, delays[i])
+          })
+          if (cancelled) return
+        }
+
+        try {
+          const topicRes = await fetch(`/api/topic/${topicId}`, { cache: 'no-store' })
+          if (!topicRes.ok) {
+            // 404 = topic doesn't exist at all, stop retrying
+            if (topicRes.status === 404) {
+              console.warn(`[topic-watcher] Topic ${topicId} not found (404)`)
+              return
+            }
+            // 5xx = transient, retry
+            continue
+          }
+          const topicJson = await topicRes.json()
+          if (cancelled) return
+          if (topicJson.topic) {
+            handleOpenDetailRef.current?.(topicJson.topic)
+            return
+          }
+        } catch {
+          // network error — retry
+          continue
+        }
+      }
+
+      // All retries failed — last resort, the topic just isn't available.
+      console.warn(`[topic-watcher] Failed to open topic ${topicId} after ${delays.length} attempts`)
+    }
+
+    // Trigger on mount (covers ?topic= in initial URL)
+    openTopicFromUrl()
+
+    // Trigger on URL changes (popstate — back/forward, SW navigate)
+    const popstateHandler = () => openTopicFromUrl()
+    window.addEventListener('popstate', popstateHandler)
+
+    // Trigger on SW 'open-topic' message (covers app-already-open case)
+    const messageHandler = (event: MessageEvent) => {
+      if (event.data?.type === 'open-topic' && event.data?.topicId) {
+        // The topicId might not be in our current `topics` array (different
+        // category loaded), so always go through the full openTopicFromUrl
+        // flow which falls back to /api/topic/[id].
+        // But first, ensure the URL has ?topic= so the topic-open history
+        // entry is correct.
+        if (!window.location.search.includes(`topic=${event.data.topicId}`)) {
+          const url = new URL(window.location.href)
+          url.searchParams.set('topic', event.data.topicId)
+          window.history.pushState({ detailOpen: true }, '', url.toString())
+        }
+        openTopicFromUrl()
+      }
+    }
+    navigator.serviceWorker?.addEventListener('message', messageHandler)
+    window.addEventListener('message', messageHandler)
+
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+      window.removeEventListener('popstate', popstateHandler)
+      navigator.serviceWorker?.removeEventListener('message', messageHandler)
+      window.removeEventListener('message', messageHandler)
+    }
+  }, [topics])
+
   // --- Referral dialog state ---
   const [referralOpen, setReferralOpen] = useState(false)
 
