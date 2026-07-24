@@ -1,7 +1,7 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-const CACHE_NAME = 'neutralwire-v4'
+const CACHE_NAME = 'neutralwire-v5'
 const STATIC_ASSETS = ['/', '/manifest.json', '/favicon-32.png']
 
 // ---------- Install ----------
@@ -88,8 +88,16 @@ self.addEventListener('push', (event) => {
     data: {
       url: data.url,
       notifId: data.notifId,
+      topicTitle: data.body, // store the title so we can use it for like/dislike tracking
     },
     image: data.image,
+    // Like + Dislike action buttons (shown at the bottom of the notification
+    // on Android Chrome and desktop Chrome).
+    // iOS Safari doesn't support action buttons, so taps still open the story.
+    actions: [
+      { action: 'like', title: '👍 Like', icon: '/icon-192.png' },
+      { action: 'dislike', title: '👎 Dislike', icon: '/icon-192.png' },
+    ],
   }
 
   event.waitUntil(
@@ -100,11 +108,31 @@ self.addEventListener('push', (event) => {
 // ---------- Notification click ----------
 // Opens the specific news story URL (not just the app homepage).
 // Also tracks the click for the prediction system.
+//
+// Handles action buttons (Like/Dislike) at the bottom of the notification.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
 
   const url = event.notification.data?.url || '/'
   const notifId = event.notification.data?.notifId
+  const topicTitle = event.notification.data?.topicTitle || ''
+
+  // Handle action buttons (Like / Dislike)
+  if (event.action === 'like' || event.action === 'dislike') {
+    // Track the like/dislike — this bumps engagement for the story's sectors
+    // so future notifications + the Relevant tab get more/less of this topic.
+    fetch('/api/notification/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notifId,
+        action: event.action, // 'like' or 'dislike'
+        title: topicTitle,
+      }),
+    }).catch(() => {})
+    // Don't open the app — just record the feedback silently.
+    return
+  }
 
   // Track the click (fire and forget).
   if (notifId) {
@@ -114,7 +142,7 @@ self.addEventListener('notificationclick', (event) => {
       body: JSON.stringify({
         notifId,
         action: 'click',
-        title: event.notification.body || '',
+        title: topicTitle,
       }),
     }).catch(() => {})
   }

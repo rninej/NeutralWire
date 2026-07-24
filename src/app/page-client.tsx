@@ -463,10 +463,18 @@ export default function Home() {
     // Compute boost for each topic and sort descending. Stable sort
     // preserves original order for ties (so equal-boost stories keep
     // their aggregator ordering, which already prioritises local + fresh).
-    return list
+    //
+    // Topics with very negative scores (< -10) are HIDDEN — the user has
+    // strongly disliked this sector, so we don't show them at all.
+    const scored = list
       .map((t) => ({ topic: t, score: personalizationBoost(t, interests, engagement) }))
       .sort((a, b) => b.score - a.score)
-      .map((entry) => entry.topic)
+
+    // Hide heavily-disliked topics (score < -10)
+    const visible = scored.filter((entry) => entry.score > -10)
+    // If hiding everything would leave nothing, show all (better than empty)
+    const finalList = visible.length > 0 ? visible : scored
+    return finalList.map((entry) => entry.topic)
   }, [topics, debouncedSearch, interests, engagement])
 
   // Track whether local search yielded no results — triggers API search.

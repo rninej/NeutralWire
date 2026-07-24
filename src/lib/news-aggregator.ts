@@ -503,6 +503,148 @@ Which story numbers (1-${aiTopics.length}) should appear in the "${countryName} 
   }
 }
 
+// ── Sports AI filter (separate cache key from country filters) ──
+// Reuses the same default-deny + Firebase persistence pattern as the
+// country filter, but with a sports-specific prompt.
+const AI_SPORTS_CACHE_KEY = '__sports__'
+
+/**
+ * Use the AI fallback chain to filter + rank SPORTS topics.
+ *
+ * Sports RSS feeds sometimes include non-sports articles (business stories
+ * about a team's finances, celebrity gossip about an athlete). The AI
+ * filters those out and ranks the genuine sports stories by importance.
+ *
+ * Same default-deny model as the country filter — new topics are HIDDEN
+ * until the AI explicitly approves them.
+ */
+async function aiFilterAndRankSportsTopics(
+  topics: TopicArticle[],
+): Promise<TopicArticle[]> {
+  if (topics.length === 0) return topics
+
+  const cc = AI_SPORTS_CACHE_KEY
+  const previouslyApproved = await loadApprovedTopicIds(cc)
+
+  const cached = AI_FILTER_CACHE.get(cc)
+  const cacheFresh = cached && Date.now() - cached.ts < AI_FILTER_CACHE_TTL_MS
+
+  const newTopics = topics.filter(
+    (t) => !previouslyApproved.has(t.topicId) && (!cacheFresh || !cached!.approvedTopicIds.has(t.topicId)),
+  )
+
+  if (newTopics.length === 0 && cacheFresh && cached) {
+    const topicMap = new Map(topics.map((t) => [t.topicId, t]))
+    const ranked = cached.rankedTopicIds
+      .map((id) => topicMap.get(id))
+      .filter((t): t is TopicArticle => t !== undefined)
+    if (ranked.length > 0) {
+      console.log(`[ai-filter] Sports cache hit (${ranked.length} topics, 0 new)`)
+      return ranked
+    }
+  }
+
+  const now = Date.now()
+  const aiTopics = topics.slice(0, 40)
+  const storyList = aiTopics.map((t, i) => {
+    const ageH = Math.round((now - t.latestSeen) / (60 * 60 * 1000))
+    const summary = (t.summary || '').slice(0, 120)
+    return `${i + 1}. [${ageH}h old, ${t.coverage} sources] ${t.title}${summary ? ` — ${summary}` : ''}`
+  }).join('\n')
+
+  const systemPrompt = `You are a sports news editor for NeutralWire. Your job is to decide which stories are genuinely about SPORTS and should appear in the "Sports" section.
+
+INCLUSION RULES:
+- INCLUDE stories about any sport: football, cricket, rugby, tennis, F1, golf, boxing, UFC, athletics, basketball, baseball, NFL, NHL, Olympics, cycling, swimming, etc.
+- INCLUDE match results, transfers, injuries, team news, player interviews, coaching changes, league standings, tournaments.
+- INCLUDE sports business news ONLY if it's primarily about the sport (e.g. "Premier League agrees new TV deal" = INCLUDE; "Manchester United stock price drops" = EXCLUDE if it's pure finance).
+
+EXCLUSION RULES:
+- EXCLUDE pure business/finance stories about sports teams (stock prices, sponsorship deals with no sporting angle).
+- EXCLUDE celebrity gossip about athletes that isn't about their sport.
+- EXCLUDE political stories that mention sports tangentially.
+- EXCLUDE non-sports content that slipped into the sports RSS feed.
+
+RANKING:
+- Rank by IMPORTANCE (major matches, transfers, breaking news = highest) and RECENCY (newer = higher).
+- A Champions League final ranks above a minor league result.
+
+OUTPUT FORMAT:
+- Return ONLY a comma-separated list of story numbers (1-${aiTopics.length}) in ranked order.
+- Only include stories that are genuinely about SPORTS.
+- Most important/newest first.
+- Example: 3,1,7,5,12,2,8
+- No explanation, no other text, JUST the numbers.`
+
+  const userPrompt = `Stories:
+${storyList}
+
+Which story numbers (1-${aiTopics.length}) are genuinely about SPORTS? Return them as a comma-separated list in ranked order (most important/newest first). ONLY the numbers.`
+
+  try {
+    const aiResponse = await callAI({ systemPrompt, userPrompt })
+
+    if (!aiResponse) {
+      console.warn(`[ai-filter] AI returned no response for sports, returning ${previouslyApproved.size} previously-approved`)
+      return topics
+        .filter((t) => previouslyApproved.has(t.topicId))
+        .sort((a, b) => b.coverage - a.coverage)
+    }
+
+    const numbers = aiResponse
+      .replace(/[^0-9,\s]/g, ' ')
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((s) => parseInt(s, 10))
+      .filter((n) => !isNaN(n) && n >= 1 && n <= aiTopics.length)
+
+    if (numbers.length === 0) {
+      return topics
+        .filter((t) => previouslyApproved.has(t.topicId))
+        .sort((a, b) => b.coverage - a.coverage)
+    }
+
+    const rankedTopics: TopicArticle[] = []
+    const newlyApproved: string[] = []
+    for (const n of numbers) {
+      const topic = aiTopics[n - 1]
+      if (topic && !rankedTopics.find((t) => t.topicId === topic.topicId)) {
+        rankedTopics.push(topic)
+        if (!previouslyApproved.has(topic.topicId)) {
+          newlyApproved.push(topic.topicId)
+        }
+      }
+    }
+
+    if (rankedTopics.length === 0) {
+      return topics
+        .filter((t) => previouslyApproved.has(t.topicId))
+        .sort((a, b) => b.coverage - a.coverage)
+    }
+
+    console.log(`[ai-filter] Sports: AI approved ${rankedTopics.length}/${topics.length} (${newlyApproved.length} new)`)
+
+    if (newlyApproved.length > 0) {
+      await persistApprovedTopicIds(cc, newlyApproved)
+    }
+
+    const allApproved = new Set([...previouslyApproved, ...rankedTopics.map((t) => t.topicId)])
+    AI_FILTER_CACHE.set(cc, {
+      ts: Date.now(),
+      approvedTopicIds: allApproved,
+      rankedTopicIds: rankedTopics.map((t) => t.topicId),
+    })
+
+    return rankedTopics
+  } catch (err) {
+    console.warn(`[ai-filter] Sports AI failed, returning ${previouslyApproved.size} previously-approved:`, err)
+    return topics
+      .filter((t) => previouslyApproved.has(t.topicId))
+      .sort((a, b) => b.coverage - a.coverage)
+  }
+}
+
 // Display names for the AI prompt
 const COUNTRY_DISPLAY_NAMES: Record<string, string> = {
   GB: 'United Kingdom',
@@ -1195,6 +1337,7 @@ export async function aggregateCategory(
     const countryCode = options.countryCode || ''
     const isRelevantMode = category === 'relevant' && localSet.size > 0
     const isMyCountryMode = category === 'mycountry' && localSet.size > 0
+    const isSportsMode = category === 'sports'
 
     const topics = clusterTopics(fresh, (isRelevantMode || isMyCountryMode) ? localSet : new Set())
 
@@ -1214,9 +1357,16 @@ export async function aggregateCategory(
     //
     // The AI result is cached per-country for 8 minutes to avoid calling
     // the AI on every page load.
+    //
+    // For `sports` mode: same AI filter, but asks "is this about sports?"
+    // to eliminate non-sports outliers that slip through the RSS feeds
+    // (e.g. a "sports" feed might include business articles about a team's
+    // finances — the AI filters those out).
     let relevantTopics: TopicArticle[]
     if (isMyCountryMode && countryCode) {
       relevantTopics = await aiFilterAndRankCountryTopics(topics, countryCode)
+    } else if (isSportsMode) {
+      relevantTopics = await aiFilterAndRankSportsTopics(topics)
     } else {
       relevantTopics = topics
     }
@@ -1245,11 +1395,11 @@ export async function aggregateCategory(
     // minCoverage and slice to limit. The AI's order is the final order.
     //
     // For `relevant` mode, we still use the local-boost sort (the AI
-    // filter is only for `mycountry`).
+    // filter is only for `mycountry` and `sports`).
     //
     // For other categories, sort by coverage desc then recency desc.
     let filtered: TopicArticle[]
-    if (isMyCountryMode) {
+    if (isMyCountryMode || isSportsMode) {
       // AI already ranked — just filter + slice, preserve AI order
       filtered = relevantTopics
         .filter((t) => t.coverage >= minCoverage)

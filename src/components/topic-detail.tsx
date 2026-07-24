@@ -13,6 +13,8 @@ import {
   TrendingUp,
   MessageCircle,
   Send,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -51,6 +53,8 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   const [shared, setShared] = React.useState(false)
   const [imgError, setImgError] = React.useState(false)
   const [askAiOpen, setAskAiOpen] = React.useState(false)
+  // Like/dislike state: null = no vote, 'liked' = thumbs up, 'disliked' = thumbs down
+  const [likeState, setLikeState] = React.useState<'liked' | 'disliked' | null>(null)
 
   // Lock body scroll when open.
   React.useEffect(() => {
@@ -141,12 +145,14 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   }, [topic.topicId, topic.title, topic.articles])
 
   const handleShare = async () => {
-    // Share the NeutralWire page URL, not the news provider link.
+    // Share ONLY the URL — no title, no summary text.
+    // Some apps (WhatsApp, Messages) append the `text` field to the URL
+    // which looks messy. Sending just the URL keeps shares clean.
     const shareUrl = `${window.location.origin}/?topic=${topic.topicId}`
     const shareData = {
-      title: `NeutralWire: ${topic.title}`,
-      text: topic.summary || topic.title,
+      title: 'NeutralWire',
       url: shareUrl,
+      // No `text` field — only the URL gets shared
     }
     // Track engagement: sharing is a strong signal (+15 per sector)
     const deviceId = getDeviceId()
@@ -157,14 +163,39 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
       if (navigator.share) {
         await navigator.share(shareData)
       } else {
-        await navigator.clipboard.writeText(
-          `${topic.title}\n\n${shareUrl}`,
-        )
+        // Clipboard fallback — also just the URL, no title/text
+        await navigator.clipboard.writeText(shareUrl)
         setShared(true)
         setTimeout(() => setShared(false), 2000)
       }
     } catch {
       // User cancelled or clipboard failed — silent.
+    }
+  }
+
+  const handleLike = () => {
+    // Toggle: if already liked, unlike (revert to neutral). If disliked, switch to liked.
+    const newVote = likeState === 'liked' ? null : 'liked'
+    setLikeState(newVote)
+    const deviceId = getDeviceId()
+    if (deviceId && newVote === 'liked') {
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'like').catch(() => {})
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
+      }, 300)
+    }
+  }
+
+  const handleDislike = () => {
+    // Toggle: if already disliked, revert to neutral. If liked, switch to disliked.
+    const newVote = likeState === 'disliked' ? null : 'disliked'
+    setLikeState(newVote)
+    const deviceId = getDeviceId()
+    if (deviceId && newVote === 'disliked') {
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'dislike').catch(() => {})
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
+      }, 300)
     }
   }
 
@@ -183,13 +214,42 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
       aria-modal="true"
       aria-label={topic.title}
     >
-      {/* Sticky top bar with close + share */}
+      {/* Sticky top bar with close + like/dislike + share */}
       <div className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
         </Button>
         <div className="ml-auto flex items-center gap-2">
+          {/* Like + Dislike buttons (left of Share) */}
+          <div className="flex items-center gap-1 rounded-full border bg-muted/40 p-0.5">
+            <button
+              type="button"
+              onClick={handleLike}
+              className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
+                likeState === 'liked'
+                  ? 'bg-emerald-500 text-white'
+                  : 'text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-600'
+              }`}
+              aria-label="Like this story"
+              title="Like — helps personalise your feed"
+            >
+              <ThumbsUp className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={handleDislike}
+              className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
+                likeState === 'disliked'
+                  ? 'bg-rose-500 text-white'
+                  : 'text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600'
+              }`}
+              aria-label="Dislike this story"
+              title="Dislike — fewer stories like this"
+            >
+              <ThumbsDown className="h-4 w-4" />
+            </button>
+          </div>
           <button
             type="button"
             onClick={handleShare}

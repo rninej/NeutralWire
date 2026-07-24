@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { X, Heart, Clock } from 'lucide-react'
+import { X, Heart } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   SECTORS,
@@ -11,23 +11,27 @@ import {
 import { getDeviceId } from '@/lib/referral'
 
 const ONBOARDED_KEY = 'neutralwire:onboarded'
-const USAGE_KEY = 'neutralwire:usage-time'
+const ARTICLES_OPENED_KEY = 'neutralwire:articles-opened'
 const DONATE_SHOWN_KEY = 'neutralwire:donate-shown-at'
-const DONATE_NEXT_KEY = 'neutralwire:donate-next-delay'
+const DONATE_NEXT_KEY = 'neutralwire:donate-next-threshold'
 const DONATE_PRESSED_KEY = 'neutralwire:donate-pressed'
 
-// Interests are now managed via @/lib/user-interests (localStorage key
-// 'neutralwire:interests'), so the news page can read them too.
+// Donation popup thresholds (in number of articles opened).
+// First popup after 10 articles, then doubles: 20 → 40 → 80 → 160...
+const INITIAL_THRESHOLD = 10
 
 /**
- * PWA Onboarding + Donation Timer.
+ * PWA Onboarding + Donation Trigger.
  *
  * Shows on first launch in the installed PWA:
  * 1. Interest selection popup (pick sectors → saved to localStorage + Firebase)
- * 2. Usage timer runs in background
- * 3. After 1 hour of usage → donation popup (Ko-fi)
- * 4. If dismissed: next popup after 2x the delay (2h → 4h → 8h → 16h)
+ * 2. Tracks how many news articles the user opens
+ * 3. After 10 articles opened → donation popup (Ko-fi)
+ * 4. If dismissed: next popup after 2x the threshold (20 → 40 → 80 → 160)
  * 5. If pressed (donated): next popup after 3 months
+ *
+ * The article-open count is incremented by listening to the
+ * 'neutralwire:topic-opened' custom event (dispatched by TopicDetail).
  */
 export function PwaOnboarding() {
   const [showOnboarding, setShowOnboarding] = React.useState(false)
@@ -53,13 +57,14 @@ export function PwaOnboarding() {
       if (saved) setSelected(new Set(JSON.parse(saved)))
     } catch { /* ignore */ }
 
-    // Donation popup check (defined BEFORE usage to satisfy the linter).
-    const checkDonationPopup = (totalUsageMs: number) => {
+    // ── Donation popup check ──
+    // Triggered when the user has opened enough news articles.
+    const checkDonationPopup = (articlesOpened: number) => {
       const pressed = localStorage.getItem(DONATE_PRESSED_KEY) === 'true'
       const shownAt = parseInt(localStorage.getItem(DONATE_SHOWN_KEY) || '0', 10)
-      let nextDelay = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
+      let nextThreshold = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
 
-      // If pressed (donated), wait 3 months
+      // If pressed (donated), wait 3 months before showing again
       if (pressed) {
         const threeMonths = 90 * 24 * 60 * 60 * 1000
         if (Date.now() - shownAt > threeMonths) {
@@ -70,66 +75,42 @@ export function PwaOnboarding() {
         return
       }
 
-      // First time: show after 1 hour (3600000 ms)
-      if (nextDelay === 0) nextDelay = 60 * 60 * 1000 // 1 hour
+      // First time: show after 10 articles
+      if (nextThreshold === 0) nextThreshold = INITIAL_THRESHOLD
 
-      // Show if total usage exceeds shownAt + nextDelay
-      if (totalUsageMs > nextDelay && Date.now() - shownAt > nextDelay) {
+      // Show if articles opened exceeds the threshold
+      if (articlesOpened >= nextThreshold) {
         setShowDonate(true)
       }
     }
 
-    // ── Usage timer ──
-    let usageInterval: ReturnType<typeof setInterval>
-    let lastActive = Date.now()
-
-    const trackUsage = () => {
-      const now = Date.now()
-      const elapsed = now - lastActive
-      lastActive = now
-
-      // Only count if less than 5 min since last check (user is active)
-      if (elapsed < 5 * 60 * 1000) {
-        let total = parseInt(localStorage.getItem(USAGE_KEY) || '0', 10)
-        total += elapsed
-        localStorage.setItem(USAGE_KEY, String(total))
-
-        // Check if we should show donation popup
-        checkDonationPopup(total)
-      }
+    // ── Article-open counter ──
+    // Incremented every time the user opens a news article (TopicDetail).
+    const handleTopicOpened = () => {
+      let count = parseInt(localStorage.getItem(ARTICLES_OPENED_KEY) || '0', 10)
+      count += 1
+      localStorage.setItem(ARTICLES_OPENED_KEY, String(count))
+      checkDonationPopup(count)
     }
 
-    usageInterval = setInterval(trackUsage, 30 * 1000) // check every 30s
-
-    // Reset lastActive on user interaction
-    const resetActive = () => { lastActive = Date.now() }
-    window.addEventListener('click', resetActive)
-    window.addEventListener('scroll', resetActive)
-    window.addEventListener('keydown', resetActive)
+    window.addEventListener('neutralwire:topic-opened', handleTopicOpened)
 
     return () => {
-      clearInterval(usageInterval)
-      window.removeEventListener('click', resetActive)
-      window.removeEventListener('scroll', resetActive)
-      window.removeEventListener('keydown', resetActive)
+      window.removeEventListener('neutralwire:topic-opened', handleTopicOpened)
     }
   }, [])
 
   const handleOnboardingComplete = async () => {
     const sectorsArray = Array.from(selected)
     localStorage.setItem(ONBOARDED_KEY, 'true')
-    // Save to localStorage (read by news page) AND Firebase (read by cron)
     setInterestsLocal(sectorsArray)
     setShowOnboarding(false)
 
-    // Sync to Firebase for per-user notifications
     const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
     if (deviceId) {
       syncInterestsWithFirebase(deviceId, sectorsArray).catch(() => {})
     }
 
-    // Notify the rest of the app that interests changed (so the news
-    // page can re-sort the feed immediately without a reload).
     window.dispatchEvent(new CustomEvent('neutralwire:interests-changed'))
   }
 
@@ -151,9 +132,10 @@ export function PwaOnboarding() {
   }
 
   const handleDonateDismiss = () => {
-    const currentDelay = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
-    const newDelay = currentDelay === 0 ? 2 * 60 * 60 * 1000 : currentDelay * 2 // double: 2h → 4h → 8h → 16h
-    localStorage.setItem(DONATE_NEXT_KEY, String(newDelay))
+    const currentThreshold = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
+    // Double the threshold: 10 → 20 → 40 → 80 → 160...
+    const newThreshold = currentThreshold === 0 ? INITIAL_THRESHOLD * 2 : currentThreshold * 2
+    localStorage.setItem(DONATE_NEXT_KEY, String(newThreshold))
     localStorage.setItem(DONATE_SHOWN_KEY, String(Date.now()))
     setShowDonate(false)
   }

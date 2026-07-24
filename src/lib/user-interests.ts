@@ -104,16 +104,24 @@ function saveEngagement(stats: EngagementStats): void {
  *   - 'ai'       → user asked AI about a story (+10)
  *   - 'share'    → user shared a story (+15, stronger signal)
  *   - 'time'     → user spent time reading (called periodically, +2)
+ *   - 'like'     → user tapped the like button (+20, strong positive signal)
+ *   - 'dislike'  → user tapped the dislike button (-15, strong negative signal)
  */
 export async function bumpEngagement(
   deviceId: string,
   sector: string,
   amount: number = 10,
-  reason: 'click' | 'ai' | 'share' | 'time' = 'click',
+  reason: 'click' | 'ai' | 'share' | 'time' | 'like' | 'dislike' = 'click',
 ): Promise<void> {
   const stats = getEngagement()
   const current = stats[sector] || { score: 0, clicks: 0, lastUpdate: 0 }
-  current.score = Math.min(100, current.score + amount)
+  // Like/Dislike can go negative (down to -50) to strongly signal distaste.
+  // Other reasons cap at 0..100.
+  if (reason === 'dislike') {
+    current.score = Math.max(-50, current.score + amount)
+  } else {
+    current.score = Math.min(100, current.score + amount)
+  }
   current.clicks += 1
   current.lastUpdate = Date.now()
   stats[sector] = current
@@ -150,11 +158,17 @@ export async function bumpEngagementForTopic(
   deviceId: string,
   title: string,
   summary: string = '',
-  reason: 'click' | 'ai' | 'share' | 'time' = 'click',
+  reason: 'click' | 'ai' | 'share' | 'time' | 'like' | 'dislike' = 'click',
 ): Promise<void> {
   const sectors = detectSectors(title, summary)
   for (const sector of sectors) {
-    await bumpEngagement(deviceId, sector, reason === 'share' ? 15 : reason === 'time' ? 2 : 10, reason)
+    const amount =
+      reason === 'share' ? 15 :
+      reason === 'like' ? 20 :
+      reason === 'dislike' ? -15 :
+      reason === 'time' ? 2 :
+      10 // click, ai
+    await bumpEngagement(deviceId, sector, amount, reason)
   }
 }
 
@@ -259,11 +273,15 @@ export function detectSectors(title: string, summary: string = ''): string[] {
  *
  * Used by the news page to reorder the "Relevant" tab.
  *
- * Formula:
- *   base = topic.coverage (so high-coverage stories still rank well)
- *   + 3.0 × (interest match count)         → user picked this sector
- *   + 0.05 × (engagement score sum 0..100) → user clicks this sector often
- *   capped so a single topic can't get more than +8 boost
+ * Formula (strongly weighted — interest/engagement dominates over coverage):
+ *   base = topic.coverage * 2
+ *   + 12 × (interest match count)         → user picked this sector (+12 each)
+ *   + 0.3 × (engagement score sum)        → user clicks/likes this sector (+0.3 per point)
+ *   - 0.5 × (negative engagement)         → user DISLIKED this sector (strong demote)
+ *   - 25 if title matches "boring" patterns (Trump minutiae, US polls, etc.)
+ *
+ * A topic the user likes can easily beat a 12-source international story.
+ * A topic the user disliked gets pushed to the bottom.
  */
 export function personalizationBoost(
   topic: { title: string; summary: string; coverage: number },
@@ -271,15 +289,45 @@ export function personalizationBoost(
   engagement: EngagementStats,
 ): number {
   const sectors = detectSectors(topic.title, topic.summary)
-  let boost = topic.coverage
+  let boost = topic.coverage * 2
 
   let interestMatch = 0
   let engScore = 0
+  let negEngScore = 0
   for (const sector of sectors) {
     if (interests.includes(sector)) interestMatch += 1
-    engScore += engagement[sector]?.score || 0
+    const score = engagement[sector]?.score || 0
+    if (score < 0) {
+      negEngScore += Math.abs(score) // disliked sector
+    } else {
+      engScore += score
+    }
   }
 
-  boost += Math.min(8, interestMatch * 3.0 + engScore * 0.05)
+  boost += interestMatch * 12
+  boost += engScore * 0.3
+  boost -= negEngScore * 0.5 // strong demote for disliked sectors
+
+  // Boring pattern filter — Trump minutiae, US polls, etc.
+  // These get a heavy penalty so they don't show in Relevant unless extremely high coverage.
+  const titleLower = topic.title.toLowerCase()
+  const boringPatterns = [
+    'trump says', 'trump claims', 'trump attacks', 'trump threatens',
+    'trump praises', 'trump blasts', 'trump lashes', 'trump insists',
+    'trump calls', 'trump urges', 'trump defends', 'trump mocks',
+    'gop rep', 'senator says', 'congressman says', 'house rep says',
+    'poll numbers', 'approval rating', 'trump approval',
+    'trump tweets', 'trump posts on', 'trump social',
+    'trump campaign', 'trump re-election', 'trump 2028',
+    'gop primary', 'democratic primary',
+    'trump vows to', 'trump promises',
+  ]
+  for (const pattern of boringPatterns) {
+    if (titleLower.includes(pattern)) {
+      boost -= 25
+      break
+    }
+  }
+
   return boost
 }

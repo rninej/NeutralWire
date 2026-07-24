@@ -48,6 +48,7 @@ export const CATEGORIES = [
   'technology',
   'science',
   'health',
+  'sports',
 ] as const
 
 export type Category = (typeof CATEGORIES)[number]
@@ -62,6 +63,7 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   technology: 'Tech',
   science: 'Science',
   health: 'Health',
+  sports: 'Sports',
 }
 
 /**
@@ -77,6 +79,7 @@ export const SECONDARY_CATEGORIES: Category[] = [
   'technology',
   'science',
   'health',
+  'sports',
 ]
 
 export const NEWS_SOURCES: NewsSource[] = [
@@ -95,6 +98,12 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://www.theguardian.com/business/rss', category: 'business' },
       { url: 'https://www.theguardian.com/technology/rss', category: 'technology' },
       { url: 'https://www.theguardian.com/science/rss', category: 'science' },
+      { url: 'https://www.theguardian.com/sport/rss', category: 'sports' },
+      { url: 'https://www.theguardian.com/football/rss', category: 'sports' },
+      { url: 'https://www.theguardian.com/sport/cricket/rss', category: 'sports' },
+      { url: 'https://www.theguardian.com/sport/rugby-union/rss', category: 'sports' },
+      { url: 'https://www.theguardian.com/sport/tennis/rss', category: 'sports' },
+      { url: 'https://www.theguardian.com/sport/formulaone/rss', category: 'sports' },
     ],
   },
   {
@@ -218,6 +227,12 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://feeds.bbci.co.uk/news/technology/rss.xml', category: 'technology' },
       { url: 'https://feeds.bbci.co.uk/news/science_and_environment/rss.xml', category: 'science' },
       { url: 'https://feeds.bbci.co.uk/news/health/rss.xml', category: 'health' },
+      { url: 'https://feeds.bbci.co.uk/sport/rss.xml', category: 'sports' },
+      { url: 'https://feeds.bbci.co.uk/sport/football/rss.xml', category: 'sports' },
+      { url: 'https://feeds.bbci.co.uk/sport/cricket/rss.xml', category: 'sports' },
+      { url: 'https://feeds.bbci.co.uk/sport/rugby-union/rss.xml', category: 'sports' },
+      { url: 'https://feeds.bbci.co.uk/sport/tennis/rss.xml', category: 'sports' },
+      { url: 'https://feeds.bbci.co.uk/sport/formula1/rss.xml', category: 'sports' },
     ],
   },
   {
@@ -242,6 +257,7 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml', category: 'technology' },
       { url: 'https://rss.nytimes.com/services/xml/rss/nyt/Science.xml', category: 'science' },
       { url: 'https://rss.nytimes.com/services/xml/rss/nyt/Health.xml', category: 'health' },
+      { url: 'https://rss.nytimes.com/services/xml/rss/nyt/Sports.xml', category: 'sports' },
     ],
   },
   {
@@ -350,6 +366,7 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://feeds.foxnews.com/foxnews/national', category: 'top' },
       { url: 'https://feeds.foxnews.com/foxnews/scitech', category: 'science' },
       { url: 'https://feeds.foxnews.com/foxnews/health', category: 'health' },
+      { url: 'https://feeds.foxnews.com/foxnews/sports', category: 'sports' },
     ],
   },
   {
@@ -473,6 +490,7 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://feeds.skynews.com/feeds/rss/business.xml', category: 'business' },
       { url: 'https://feeds.skynews.com/feeds/rss/technology.xml', category: 'technology' },
       { url: 'https://feeds.skynews.com/feeds/rss/strange.xml', category: 'world' },
+      { url: 'https://feeds.skynews.com/feeds/rss/sport.xml', category: 'sports' },
     ],
   },
   {
@@ -488,6 +506,7 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://www.telegraph.co.uk/business/rss', category: 'business' },
       { url: 'https://www.telegraph.co.uk/technology/rss', category: 'technology' },
       { url: 'https://www.telegraph.co.uk/science/rss', category: 'science' },
+      { url: 'https://www.telegraph.co.uk/sport/rss', category: 'sports' },
     ],
   },
   {
@@ -504,6 +523,8 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://www.independent.co.uk/life-style/gadgets-and-tech/rss', category: 'technology' },
       { url: 'https://www.independent.co.uk/news/science/rss', category: 'science' },
       { url: 'https://www.independent.co.uk/news/health/rss', category: 'health' },
+      { url: 'https://www.independent.co.uk/sport/rss', category: 'sports' },
+      { url: 'https://www.independent.co.uk/sport/football/rss', category: 'sports' },
     ],
   },
   {
@@ -519,6 +540,8 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://www.dailymail.co.uk/money/index.rss', category: 'business' },
       { url: 'https://www.dailymail.co.uk/sciencetech/index.rss', category: 'science' },
       { url: 'https://www.dailymail.co.uk/health/index.rss', category: 'health' },
+      { url: 'https://www.dailymail.co.uk/sport/index.rss', category: 'sports' },
+      { url: 'https://www.dailymail.co.uk/sport/football/index.rss', category: 'sports' },
     ],
   },
   {
@@ -531,7 +554,8 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://www.mirror.co.uk/news/?service=rss', category: 'top' },
       { url: 'https://www.mirror.co.uk/news/uk-news/?service=rss', category: 'world' },
       { url: 'https://www.mirror.co.uk/news/politics/?service=rss', category: 'politics' },
-      { url: 'https://www.mirror.co.uk/sport/?service=rss', category: 'world' },
+      { url: 'https://www.mirror.co.uk/sport/?service=rss', category: 'sports' },
+      { url: 'https://www.mirror.co.uk/sport/football/?service=rss', category: 'sports' },
     ],
   },
   {
