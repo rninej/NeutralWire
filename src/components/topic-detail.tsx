@@ -688,6 +688,11 @@ function SourceGroup({
   color: string
   articles: TopicArticle['articles']
 }) {
+  // Only render time after mount — formatTime() is timezone-dependent and
+  // would cause hydration mismatch (server uses UTC, client uses local TZ).
+  const [mounted, setMounted] = React.useState(false)
+  React.useEffect(() => setMounted(true), [])
+
   return (
     <div>
       <div className={cn('mb-2 flex items-center gap-2 text-xs font-semibold uppercase', color)}>
