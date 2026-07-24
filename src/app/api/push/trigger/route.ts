@@ -521,19 +521,23 @@ export async function GET(req: NextRequest) {
           // available in personalCandidates as a slimmed-down version, but
           // /api/topic/[id] checks the live cache first, so this archive
           // entry only needs to be a fallback for expired topics.
+          //
+          // NOTE: Firebase RTDB drops empty arrays, so `articles: []` would
+          // become `articles: undefined` on read-back. We store `articles: null`
+          // instead, and /api/topic/[id] defaults it back to [].
           archivePromises.push(
             firebaseWrite(`archive/${topicId}`, {
               topicId: candidate.topicId,
               title: candidate.title,
               summary: candidate.summary || '',
               imageUrl: candidate.imageUrl || null,
-              coverage: candidate.coverage,
+              coverage: candidate.coverage || 0,
               leanLeft: 0,
               leanCenter: 0,
               leanRight: 0,
               firstSeen: Date.now(),
               latestSeen: Date.now(),
-              articles: [],
+              articles: null,
               archivedAt: Date.now(),
             }),
           )

@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
           summary,
           generatedAt: Date.now(),
           title: body.title,
-          sourceCount: body.articles.length,
+          sourceCount: Array.isArray(body.articles) ? body.articles.length : 0,
         }
         await firebaseWrite(`${FIREBASE_ROOT}/${body.topicId}`, stored)
 
@@ -152,7 +152,10 @@ export async function POST(req: NextRequest) {
  * a continuation call to complete it.
  */
 async function generateLlmSummary(body: SummaryRequest): Promise<string | null> {
-  const articleContext = body.articles
+  const articlesList = Array.isArray(body.articles) ? body.articles : []
+  if (articlesList.length === 0) return null
+
+  const articleContext = articlesList
     .slice(0, 12)
     .map(
       (a, i) =>
@@ -188,7 +191,7 @@ Rules:
 
   const userPrompt = `Story title: ${body.title}
 
-Coverage from ${body.articles.length} sources across the political spectrum:
+Coverage from ${articlesList.length} sources across the political spectrum:
 
 ${articleContext}
 
@@ -235,7 +238,11 @@ Write a neutral, in-depth summary of this story following the rules above.`
  * 3. Assemble into a 3-paragraph summary with clear structure
  */
 function generateExtractiveSummary(body: SummaryRequest): string {
-  const { title, articles } = body
+  const { title } = body
+  const articles = Array.isArray(body.articles) ? body.articles : []
+  if (articles.length === 0) {
+    return title
+  }
 
   // Sort articles by description length (longest first) to find the most informative.
   const sorted = [...articles].sort(

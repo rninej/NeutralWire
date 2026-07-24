@@ -38,8 +38,23 @@ export async function GET(
     if (archived) {
       // Strip the archivedAt field and return the topic.
       const { archivedAt, ...topic } = archived
+      // CRITICAL: Firebase RTDB drops empty arrays, so `articles: []` stored
+      // in the archive comes back as `articles: undefined`. Default to [] so
+      // the client doesn't crash on `topic.articles.filter()`.
+      const safeTopic: TopicArticle = {
+        ...topic,
+        articles: Array.isArray(topic.articles) ? topic.articles : [],
+        leanLeft: topic.leanLeft ?? 0,
+        leanCenter: topic.leanCenter ?? 0,
+        leanRight: topic.leanRight ?? 0,
+        coverage: topic.coverage ?? 0,
+        firstSeen: topic.firstSeen ?? 0,
+        latestSeen: topic.latestSeen ?? 0,
+        imageUrl: topic.imageUrl ?? null,
+        summary: topic.summary ?? '',
+      }
       return NextResponse.json({
-        topic,
+        topic: safeTopic,
         source: 'archive',
         archivedAt: archivedAt || null,
       })

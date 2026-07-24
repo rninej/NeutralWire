@@ -127,7 +127,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           body: JSON.stringify({
             topicId: topic.topicId,
             title: topic.title,
-            articles: topic.articles.map((a) => ({
+            articles: (topic.articles || []).map((a) => ({
               title: a.title,
               description: a.description,
               sourceName: a.sourceName,
@@ -212,10 +212,15 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
   const showImage = topic.imageUrl && !imgError
 
+  // Guard: topic.articles might be undefined if the topic was loaded from
+  // the Firebase archive (Firebase RTDB drops empty arrays, so `articles: []`
+  // becomes nothing on read-back). Default to [] to prevent crashes.
+  const articles = topic.articles || []
+
   // Group articles by leaning for display.
-  const leftArticles = topic.articles.filter((a) => a.leaning === 'left')
-  const centerArticles = topic.articles.filter((a) => a.leaning === 'center')
-  const rightArticles = topic.articles.filter((a) => a.leaning === 'right')
+  const leftArticles = articles.filter((a) => a.leaning === 'left')
+  const centerArticles = articles.filter((a) => a.leaning === 'center')
+  const rightArticles = articles.filter((a) => a.leaning === 'right')
 
   return (
     <div
@@ -547,7 +552,7 @@ function AskAiPanel({
             question,
             topicTitle: topic.title,
             topicSummary: summary || topic.summary || '',
-            topicArticles: topic.articles.map((a) => ({
+            topicArticles: (topic.articles || []).map((a) => ({
               title: a.title,
               source: a.sourceName,
               leaning: a.leaning,
