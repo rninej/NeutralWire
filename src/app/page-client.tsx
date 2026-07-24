@@ -166,6 +166,10 @@ interface SearchResponse {
 export default function Home() {
   // --- Country detection ---
   const [country, setCountry] = useState<CountryInfo | null>(null)
+  // Only render time-dependent values after mount (avoids hydration mismatch
+  // — server uses UTC, client uses local timezone).
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
   // --- Category / view state ---
   const [category, setCategory] = useState<Category>('relevant')
@@ -928,7 +932,7 @@ export default function Home() {
                 </span>
                 {fetchedAt && (
                   <span className="hidden items-center gap-1 sm:inline-flex">
-                    · updated {fetchedAt.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    · updated {mounted ? fetchedAt.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
                     {isCached && !isFresh && (
                       <span className="text-amber-500">(cached)</span>
                     )}

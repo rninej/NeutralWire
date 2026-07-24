@@ -1,8 +1,11 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-const CACHE_NAME = 'neutralwire-v6'
-const STATIC_ASSETS = ['/', '/manifest.json', '/favicon-32.png']
+const CACHE_NAME = 'neutralwire-v7'
+// Don't cache '/' (the HTML page) — it changes on every deploy and serving
+// stale HTML causes hydration mismatches when the JS bundle is updated.
+// Only cache truly static assets.
+const STATIC_ASSETS = ['/manifest.json', '/favicon-32.png', '/icon-192.png', '/icon-512.png']
 
 // ---------- Install ----------
 self.addEventListener('install', (event) => {
@@ -22,6 +25,57 @@ self.addEventListener('activate', (event) => {
     ),
   )
   self.clients.claim()
+})
+
+// ---------- Fetch handler (network-first for HTML) ----------
+// Navigation requests (HTML pages) ALWAYS go to the network first.
+// This ensures users never see stale HTML after a deploy, which was
+// causing hydration mismatches (old HTML + new JS bundle).
+// Static assets (JS, CSS, images) use cache-first for speed.
+self.addEventListener('fetch', (event) => {
+  const req = event.request
+  // Only handle GET requests
+  if (req.method !== 'GET') return
+
+  // Navigation requests (HTML pages) → network-first
+  if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
+    event.respondWith(
+      (async () => {
+        try {
+          // Try network first
+          const networkRes = await fetch(req, { cache: 'no-store' })
+          return networkRes
+        } catch {
+          // Network failed (offline) — fall back to cached HTML if available
+          const cached = await caches.match(req)
+          if (cached) return cached
+          // No cache either — return a basic offline page
+          return new Response(
+            '<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>You are offline</h2><p>NeutralWire will load when you reconnect.</p></body></html>',
+            { headers: { 'Content-Type': 'text/html' } },
+          )
+        }
+      })(),
+    )
+    return
+  }
+
+  // Static assets (JS, CSS, images, fonts) → cache-first, then network
+  if (req.url.includes('/_next/static/') || req.url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2)$/)) {
+    event.respondWith(
+      caches.match(req).then((cached) => {
+        if (cached) return cached
+        return fetch(req).then((res) => {
+          // Cache successful responses
+          if (res.ok) {
+            const clone = res.clone()
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, clone))
+          }
+          return res
+        })
+      }),
+    )
+  }
 })
 
 // ---------- Message handler ----------

@@ -113,6 +113,10 @@ function SearchTopicCard({
   onOpen?: (topic: TopicArticle) => void
 }) {
   const [imgError, setImgError] = React.useState(false)
+  // Only render time after mount — formatTime() is timezone-dependent and
+  // would cause hydration mismatch (server uses UTC, client uses local TZ).
+  const [mounted, setMounted] = React.useState(false)
+  React.useEffect(() => setMounted(true), [])
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
   const showImage = topic.imageUrl && !imgError
 
@@ -132,7 +136,7 @@ function SearchTopicCard({
           </Badge>
           <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
             <Clock className="h-3 w-3" />
-            {formatTime(topic.latestSeen)}
+            {mounted ? formatTime(topic.latestSeen) : ''}
           </span>
         </div>
         <h3 className="font-semibold leading-snug text-base">

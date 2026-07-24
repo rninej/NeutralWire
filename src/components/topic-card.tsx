@@ -63,6 +63,10 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   // This avoids stale error state from a previous render.
   const [imgErrorMap, setImgErrorMap] = React.useState<Record<string, boolean>>({})
   const imgError = imgErrorMap[imageUrl || ''] || false
+  // Only render time after mount — formatTime() is timezone-dependent and
+  // would cause hydration mismatch (server uses UTC, client uses local TZ).
+  const [mounted, setMounted] = React.useState(false)
+  React.useEffect(() => setMounted(true), [])
 
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
   const showImage = imageUrl && !imgError
@@ -90,7 +94,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
           </Badge>
           <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
             <Clock className="h-3 w-3" />
-            {formatTime(topic.latestSeen)}
+            {mounted ? formatTime(topic.latestSeen) : ''}
           </span>
         </div>
         <h3

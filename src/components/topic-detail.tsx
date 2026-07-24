@@ -61,6 +61,10 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   const [askAiOpen, setAskAiOpen] = React.useState(false)
   // Like/dislike state: null = no vote, 'liked' = thumbs up, 'disliked' = thumbs down
   const [likeState, setLikeState] = React.useState<'liked' | 'disliked' | null>(null)
+  // Only render time after mount — formatTime() is timezone-dependent and
+  // would cause hydration mismatch (server uses UTC, client uses local TZ).
+  const [mounted, setMounted] = React.useState(false)
+  React.useEffect(() => setMounted(true), [])
 
   // Lock body scroll when open.
   React.useEffect(() => {
@@ -282,7 +286,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           </Badge>
           <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
             <Clock className="h-3 w-3" />
-            Updated {formatTime(topic.latestSeen)}
+            Updated {mounted ? formatTime(topic.latestSeen) : ""}
           </span>
           {topic.localCoverage && topic.localCoverage > 0 && (
             <Badge variant="outline" className="text-[10px]">
@@ -703,7 +707,7 @@ function SourceGroup({
               <span className="opacity-50">·</span>
               {a.country}
               <span className="opacity-50">·</span>
-              {formatTime(a.iso)}
+              {mounted ? formatTime(a.iso) : ""}
               <ExternalLink className="ml-auto h-2.5 w-2.5" />
             </div>
           </a>
