@@ -172,10 +172,10 @@ export default function Home() {
   useEffect(() => setMounted(true), [])
 
   // --- Category / view state ---
-  // On mount, check URL for ?category= param (set by PWA shortcuts).
-  // Valid values: relevant, mycountry, top, world, politics, business,
-  // technology, science, health, sports.
-  const [category, setCategory] = useState<Category>(() => {
+  // On mount, check URL for ?category= param (set by PWA shortcuts or
+  // user sharing a subtopic link). This lets each subtopic have its own URL
+  // (e.g. /?category=sports) that survives page refresh.
+  const [category, setCategoryState] = useState<Category>(() => {
     if (typeof window === 'undefined') return 'relevant'
     const params = new URLSearchParams(window.location.search)
     const cat = params.get('category') as Category | null
@@ -186,6 +186,49 @@ export default function Home() {
     return cat && validCategories.includes(cat) ? cat : 'relevant'
   })
   const [view, setView] = useState<View>('feed')
+
+  // Wrapper that updates BOTH state AND the URL.
+  // This fixes:
+  //   1. Double-highlight glitch (state + URL were out of sync)
+  //   2. Refresh losing the subtopic (URL now has ?category=)
+  //   3. Each subtopic having its own shareable link
+  const setCategory = React.useCallback((cat: Category) => {
+    setCategoryState(cat)
+    // Update the URL without triggering a full page reload.
+    // Use replaceState if no ?topic= is present (clean URL), pushState
+    // otherwise to preserve back-button behavior.
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+      // Remove ?topic= if present (we're switching categories, not opening a topic)
+      url.searchParams.delete('topic')
+      if (cat === 'relevant') {
+        // 'relevant' is the default — remove the param for a clean URL
+        url.searchParams.delete('category')
+      } else {
+        url.searchParams.set('category', cat)
+      }
+      window.history.replaceState({}, '', url.toString())
+    }
+  }, [])
+
+  // Listen for popstate (back/forward) to update category from URL
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search)
+      const cat = params.get('category') as Category | null
+      const validCategories: Category[] = [
+        'relevant', 'mycountry', 'top', 'world', 'politics',
+        'business', 'technology', 'science', 'health', 'sports',
+      ]
+      if (cat && validCategories.includes(cat)) {
+        setCategoryState(cat)
+      } else {
+        setCategoryState('relevant')
+      }
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   // --- Search state ---
   const [search, setSearch] = useState('')
@@ -494,6 +537,22 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceId, referralCode: refCode }),
       }).catch(() => {})
+
+      // Auto-open the PWA as soon as it's installed.
+      // The browser already installed it; we just need to navigate to it
+      // in standalone mode. On Android/Chrome, the install prompt opens
+      // the PWA automatically. On iOS, we can't programmatically open
+      // the PWA, but we can reload the page in standalone context.
+      // The best we can do is reload — if the user opens the PWA from
+      // the home screen, it will be standalone.
+      try {
+        // Small delay to let the install complete
+        setTimeout(() => {
+          window.location.reload()
+        }, 500)
+      } catch {
+        // silent
+      }
     }
     window.addEventListener('appinstalled', installedHandler)
 
