@@ -250,8 +250,8 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
                   ? 'bg-emerald-500 text-white'
                   : 'text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-600'
               }`}
-              aria-label="Like this story"
-              title="Like — helps personalise your feed"
+              aria-label="Interested in this story"
+              title="Interested — more stories like this"
             >
               <ThumbsUp className="h-4 w-4" />
             </button>
@@ -263,8 +263,8 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
                   ? 'bg-rose-500 text-white'
                   : 'text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600'
               }`}
-              aria-label="Dislike this story"
-              title="Dislike — fewer stories like this"
+              aria-label="Not interested in this story"
+              title="Not interested — fewer stories like this"
             >
               <ThumbsDown className="h-4 w-4" />
             </button>

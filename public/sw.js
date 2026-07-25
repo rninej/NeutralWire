@@ -1,7 +1,7 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-const CACHE_NAME = 'neutralwire-v8'
+const CACHE_NAME = 'neutralwire-v9'
 // Don't cache '/' (the HTML page) — it changes on every deploy and serving
 // stale HTML causes hydration mismatches when the JS bundle is updated.
 // Only cache truly static assets.
@@ -145,12 +145,16 @@ self.addEventListener('push', (event) => {
       topicTitle: data.body, // store the title so we can use it for like/dislike tracking
     },
     image: data.image,
-    // Like + Dislike action buttons (shown at the bottom of the notification
-    // on Android Chrome and desktop Chrome).
+    // "Interested" + "Not Interested" action buttons (shown at the bottom of
+    // the notification on Android Chrome and desktop Chrome).
     // iOS Safari doesn't support action buttons, so taps still open the story.
+    //
+    // Behavior:
+    //   - Interested      → opens the article (like a regular tap) + tracks positive
+    //   - Not Interested → dismisses the notification + tracks negative (doesn't open)
     actions: [
-      { action: 'like', title: 'Like', icon: '/icon-192.png' },
-      { action: 'dislike', title: 'Dislike', icon: '/icon-192.png' },
+      { action: 'like', title: 'Interested', icon: '/icon-192.png' },
+      { action: 'dislike', title: 'Not Interested', icon: '/icon-192.png' },
     ],
   }
 
@@ -163,7 +167,12 @@ self.addEventListener('push', (event) => {
 // Opens the specific news story URL (not just the app homepage).
 // Also tracks the click for the prediction system.
 //
-// Handles action buttons (Like/Dislike) at the bottom of the notification.
+// Handles action buttons (Interested / Not Interested) at the bottom of the notification.
+//
+// Behavior:
+//   - Regular tap (no action)   → opens story, closes notification
+//   - "Interested" (like)       → opens story, closes notification, tracks positive
+//   - "Not Interested" (dislike) → DOESN'T open story, closes notification, tracks negative
 //
 // REDUNDANCY: Three layers ensure the topic always opens:
 //   1. If a client is open: post a 'open-topic' message AND navigate it
@@ -171,13 +180,15 @@ self.addEventListener('push', (event) => {
 //   3. If both fail: the client-side topic-watcher effect will catch the
 //      ?topic= param on next page load
 self.addEventListener('notificationclick', (event) => {
-  // Only close the notification on a regular tap (opens the story).
-  // For Like/Dislike action buttons, DON'T close — the user might want
-  // to tap both, or read the notification after voting.
-  const isAction = event.action === 'like' || event.action === 'dislike'
-  if (!isAction) {
-    event.notification.close()
-  }
+  const isInterested = event.action === 'like'
+  const isNotInterested = event.action === 'dislike'
+  const isAction = isInterested || isNotInterested
+
+  // Always close the notification:
+  //   - Regular tap → close + open article
+  //   - Interested → close + open article (fall through)
+  //   - Not Interested → close + don't open article (return early)
+  event.notification.close()
 
   const url = event.notification.data?.url || '/'
   const notifId = event.notification.data?.notifId
@@ -194,31 +205,51 @@ self.addEventListener('notificationclick', (event) => {
     if (match) topicId = match[1]
   }
 
-  // Handle action buttons (Like / Dislike)
-  if (event.action === 'like' || event.action === 'dislike') {
+  // Handle action buttons (Interested / Not Interested)
+  if (isAction) {
+    // Track the feedback (positive for Interested, negative for Not Interested)
     fetch('/api/notification/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         notifId,
-        action: event.action,
+        action: event.action, // 'like' or 'dislike'
         title: topicTitle,
       }),
     }).catch(() => {})
-    return
-  }
 
-  // Track the click (fire and forget).
-  if (notifId) {
-    fetch('/api/notification/track', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        notifId,
-        action: 'click',
-        title: topicTitle,
-      }),
-    }).catch(() => {})
+    // "Not Interested" → just dismiss, don't open the article.
+    if (isNotInterested) {
+      return
+    }
+
+    // "Interested" → fall through to open the article (same as regular tap).
+    // Track the click too.
+    if (notifId) {
+      fetch('/api/notification/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notifId,
+          action: 'click',
+          title: topicTitle,
+        }),
+      }).catch(() => {})
+    }
+    // Fall through to the open-article logic below.
+  } else {
+    // Regular tap — track the click (fire and forget).
+    if (notifId) {
+      fetch('/api/notification/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notifId,
+          action: 'click',
+          title: topicTitle,
+        }),
+      }).catch(() => {})
+    }
   }
 
   event.waitUntil(
