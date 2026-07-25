@@ -1,7 +1,7 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-const CACHE_NAME = 'neutralwire-v7'
+const CACHE_NAME = 'neutralwire-v8'
 // Don't cache '/' (the HTML page) — it changes on every deploy and serving
 // stale HTML causes hydration mismatches when the JS bundle is updated.
 // Only cache truly static assets.
@@ -149,8 +149,8 @@ self.addEventListener('push', (event) => {
     // on Android Chrome and desktop Chrome).
     // iOS Safari doesn't support action buttons, so taps still open the story.
     actions: [
-      { action: 'like', title: '👍 Like', icon: '/icon-192.png' },
-      { action: 'dislike', title: '👎 Dislike', icon: '/icon-192.png' },
+      { action: 'like', title: 'Like', icon: '/icon-192.png' },
+      { action: 'dislike', title: 'Dislike', icon: '/icon-192.png' },
     ],
   }
 
@@ -171,7 +171,13 @@ self.addEventListener('push', (event) => {
 //   3. If both fail: the client-side topic-watcher effect will catch the
 //      ?topic= param on next page load
 self.addEventListener('notificationclick', (event) => {
-  event.notification.close()
+  // Only close the notification on a regular tap (opens the story).
+  // For Like/Dislike action buttons, DON'T close — the user might want
+  // to tap both, or read the notification after voting.
+  const isAction = event.action === 'like' || event.action === 'dislike'
+  if (!isAction) {
+    event.notification.close()
+  }
 
   const url = event.notification.data?.url || '/'
   const notifId = event.notification.data?.notifId

@@ -127,6 +127,10 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           body: JSON.stringify({
             topicId: topic.topicId,
             title: topic.title,
+            // Send the topic's own summary as a fallback context for when
+            // articles is empty (e.g. topic loaded from archive without
+            // the full articles array).
+            topicSummary: topic.summary || '',
             articles: (topic.articles || []).map((a) => ({
               title: a.title,
               description: a.description,

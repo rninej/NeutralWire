@@ -23,6 +23,7 @@ const IN_FLIGHT = new Map<string, Promise<string>>()
 interface SummaryRequest {
   topicId: string
   title: string
+  topicSummary?: string
   articles: Array<{
     title: string
     description: string
@@ -53,9 +54,18 @@ interface StoredSummary {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as SummaryRequest
-    if (!body.topicId || !body.title || !body.articles?.length) {
+    // Allow requests with no articles IF we have a topicSummary to fall
+    // back on (e.g. topic loaded from archive without the full articles array).
+    if (!body.topicId || !body.title) {
       return NextResponse.json(
-        { error: 'Missing required fields: topicId, title, articles' },
+        { error: 'Missing required fields: topicId, title' },
+        { status: 400 },
+      )
+    }
+    // If we have NO articles AND no topicSummary, we can't generate anything.
+    if (!body.articles?.length && !body.topicSummary) {
+      return NextResponse.json(
+        { error: 'Missing articles and topicSummary — need at least one' },
         { status: 400 },
       )
     }
@@ -153,15 +163,27 @@ export async function POST(req: NextRequest) {
  */
 async function generateLlmSummary(body: SummaryRequest): Promise<string | null> {
   const articlesList = Array.isArray(body.articles) ? body.articles : []
-  if (articlesList.length === 0) return null
 
-  const articleContext = articlesList
-    .slice(0, 12)
-    .map(
-      (a, i) =>
-        `[${i + 1}] (${a.leaning}) ${a.sourceName}: ${a.title}\n${a.description || ''}`,
-    )
-    .join('\n\n')
+  // Build article context — if we have articles, use them; otherwise fall
+  // back to the topic's own summary field (which is always present, even
+  // for archived topics without the full articles array).
+  let articleContext: string
+  if (articlesList.length > 0) {
+    articleContext = articlesList
+      .slice(0, 12)
+      .map(
+        (a, i) =>
+          `[${i + 1}] (${a.leaning}) ${a.sourceName}: ${a.title}\n${a.description || ''}`,
+      )
+      .join('\n\n')
+  } else if (body.topicSummary) {
+    // No articles — use the topic's summary as the sole context.
+    // This happens when the topic was loaded from the archive without
+    // the full articles array.
+    articleContext = `Topic summary: ${body.topicSummary}`
+  } else {
+    return null
+  }
 
   const systemPrompt = `You are NeutralWire, a sharp, engaging news analyst. You write summaries that people actually WANT to read — not dry encyclopedia entries.
 
@@ -191,7 +213,7 @@ Rules:
 
   const userPrompt = `Story title: ${body.title}
 
-Coverage from ${articlesList.length} sources across the political spectrum:
+${articlesList.length > 0 ? `Coverage from ${articlesList.length} sources across the political spectrum:` : 'Context:'}
 
 ${articleContext}
 

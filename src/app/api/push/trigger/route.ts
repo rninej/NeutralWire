@@ -513,34 +513,45 @@ export async function GET(req: NextRequest) {
         })
       }
       const archivePromises: Promise<boolean>[] = []
+      // Build a map from topicId → FULL TopicArticle (with articles array)
+      // so we archive the complete topic, not just the slimmed-down version.
+      // Without the articles array, /api/summary can't generate a summary
+      // when the user opens the notification.
+      const fullTopicMap = new Map(topStories.map((t) => [t.topicId, t]))
       for (const topicId of personalizedResult.sentTopicIds) {
-        const candidate = sentTopicMap.get(topicId)
-        if (candidate) {
-          // Build a minimal TopicArticle-compatible object for the archive.
-          // The full topic (with articles, lean counts, etc.) is only
-          // available in personalCandidates as a slimmed-down version, but
-          // /api/topic/[id] checks the live cache first, so this archive
-          // entry only needs to be a fallback for expired topics.
-          //
-          // NOTE: Firebase RTDB drops empty arrays, so `articles: []` would
-          // become `articles: undefined` on read-back. We store `articles: null`
-          // instead, and /api/topic/[id] defaults it back to [].
+        const fullTopic = fullTopicMap.get(topicId)
+        if (fullTopic) {
+          // Archive the FULL topic (with articles, lean counts, etc.)
+          // so /api/topic/[id] returns a complete object that /api/summary
+          // can use to generate the neutral summary.
           archivePromises.push(
             firebaseWrite(`archive/${topicId}`, {
-              topicId: candidate.topicId,
-              title: candidate.title,
-              summary: candidate.summary || '',
-              imageUrl: candidate.imageUrl || null,
-              coverage: candidate.coverage || 0,
-              leanLeft: 0,
-              leanCenter: 0,
-              leanRight: 0,
-              firstSeen: Date.now(),
-              latestSeen: Date.now(),
-              articles: null,
+              ...fullTopic,
               archivedAt: Date.now(),
             }),
           )
+        } else {
+          // Fallback: if the full topic isn't available (shouldn't happen),
+          // archive the slimmed-down version with articles: null.
+          const candidate = sentTopicMap.get(topicId)
+          if (candidate) {
+            archivePromises.push(
+              firebaseWrite(`archive/${topicId}`, {
+                topicId: candidate.topicId,
+                title: candidate.title,
+                summary: candidate.summary || '',
+                imageUrl: candidate.imageUrl || null,
+                coverage: candidate.coverage || 0,
+                leanLeft: 0,
+                leanCenter: 0,
+                leanRight: 0,
+                firstSeen: Date.now(),
+                latestSeen: Date.now(),
+                articles: null,
+                archivedAt: Date.now(),
+              }),
+            )
+          }
         }
       }
       await Promise.allSettled(archivePromises)
