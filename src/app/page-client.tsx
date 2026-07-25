@@ -172,7 +172,19 @@ export default function Home() {
   useEffect(() => setMounted(true), [])
 
   // --- Category / view state ---
-  const [category, setCategory] = useState<Category>('relevant')
+  // On mount, check URL for ?category= param (set by PWA shortcuts).
+  // Valid values: relevant, mycountry, top, world, politics, business,
+  // technology, science, health, sports.
+  const [category, setCategory] = useState<Category>(() => {
+    if (typeof window === 'undefined') return 'relevant'
+    const params = new URLSearchParams(window.location.search)
+    const cat = params.get('category') as Category | null
+    const validCategories: Category[] = [
+      'relevant', 'mycountry', 'top', 'world', 'politics',
+      'business', 'technology', 'science', 'health', 'sports',
+    ]
+    return cat && validCategories.includes(cat) ? cat : 'relevant'
+  })
   const [view, setView] = useState<View>('feed')
 
   // --- Search state ---
@@ -193,6 +205,84 @@ export default function Home() {
   const [articleCount, setArticleCount] = useState(0)
   const [minCoverage, setMinCoverage] = useState(1)
   const [loadMs, setLoadMs] = useState<number | null>(null)
+
+  // --- Infinite scroll state ---
+  // The API returns 24 topics per fetch. When the user scrolls to the
+  // bottom, we increase displayCount by 24 and fetch the next page
+  // (?offset=24, ?offset=48, etc.). This continues until no more topics.
+  const [displayCount, setDisplayCount] = useState(24)
+  const [olderTopics, setOlderTopics] = useState<TopicArticle[]>([])
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const sentinelRef = React.useRef<HTMLDivElement | null>(null)
+
+  // Reset infinite scroll when category/country changes
+  useEffect(() => {
+    setDisplayCount(24)
+    setOlderTopics([])
+    setHasMore(true)
+  }, [category, country, minCoverage])
+
+  // --- Infinite scroll: fetch older topics when sentinel is visible ---
+  const loadMore = React.useCallback(async () => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    try {
+      const offset = topics.length + olderTopics.length
+      const params = new URLSearchParams({
+        category,
+        limit: '24',
+        minCoverage: String(minCoverage),
+        offset: String(offset),
+      })
+      if (country && (category === 'relevant' || category === 'mycountry')) {
+        params.set('country', country.code)
+      }
+      const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
+      const json: NewsResponse = await res.json()
+      if (!res.ok || json.error) {
+        setHasMore(false)
+        return
+      }
+      const newTopics = json.topics || []
+      if (newTopics.length === 0) {
+        setHasMore(false)
+      } else {
+        // Dedup: don't add topics we already have
+        const existingIds = new Set([
+          ...topics.map((t) => t.topicId),
+          ...olderTopics.map((t) => t.topicId),
+        ])
+        const unique = newTopics.filter((t) => !existingIds.has(t.topicId))
+        if (unique.length === 0) {
+          setHasMore(false)
+        } else {
+          setOlderTopics((prev) => [...prev, ...unique])
+          if (unique.length < 24) setHasMore(false)
+        }
+      }
+    } catch {
+      setHasMore(false)
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [loadingMore, hasMore, topics, olderTopics, category, minCoverage, country])
+
+  // IntersectionObserver — triggers loadMore when sentinel is visible
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          loadMore()
+        }
+      },
+      { rootMargin: '200px' }, // start loading 200px before reaching the bottom
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [loadMore])
 
   // --- Detail overlay state ---
   const [detailTopic, setDetailTopic] = useState<TopicArticle | null>(null)
@@ -853,6 +943,7 @@ export default function Home() {
                 cat={c}
                 active={category === c}
                 onClick={() => setCategory(c)}
+                country={country}
               />
             ))}
 
@@ -864,6 +955,7 @@ export default function Home() {
                 cat={c}
                 active={category === c}
                 onClick={() => setCategory(c)}
+                country={country}
               />
             ))}
           </div>
@@ -1019,9 +1111,31 @@ export default function Home() {
                       onOpenDetail={handleOpenDetail}
                     />
                   ))}
+                  {/* Older topics loaded via infinite scroll */}
+                  {olderTopics.map((t) => (
+                    <TopicCard
+                      key={t.topicId + (t.imageUrl || '')}
+                      topic={t}
+                      onOpenDetail={handleOpenDetail}
+                    />
+                  ))}
                 </div>
 
-                {/* Background refresh happens silently — no visible bubble */}
+                {/* Infinite scroll sentinel + loading animation */}
+                <div ref={sentinelRef} className="flex justify-center py-8">
+                  {loadingMore && (
+                    <div className="grid w-full max-w-7xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                      {Array.from({ length: 4 }).map((_, i) => (
+                        <div key={i} className="h-64 animate-pulse rounded-lg bg-muted/40" />
+                      ))}
+                    </div>
+                  )}
+                  {!loadingMore && !hasMore && (
+                    <div className="text-sm text-muted-foreground">
+                      You've reached the end of the news.
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </>
@@ -1072,19 +1186,26 @@ function CategoryTab({
   cat,
   active,
   onClick,
+  country,
 }: {
   cat: Category
   active: boolean
   country?: CountryInfo | null
   onClick: () => void
 }) {
+  // For 'mycountry', show the user's actual country code (e.g. "UK", "US")
+  // instead of the generic "My Country" label.
+  const label = cat === 'mycountry'
+    ? (country?.code && country.code !== 'INT' ? country.code.toUpperCase() : 'My Country')
+    : CATEGORY_LABELS[cat]
+
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
         // Smaller text + tighter padding on mobile so all 10 categories
-        // (Relevant, My Country, Top Stories, World, Politics, Business,
+        // (Relevant, UK, Top Stories, World, Politics, Business,
         // Tech, Science, Health, Sports) fit in 2 lines.
         // sm: restores normal size on wider screens.
         'inline-flex items-center gap-1 rounded-md whitespace-nowrap text-[11px] px-2 py-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors',
@@ -1093,7 +1214,7 @@ function CategoryTab({
           : 'hover:bg-muted text-foreground/80',
       )}
     >
-      {CATEGORY_LABELS[cat]}
+      {label}
     </button>
   )
 }

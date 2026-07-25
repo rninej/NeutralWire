@@ -367,10 +367,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
             </button>
           </div>
           {summaryLoading ? (
-            <div className="flex items-center gap-2 py-8 text-base text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              Loading…
-            </div>
+            <SummarySkeleton />
           ) : summaryError ? (
             <div className="flex items-center gap-2 py-4 text-base text-muted-foreground">
               <AlertCircle className="h-5 w-5" />
@@ -726,6 +723,45 @@ function SourceGroup({
             </div>
           </a>
         ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Skeleton loader for the neutral summary ──
+// Shimmer effect that looks like the network is loading content,
+// while actually the AI is generating the summary in the background.
+function SummarySkeleton() {
+  return (
+    <div className="space-y-4">
+      {/* Fake heading */}
+      <div className="space-y-2">
+        <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+      </div>
+      {/* Fake paragraph */}
+      <div className="space-y-2">
+        <div className="h-3 w-full animate-pulse rounded bg-muted" />
+        <div className="h-3 w-full animate-pulse rounded bg-muted" />
+        <div className="h-3 w-4/5 animate-pulse rounded bg-muted" />
+      </div>
+      {/* Fake heading */}
+      <div className="space-y-2 pt-2">
+        <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+      </div>
+      {/* Fake paragraph */}
+      <div className="space-y-2">
+        <div className="h-3 w-full animate-pulse rounded bg-muted" />
+        <div className="h-3 w-full animate-pulse rounded bg-muted" />
+        <div className="h-3 w-3/4 animate-pulse rounded bg-muted" />
+      </div>
+      {/* Fake heading */}
+      <div className="space-y-2 pt-2">
+        <div className="h-4 w-36 animate-pulse rounded bg-muted" />
+      </div>
+      {/* Fake paragraph */}
+      <div className="space-y-2">
+        <div className="h-3 w-full animate-pulse rounded bg-muted" />
+        <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
       </div>
     </div>
   )

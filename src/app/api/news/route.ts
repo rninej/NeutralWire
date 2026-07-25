@@ -44,6 +44,10 @@ export async function GET(req: NextRequest) {
   const minCoverage = Math.max(1, Math.min(8, Number(sp.get('minCoverage') || '1')))
   const wait = sp.get('wait') === '1'
   const countryOverride = sp.get('country') || ''
+  // Offset for infinite scroll — skip the first N topics and return the next N.
+  // Default 0 (first page). The cache stores 40 topics; offset > 0 returns
+  // from the archived/older set when available.
+  const offset = Math.max(0, Number(sp.get('offset') || '0'))
 
   const t0 = Date.now()
 
@@ -89,7 +93,7 @@ export async function GET(req: NextRequest) {
         category,
         country,
         countryName,
-        topics: applyFilters(payload.topics, limit, minCoverage),
+        topics: applyFilters(payload.topics, limit, minCoverage, offset),
         cached: false,
         fresh: true,
         sourceCount: payload.sourceCount,
@@ -106,7 +110,7 @@ export async function GET(req: NextRequest) {
   }
 
   // 3. Cache exists.
-  const truncated = applyFilters(cached.topics, limit, minCoverage)
+  const truncated = applyFilters(cached.topics, limit, minCoverage, offset)
 
   // 4. Background refresh if stale.
   const stale = isStale(cached)
@@ -125,7 +129,7 @@ export async function GET(req: NextRequest) {
           category,
           country,
           countryName,
-          topics: applyFilters(fresh.topics, limit, minCoverage),
+          topics: applyFilters(fresh.topics, limit, minCoverage, offset),
           cached: false,
           fresh: true,
           sourceCount: fresh.sourceCount,
@@ -172,11 +176,12 @@ function applyFilters(
   topics: TopicArticle[],
   limit: number,
   minCoverage: number,
+  offset: number = 0,
 ): TopicArticle[] {
   // NOTE: Do NOT re-sort here. The topics are already sorted by the
   // aggregator (with local-boost for the `relevant` category). Re-sorting
   // by coverage would destroy the local-news prioritisation.
   return topics
     .filter((t) => t.coverage >= minCoverage)
-    .slice(0, limit)
+    .slice(offset, offset + limit)
 }

@@ -27,18 +27,21 @@
       "name": "Relevant",
       "short_name": "Relevant",
       "url": "/?category=relevant",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }],
       "description": "Your country's news mixed with top world stories"
     },
     {
       "name": "My Country",
       "short_name": "My Country",
       "url": "/?category=mycountry",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }],
       "description": "News only from your country's sources"
     },
     {
       "name": "Top Stories",
       "short_name": "Top",
       "url": "/?category=top",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }],
       "description": "Most covered stories worldwide"
     }
   ]
