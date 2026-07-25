@@ -235,6 +235,63 @@ function isTopicAboutCountry(
   return false
 }
 
+/**
+ * Safety net: detect stories that are OBVIOUSLY NOT about the given country.
+ *
+ * The AI sometimes approves US politics stories (Trump, Biden, Congress)
+ * because a UK outlet covered them. This function does a final keyword
+ * check to strip those out — if the title/summary contains strong US
+ * politics keywords AND no UK keywords, it's almost certainly not a UK story.
+ *
+ * Returns true if the story should be EXCLUDED (it's obviously not about
+ * the country).
+ */
+function isObviouslyNotAboutCountry(
+  topic: TopicArticle,
+  countryCode: string,
+): boolean {
+  const cc = countryCode.toUpperCase()
+  const text = `${topic.title} ${topic.summary}`.toLowerCase()
+
+  // Strong US politics indicators — if these appear, the story is almost
+  // certainly US politics, not UK news.
+  const usPoliticsPatterns = [
+    'trump says', 'trump claims', 'trump attacks', 'trump threatens',
+    'trump praises', 'trump blasts', 'trump lashes', 'trump insists',
+    'trump calls', 'trump urges', 'trump defends', 'trump mocks',
+    'trump vows', 'trump promises', 'trump tweets', 'trump posts',
+    'trump campaign', 'trump re-election', 'trump 2028', 'trump 2024',
+    'trump rally', 'trump speech', 'trump address', 'trump executive order',
+    'trump signs', 'trump vetoes', 'trump nominates', 'trump appoints',
+    'biden says', 'biden claims', 'biden signs', 'biden vetoes',
+    'us congress', 'us senate', 'us house of representatives',
+    'us supreme court', 'scotus', 'us capitol', 'us state department',
+    'us poll', 'us approval rating', 'us election', 'us primary',
+    'gop rep', 'gop senator', 'democratic rep', 'democratic senator',
+    'us governor', 'us state law', 'us federal',
+    'us airstrikes', 'us military', 'us troops', 'us drone',
+  ]
+
+  // If the story matches any US politics pattern, check if it ALSO has a
+  // UK angle. If yes → keep it (UK politician responded, UK troops involved).
+  // If no → exclude it.
+  const hasUsPolitics = usPoliticsPatterns.some((p) => text.includes(p))
+
+  if (hasUsPolitics) {
+    // Check if there's a UK angle that would redeem it
+    const ukKeywords = COUNTRY_KEYWORDS['GB'] || []
+    const hasUkAngle = ukKeywords.some((kw) => {
+      if (text.includes(kw)) return true
+      return false
+    })
+    if (!hasUkAngle) {
+      return true // exclude — it's US politics with no UK angle
+    }
+  }
+
+  return false // keep — passes the safety net
+}
+
 // ---------- AI-based country filtering + ranking ----------
 // Used by the "My Country" tab as the PRIMARY filter. The AI is much smarter
 // than keyword matching — it understands context (e.g. "Burnham" is a UK
@@ -374,49 +431,46 @@ async function aiFilterAndRankCountryTopics(
     return `${i + 1}. [${ageH}h old, ${t.coverage} sources] ${t.title}${summary ? ` — ${summary}` : ''}`
   }).join('\n')
 
-  const systemPrompt = `You are a ${countryName} news editor for NeutralWire, a neutral news aggregator. Your job is to decide which stories should appear in the "${countryName} News" section.
+  const systemPrompt = `You are a ${countryName} news editor for NeutralWire. Your job is to decide which stories should appear in the "${countryName} News" section.
 
-INCLUSION RULES (be GENEROUS — aim for 15-25 stories, not just 5-10):
-- INCLUDE any story that is ABOUT ${countryName}: ${countryName} politics, events, people, places, institutions, culture, sport, business, or weather.
-- INCLUDE stories about ${countryName} politicians, cities, laws, companies, or cultural events — even if foreign outlets covered them.
-- INCLUDE stories that SIGNIFICANTLY AFFECT ${countryName}: major trade deals, wars involving ${countryName} allies, climate agreements, international treaties ${countryName} is part of, global economic shifts that impact ${countryName}.
-- INCLUDE stories about ${countryName} people abroad (e.g. a ${countryName} citizen involved in a major international event).
-- INCLUDE ${countryName} sport, entertainment, and lifestyle stories.
-- INCLUDE ${countryName} court cases, crime, and policing stories.
+INCLUSION RULES (aim for 15-25 stories):
+- INCLUDE stories ABOUT ${countryName}: ${countryName} politics, events, people, places, institutions, sport, business, weather, crime, court cases.
+- INCLUDE stories about ${countryName} politicians, cities, laws, companies, or cultural events.
+- INCLUDE ${countryName} sport (football, cricket, rugby, tennis, F1, etc.).
+- INCLUDE stories where ${countryName} people are centrally involved.
 
-EXCLUSION RULES (be strict ONLY about these):
-- EXCLUDE pure foreign politics that don't affect ${countryName} (e.g. Trump's daily statements, US poll numbers, US committee hearings, foreign election campaigns).
-- EXCLUDE foreign domestic news with no ${countryName} angle (e.g. a US state law change, a Japanese local election).
-- EXCLUDE generic world news with no ${countryName} connection (e.g. a Middle East ceasefire update that doesn't mention ${countryName}).
+EXCLUSION RULES (BE STRICT — these are the most common mistakes):
+- EXCLUDE US politics: Trump, Biden, US Congress, US elections, US polls, US Supreme Court, US state laws — even if ${countryName} outlets (BBC, Guardian) covered them. The ONLY exception is if a ${countryName} politician/person is centrally involved.
+- EXCLUDE foreign domestic news: a US state law change, a Japanese local election, a French protest — unless ${countryName} is directly involved.
+- EXCLUDE generic world news with no ${countryName} connection: Middle East wars (unless UK troops involved), foreign elections, foreign court cases.
+- EXCLUDE celebrity/entertainment gossip about foreign celebrities with no ${countryName} angle.
+- EXCLUDE foreign sport (NFL, NBA, MLB, foreign football leagues) unless a ${countryName} player/team is involved.
 
 KEY DISTINCTION:
-- BBC covering Trump's latest tweet → EXCLUDE (foreign politics, no UK angle)
+- BBC covering Trump's latest statement → EXCLUDE (foreign politics)
 - BBC covering a UK politician's response to Trump → INCLUDE (UK angle)
-- BBC covering a Middle East war where UK troops are involved → INCLUDE (UK angle)
-- BBC covering a Middle East war with no UK involvement → EXCLUDE (no UK angle)
+- "7 moments from Trump's speech" → EXCLUDE (US politics, no UK angle)
+- "British families evacuated from wildfires" → INCLUDE (UK people)
 
-RANKING (IMPORTANCE > RECENCY):
-- Rank included stories by IMPORTANCE first (broadest coverage + biggest impact).
-- COVERAGE is the #1 ranking signal: a story covered by 13 sources ALWAYS ranks
-  above a story covered by 2 sources, regardless of age.
-- Recency is a TIE-BREAKER only: among stories with similar coverage, newer wins.
-- A 12-hour-old story with 13 sources ranks ABOVE a 30-minute-old story with 2 sources.
-- This keeps the day's biggest stories at the top all day, not just the latest.
-- Major breaking news (wars, resignations, historic events) gets a boost even
-  with fewer sources.
+RANKING (COVERAGE IS KING):
+- Rank PRIMARILY by COVERAGE (number of sources). More sources = higher rank. ALWAYS.
+- A story with 10 sources ALWAYS ranks above a story with 3 sources.
+- A story with 3 sources ALWAYS ranks above a story with 1 source.
+- Recency is ONLY a tie-breaker for stories with the SAME coverage.
+- Do NOT rank "importance" above coverage — coverage IS the importance signal.
+- Sort: highest coverage first, then most recent for ties.
 
 OUTPUT FORMAT:
 - Return ONLY a comma-separated list of story numbers (1-${aiTopics.length}) in ranked order.
-- Include ALL stories that match the inclusion rules above — don't be stingy.
-- Most important (highest coverage + biggest impact) first.
+- HIGHEST COVERAGE FIRST. Only include stories that pass the inclusion rules.
 - Example: 3,1,7,5,12,2,8,15
 - No explanation, no other text, JUST the numbers.`
 
   const userPrompt = `Country: ${countryName}
-Stories:
+Stories (with coverage count):
 ${storyList}
 
-Which story numbers (1-${aiTopics.length}) should appear in the "${countryName} News" section? Be generous — include all stories that are about ${countryName} or significantly affect it. Rank by IMPORTANCE first (broadest coverage + biggest impact), then recency as tie-breaker. Return them as a comma-separated list. ONLY the numbers.`
+Which story numbers (1-${aiTopics.length}) are ABOUT ${countryName} (exclude US/foreign politics with no ${countryName} angle)? Rank them HIGHEST COVERAGE FIRST. Return as a comma-separated list. ONLY the numbers.`
 
   try {
     const aiResponse = await callAI({ systemPrompt, userPrompt })
@@ -460,7 +514,7 @@ Which story numbers (1-${aiTopics.length}) should appear in the "${countryName} 
     }
 
     // Map numbers back to topics (1-based → 0-based index)
-    const rankedTopics: TopicArticle[] = []
+    let rankedTopics: TopicArticle[] = []
     const newlyApproved: string[] = []
     for (const n of numbers) {
       const topic = aiTopics[n - 1]
@@ -483,6 +537,26 @@ Which story numbers (1-${aiTopics.length}) should appear in the "${countryName} 
     }
 
     console.log(`[ai-filter] AI approved ${rankedTopics.length}/${topics.length} topics for ${cc} (${newlyApproved.length} new)`)
+
+    // SAFETY NET 1: Remove obvious non-UK stories that the AI let through.
+    // The AI sometimes approves US politics stories (Trump, Biden, Congress)
+    // because a UK outlet covered them. We do a final keyword check to strip
+    // these out — they have NO UK angle in the title/summary.
+    const beforeCount = rankedTopics.length
+    rankedTopics = rankedTopics.filter((t) => !isObviouslyNotAboutCountry(t, countryCode))
+    if (rankedTopics.length < beforeCount) {
+      console.warn(`[ai-filter] Safety net removed ${beforeCount - rankedTopics.length} non-${cc} stories the AI let through`)
+    }
+
+    // SAFETY NET 2: enforce coverage-descending order regardless of what the
+    // AI returned. The AI sometimes ignores the "highest coverage first"
+    // instruction and ranks by perceived importance instead. We override
+    // that here so the user always sees the broadest-coverage stories first.
+    // Tie-break by recency (newer first).
+    rankedTopics.sort((a, b) => {
+      if (b.coverage !== a.coverage) return b.coverage - a.coverage
+      return b.latestSeen - a.latestSeen
+    })
 
     // 4. Persist newly-approved topicIds to Firebase (default-deny persistence)
     if (newlyApproved.length > 0) {
