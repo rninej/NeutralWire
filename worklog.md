@@ -557,3 +557,43 @@ Stage Summary:
 - "Interested" button on mobile notifications now opens the article immediately (tracking is fire-and-forget, doesn't block). Desktop behavior unchanged (still works perfectly).
 - "Popup blocked" on install eliminated — window.open removed. Android Chrome auto-opens the PWA by default; other browsers show the confirmation toast.
 - Files modified: public/sw.js (v11: fire-and-forget tracking + focus/postMessage instead of navigate), src/components/pwa-install-prompt.tsx (removed window.open, added confirmation toast).
+
+---
+Task ID: FIX-3
+Agent: main (Z.ai Code)
+Task: (1) Deprioritize sports news in all subtopics except Sports tab — UK user seeing top 3 as sports because of high coverage, but important non-sports news should rank higher. (2) Add more measures so as many news as possible get images, and those images are high resolution.
+
+Work Log:
+
+1. FIX #1 — Sports deprioritisation in non-sports categories (src/lib/news-aggregator.ts):
+   - Root cause: Sports stories (Premier League, F1, boxing, cricket) have very high coverage (6-9 sources) because every outlet has a sports desk. The sort comparator ranked purely by coverage, so sports bubbled to the top of Relevant/World/Top tabs, pushing down equally-important non-sports news with fewer sources.
+   - Added SPORTS_KEYWORDS list (~80 entries): unambiguous leagues (premier league, champions league, F1, wimbledon), teams (arsenal, chelsea, barcelona, real madrid — full names to avoid city-name false positives), athletes (verstappen, djokovic, joshua, haaland), and sports-specific terms (kickoff, goalkeeper, grand prix, innings, wicket, birdie, semifinal). Carefully curated to EXCLUDE generic words (match, captain, squad, medal, grid, try, par, heat) that would cause false positives on political/business news.
+   - Added isSportsTopic(topic): keyword scan of title+summary + backup heuristic (if 60%+ of articles come from sports-category feeds, treat as sports).
+   - Modified the aggregateCategory sort comparator: in every category EXCEPT 'sports', apply a coverage penalty of -4 to sports topics. A 7-source sports story (effective 3) now ranks BELOW a 5-source non-sports story (effective 5), but ABOVE a 2-source story. Penalty only applies when non-sports stories exist (don't empty a feed). Applied to both the 'relevant' local-boost sort and the generic coverage sort.
+   - Verified via API: Relevant tab (UK) top stories now = Berlin Pride, Europe wildfires, India protests, Trump, ICC, Trump/Canada. Anthony Joshua boxing (6 sources) pushed down below 5-source non-sports stories. Sports tab unchanged (Liverpool at 5 sources still ranks by coverage).
+
+2. FIX #2 — More images + higher resolution (src/lib/news-aggregator.ts):
+   - Expanded image validation: top 10 → top 15 topics get image checks. Increased OG-image fetch attempts: 3 → 5 articles per topic. More stories now get working images.
+   - Added upgradeToHighRes(url): upgrades known low-res RSS thumbnail URL patterns to high-res variants:
+     * BBC: /ace/standard/240/ → /ace/standard/800/
+     * Guardian: width=140 → width=1200
+     * NYT: -thumbStandard/-thumbLarge/-small → -articleLarge; -mediumSquareAt3X → -jumbo
+     * Al Jazeera: /240/ or /640/ → /1280/
+     * NBC/HuffPost: t_nbcnews-fp-240x240 → t_nbcnews-fp-1200x630
+   - Added scoreImageUrl(url): ranks candidate URLs by likely resolution. High-res hints (width=1200, /1280/, -jumbo, -articleLarge) score 70-95; low-res hints (width=140, /96/, -thumbStandard) score 5-25. findImageForTopic now validates highest-scoring candidates FIRST.
+   - Rewrote findImageForTopic: collects ALL candidates (OG + RSS) in parallel, upgrades both OG and RSS URLs via upgradeToHighRes, scores + sorts by quality, validates in quality order. Returns the highest-resolution working image.
+   - Improved extractImageFromHtml (RSS description image parser): now parses srcset attribute and picks the LARGEST resolution (was: only grabbed small 'src'). Also checks data-src for lazy-loaded images.
+   - Improved clusterTopics bestImage selection: now picks the HIGHEST-SCORING image across all articles in a cluster (was: first non-null image). The topic starts with its best RSS image even before the OG-fetch pass.
+
+Verification:
+- Lint: 0 errors, 0 warnings.
+- Dev server: HTTP 200, no errors in dev.log.
+- API check (Relevant, UK, top 8): all 8 topics have images (IMG). Top stories = Berlin Pride (10src), wildfires (8src), India (7src) — sports (Joshua, 6src) pushed to #4 then below.
+- API check (Sports tab): Liverpool (5src) ranks #5 by coverage — NOT penalized (correct).
+- Agent Browser: page renders 23 images. BBC image URLs now serve at /ace/standard/800/ (was /240/) — confirmed high-res upgrade working. Independent at width=1200, Express at 1200x630, France24 at /w:1280/.
+
+Stage Summary:
+- 2 fixes implemented and pushed to GitHub (commit 400e059 on main).
+- Sports news now ranks lower in all non-sports tabs (Relevant, World, Top, Business, Tech, Science, Health, Politics). Sports tab unchanged. A 7-source sports story ranks below a 5-source non-sports story.
+- Image coverage improved (top 15 topics checked, 5 articles fetched for OG) and resolution improved (BBC 240→800, Guardian 140→1200, NYT thumb→articleLarge, srcset parsing picks largest). Verified live: BBC images serving at /800/.
+- File modified: src/lib/news-aggregator.ts (+312/-35 lines).
