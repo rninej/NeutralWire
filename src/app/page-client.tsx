@@ -189,16 +189,34 @@ export default function Home() {
   })
   const [view, setView] = useState<View>('feed')
 
+  // ── Category ref (always-current value, used by URL listeners + fetch guard) ──
+  // Declared here (before the URL-listener useEffect) so the listener can
+  // read the latest category without re-subscribing on every change.
+  const categoryRef = React.useRef(category)
+  useEffect(() => {
+    categoryRef.current = category
+  }, [category])
+
+  // ── Click guard: suppress URL-driven state updates briefly after a click ──
+  // This eliminates the race where visibilitychange/pageshow fires right
+  // after a tab click and overrides the click with a stale URL read.
+  // Set to a timestamp when a click happens; URL listeners ignore events
+  // for 400ms after.
+  const lastClickAtRef = React.useRef(0)
+
   // Wrapper that updates BOTH state AND the URL.
   // This fixes:
   //   1. Double-highlight glitch (state + URL were out of sync)
   //   2. Refresh losing the subtopic (URL now has ?category=)
   //   3. Each subtopic having its own shareable link
   const setCategory = React.useCallback((cat: Category) => {
+    // Record the click time so URL listeners don't override it
+    lastClickAtRef.current = Date.now()
     setCategoryState(cat)
+    categoryRef.current = cat // update ref immediately (not just via effect)
     // Update the URL without triggering a full page reload.
-    // Use replaceState if no ?topic= is present (clean URL), pushState
-    // otherwise to preserve back-button behavior.
+    // Use replaceState (not pushState) so the back button doesn't cycle
+    // through every category the user tapped.
     if (typeof window !== 'undefined') {
       const url = new URL(window.location.href)
       // Remove ?topic= if present (we're switching categories, not opening a topic)
@@ -219,27 +237,42 @@ export default function Home() {
   // existing client to the shortcut URL (e.g. /?category=world). The
   // useState initializer does NOT re-run (React already mounted), so we must
   // manually re-read the ?category= param when the page becomes visible again.
+  //
+  // RACE-CONDITION GUARDS (eliminate double-highlight + click-revert bugs):
+  //   1. Click guard: if a tab was clicked <400ms ago, IGNORE the URL event.
+  //      This stops visibilitychange (which can fire spuriously on mobile when
+  //      the address bar shows/hides or keyboard appears) from reverting a
+  //      user's click.
+  //   2. No-redundant-set: only call setCategoryState if the URL category
+  //      DIFFERS from the current categoryRef value. Redundant sets can
+  //      trigger unnecessary re-renders that race with pending clicks.
   useEffect(() => {
     const validCategories: Category[] = [
       'relevant', 'mycountry', 'top', 'world', 'politics',
       'business', 'technology', 'science', 'health', 'sports',
     ]
     const readCategoryFromUrl = () => {
+      // Click guard: if a click happened very recently, the URL was already
+      // updated by setCategory — don't let a spurious visibility/pageshow
+      // event override it with a (possibly stale) URL read.
+      if (Date.now() - lastClickAtRef.current < 400) return
+
       const params = new URLSearchParams(window.location.search)
       // Don't override if a topic is open (/?topic= takes priority)
       if (params.has('topic')) return
       const cat = params.get('category') as Category | null
-      if (cat && validCategories.includes(cat)) {
-        setCategoryState(cat)
-      } else {
-        setCategoryState('relevant')
+      const resolved = cat && validCategories.includes(cat) ? cat : 'relevant'
+      // No-redundant-set: only update if the URL differs from current state.
+      // This prevents unnecessary re-renders that could race with a click.
+      if (resolved !== categoryRef.current) {
+        setCategoryState(resolved)
       }
     }
     const handlePopState = () => readCategoryFromUrl()
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') readCategoryFromUrl()
     }
-    const handlePageshow = (e: PageTransitionEvent) => {
+    const handlePageshow = () => {
       // pageshow fires on initial load AND on BFCache restore (PWA resume)
       readCategoryFromUrl()
     }
@@ -667,11 +700,10 @@ export default function Home() {
   }, [])
 
   // --- Refs for race-condition protection ---
+  // NOTE: categoryRef is declared earlier (near setCategory) so the URL
+  // listener useEffect can read the latest category. reqIdRef guards the
+  // async fetch against stale responses when the user switches categories.
   const reqIdRef = React.useRef(0)
-  const categoryRef = React.useRef(category)
-  useEffect(() => {
-    categoryRef.current = category
-  }, [category])
 
   // --- Country detection on first load ---
   // Client-side detection is PRIMARY (runs in the user's browser, sees
