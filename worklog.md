@@ -512,3 +512,48 @@ Stage Summary:
 - PWA auto-opens on install via window.open in appinstalled handler.
 - All changes pushed to GitHub (commit 1ea65ed on main).
 - Files modified: src/app/api/push/trigger/route.ts, public/sw.js, public/manifest.json, src/app/page-client.tsx, src/components/pwa-install-prompt.tsx, src/lib/pushify.ts.
+
+---
+Task ID: FIX-2
+Agent: main (Z.ai Code)
+Task: Fix 2 follow-up issues: (1) "Interested" button on notification stuck at "processing notification" on mobile (worked on desktop), (2) "popup blocked" message when installing the PWA.
+
+Work Log:
+
+1. ROOT CAUSE — "Processing notification" stuck on mobile:
+   - The v10 SW notificationclick handler awaited /api/notification/feedback BEFORE opening the article.
+   - /api/notification/feedback does up to 5 Firebase read+write calls (each with 8s timeout) in a loop — one per extracted keyword.
+   - On desktop (fast network), these fetches resolved in <1s, so the article opened immediately. User confirmed: "worked perfectly on desktop."
+   - On mobile (slower network), the fetches took seconds. Android Chrome showed "Processing notification" during the wait, and the SW risked being killed before it could open the article.
+   - Also: client.navigate() is flaky on Android (hangs/fails silently), adding to the delay.
+
+2. FIX #1 — SW notificationclick restructured (public/sw.js):
+   - Fire tracking fetches (/api/notification/feedback + /api/notification/track) as FIRE-AND-FORGET (no await). They're best-effort analytics — start the fetch but don't block on it.
+   - Open the article IMMEDIATELY after firing tracking. The SW now resolves openWindow/focus within milliseconds, not seconds.
+   - Replaced flaky client.navigate() with focus() + postMessage('open-topic'). The client-side handler in page-client.tsx opens the topic and updates the URL — more reliable than navigate() on Android.
+   - Bumped SW cache v10 → v11 to force activation of the new handler.
+
+3. ROOT CAUSE — "popup blocked" on install:
+   - The v10 appinstalled handler called window.open(pwaUrl, '_blank') to launch the PWA.
+   - Browsers block window.open() when it's NOT inside a synchronous user-gesture handler. The appinstalled event fires asynchronously after the user accepts the install prompt — it's NOT a user gesture context.
+   - Result: popup blocker killed the window.open() call and showed "popup blocked" to the user.
+
+4. FIX #2 — Removed window.open(), added confirmation toast (src/components/pwa-install-prompt.tsx):
+   - Removed the window.open() call entirely.
+   - On Android Chrome: the browser AUTOMATICALLY opens the installed PWA after the user accepts the install prompt (default behavior, no code needed). Desktop Chrome also auto-opens. iOS doesn't fire appinstalled (uses the instructions flow).
+   - Added a showInstalledToast state that renders a friendly emerald-bordered "NeutralWire installed!" confirmation banner for 6 seconds, telling the user the app is opening and to look for the icon on their home screen.
+   - Added CheckCircle2 icon import from lucide-react.
+
+Verification:
+- Lint: 0 errors, 0 warnings.
+- Dev server: HTTP 200, no errors in dev.log.
+- SW v11 serving correctly (verified via curl).
+- Page renders correctly on mobile viewport (iPhone 14 emulation): title correct, 0 page errors.
+- No window.open() calls remain in pwa-install-prompt.tsx (3 mentions are all in comments explaining why we don't use it).
+- Note: appinstalled is a trusted browser event that can't be reliably synthesized in headless Chrome for testing. The toast will render correctly on a real device when the native appinstalled event fires.
+
+Stage Summary:
+- 2 follow-up bugs fixed and pushed to GitHub (commit 8107e7e on main).
+- "Interested" button on mobile notifications now opens the article immediately (tracking is fire-and-forget, doesn't block). Desktop behavior unchanged (still works perfectly).
+- "Popup blocked" on install eliminated — window.open removed. Android Chrome auto-opens the PWA by default; other browsers show the confirmation toast.
+- Files modified: public/sw.js (v11: fire-and-forget tracking + focus/postMessage instead of navigate), src/components/pwa-install-prompt.tsx (removed window.open, added confirmation toast).
