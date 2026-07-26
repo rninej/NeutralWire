@@ -445,3 +445,70 @@ Stage Summary:
 - Install app popup now appears when a user opens a topic (either via shared link like /?topic=ayw0ayh or by clicking a card), in addition to the existing home-page 2s trigger
 - Files added: src/lib/user-interests.ts, src/app/api/engagement/route.ts
 - Files modified: src/lib/ai-providers.ts (parallel racing + new Gemini models + useSearch flag), src/lib/pushify.ts (sendPersonalizedWebPush), src/app/api/ask-ai/route.ts (deadline + better errors), src/app/api/push/trigger/route.ts (per-user push + sector detection), src/components/pwa-onboarding.tsx (Firebase sync + event dispatch), src/components/pwa-install-prompt.tsx (?topic= + topic-opened event), src/components/topic-detail.tsx (engagement tracking + Share button + topic-opened event + better AI errors), src/app/page-client.tsx (interests state + personalization boost + handleOpenDetail)
+
+---
+Task ID: FIX-1
+Agent: main (Z.ai Code)
+Task: Fix 4 issues: (1) duplicate notifications about India's anti-education story, (2) "Interested" button on notification dismisses instead of opening the story, (3) PWA shortcuts not opening subtopics, (4) PWA not auto-opening on install. Then publish to GitHub.
+
+Work Log:
+
+1. ROOT CAUSE ANALYSIS — Duplicate notifications:
+   - The news aggregator generates topicId = hashId(bestTitle + '|' + firstSeen).
+   - bestTitle = the title with the most keywords in the cluster. As new articles join a cluster across cache refreshes (every few hours), a DIFFERENT article may become "best", changing bestTitle.
+   - firstSeen = earliest article timestamp. This also changes as earlier articles join.
+   - Result: the SAME ongoing story (e.g. India cockroach protest) gets DIFFERENT topicIds across refreshes. The global sent-history (keyed by topicId) failed to recognize it was the same story → re-notified.
+   - Also found a secondary bug: when ALL candidates were already sent, the code fell back to the unfiltered list (candidates = freshStories.length > 0 ? freshStories : topStories), re-sending duplicates.
+
+2. FIX #1 — Content fingerprint dedup (src/app/api/push/trigger/route.ts):
+   - Added computeStoryFingerprint(title): normalizes title (lowercase, remove punctuation), filters stopwords + short words + numbers, does basic plural stemming (remove trailing 's'), sorts unique keywords (order-independent), takes top 8, hashes to 'fp_xxxx'.
+   - Two stories about the same event share the same significant keywords regardless of which outlet's headline was picked → same fingerprint.
+   - Added loadSentFingerprints() / recordSentFingerprints() — Firebase node 'notification-sent-fingerprints' with 30-day TTL (longer than topicId's 14d).
+   - Candidates now filtered by BOTH topicId (global history) AND fingerprint. A story is "fresh" only if NEITHER matches.
+   - Fixed the fallback bug: if all candidates are already sent, skip the slot entirely (return sent:0) instead of re-sending duplicates.
+   - Verified via dry-run: fingerprintFiltered:1, globalHistoryFiltered:1, 15 fresh candidates.
+
+3. FIX #2 — "Interested" button on notification (public/sw.js):
+   - Root cause: the notificationclick handler had fire-and-forget tracking fetches BEFORE event.waitUntil(). Android Chrome killed the SW before it could open the article → "Interested" just dismissed.
+   - Wrapped the ENTIRE handler body in event.waitUntil(async () => {...}) so the SW stays alive until the article opens.
+   - "Interested" (like) now ALWAYS opens the article (falls through to navigate/openWindow). Only "Not Interested" (dislike) returns early without opening.
+   - Removed DUPLICATE fetch handler — there were TWO addEventListener('fetch') handlers, both calling event.respondWith() for navigation requests. This caused undefined behavior that broke PWA shortcut navigation (/?category=... served from stale cache without the query param).
+   - Bumped SW cache from v9 → v10 to force activation.
+
+4. FIX #3 — PWA shortcuts (public/manifest.json + src/app/page-client.tsx):
+   - Added "scope": "/" to manifest (required by some browsers for shortcuts).
+   - Added "purpose": "any" to all shortcut icons.
+   - Expanded from 3 → 6 shortcuts: Relevant, My Country, Top Stories, World News, Technology, Business.
+   - Added visibilitychange + pageshow listeners in page-client.tsx: when the PWA resumes from background (launched via shortcut while already running), the useState initializer doesn't re-run. The new listeners re-read ?category= from the URL so the correct subtopic loads.
+   - Verified: /?category=world loads World news, /?category=technology loads Tech news — both render correctly.
+
+5. FIX #4 — PWA auto-open on install (src/components/pwa-install-prompt.tsx):
+   - Added appinstalled event handler that launches the PWA via window.open(pwaUrl, '_blank') after a 500ms delay.
+   - On Android Chrome: window.open() to the same origin opens in the installed PWA (standalone mode) because the URL matches the PWA scope.
+   - Preserves any ?topic= or ?category= context the user was viewing.
+   - On Desktop Chrome: PWA auto-opens by default (no-op). On iOS: appinstalled doesn't fire (iOS uses the instructions flow).
+
+6. BONUS FIX — VAPID in dev (src/lib/pushify.ts):
+   - webpush.setVapidDetails() was called at module load time with an empty VAPID_PRIVATE_KEY (no secret locally), crashing the trigger route.
+   - Made it conditional: only call setVapidDetails if VAPID_PRIVATE_KEY is non-empty. Dry-run mode now works in dev; production (with real key) is unaffected.
+
+7. PUBLISHED TO GITHUB:
+   - Reset local repo to origin/main (proper history), applied all 6 file changes as a patch.
+   - Committed as 1ea65ed with detailed commit message.
+   - Pushed to https://github.com/rninej/NeutralWire.git main branch.
+   - Removed PAT from git remote URL after push (security).
+
+Verification:
+- Lint: 0 errors, 0 warnings.
+- Dev server: HTTP 200, no errors in dev.log.
+- Agent Browser: /?category=world and /?category=technology both render correct subtopic news, 0 page errors.
+- Trigger dry-run: sent:22, fingerprintFiltered:1, globalHistoryFiltered:1, candidateCount:15 — fingerprint dedup working.
+
+Stage Summary:
+- 4 bugs fixed + 1 bonus dev-environment fix.
+- Duplicate notifications eliminated via content-fingerprint dedup (root cause: unstable topicId across cache refreshes).
+- "Interested" notification button now opens the article (was killing the SW before it could open).
+- PWA shortcuts now open the correct subtopic (scope added, duplicate SW fetch handler removed, resume listener added).
+- PWA auto-opens on install via window.open in appinstalled handler.
+- All changes pushed to GitHub (commit 1ea65ed on main).
+- Files modified: src/app/api/push/trigger/route.ts, public/sw.js, public/manifest.json, src/app/page-client.tsx, src/components/pwa-install-prompt.tsx, src/lib/pushify.ts.
