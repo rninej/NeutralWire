@@ -211,23 +211,44 @@ export default function Home() {
     }
   }, [])
 
-  // Listen for popstate (back/forward) to update category from URL
+  // Listen for popstate (back/forward) to update category from URL.
+  // Also listen for visibilitychange + pageshow — when a PWA is launched via
+  // a home-screen shortcut while already running, the browser navigates the
+  // existing client to the shortcut URL (e.g. /?category=world). The
+  // useState initializer does NOT re-run (React already mounted), so we must
+  // manually re-read the ?category= param when the page becomes visible again.
   useEffect(() => {
-    const handlePopState = () => {
+    const validCategories: Category[] = [
+      'relevant', 'mycountry', 'top', 'world', 'politics',
+      'business', 'technology', 'science', 'health', 'sports',
+    ]
+    const readCategoryFromUrl = () => {
       const params = new URLSearchParams(window.location.search)
+      // Don't override if a topic is open (/?topic= takes priority)
+      if (params.has('topic')) return
       const cat = params.get('category') as Category | null
-      const validCategories: Category[] = [
-        'relevant', 'mycountry', 'top', 'world', 'politics',
-        'business', 'technology', 'science', 'health', 'sports',
-      ]
       if (cat && validCategories.includes(cat)) {
         setCategoryState(cat)
       } else {
         setCategoryState('relevant')
       }
     }
+    const handlePopState = () => readCategoryFromUrl()
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') readCategoryFromUrl()
+    }
+    const handlePageshow = (e: PageTransitionEvent) => {
+      // pageshow fires on initial load AND on BFCache restore (PWA resume)
+      readCategoryFromUrl()
+    }
     window.addEventListener('popstate', handlePopState)
-    return () => window.removeEventListener('popstate', handlePopState)
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('pageshow', handlePageshow)
+    return () => {
+      window.removeEventListener('popstate', handlePopState)
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('pageshow', handlePageshow)
+    }
   }, [])
 
   // --- Search state ---

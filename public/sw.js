@@ -1,7 +1,9 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-const CACHE_NAME = 'neutralwire-v9'
+// Bumped to v10: fixed notificationclick (Interested now opens article),
+// removed duplicate fetch handler that was breaking PWA shortcut navigation.
+const CACHE_NAME = 'neutralwire-v10'
 // Don't cache '/' (the HTML page) — it changes on every deploy and serving
 // stale HTML causes hydration mismatches when the JS bundle is updated.
 // Only cache truly static assets.
@@ -170,24 +172,24 @@ self.addEventListener('push', (event) => {
 // Handles action buttons (Interested / Not Interested) at the bottom of the notification.
 //
 // Behavior:
-//   - Regular tap (no action)   → opens story, closes notification
-//   - "Interested" (like)       → opens story, closes notification, tracks positive
+//   - Regular tap (no action)    → opens story, closes notification
+//   - "Interested" (like)        → opens story, closes notification, tracks positive
 //   - "Not Interested" (dislike) → DOESN'T open story, closes notification, tracks negative
 //
+// FIX (v10): The ENTIRE handler body is wrapped in event.waitUntil() so the
+// service worker stays alive until the article is actually opened. Previously,
+// the tracking fetches were fire-and-forget BEFORE event.waitUntil was called,
+// which let Android Chrome kill the SW before it could open the article —
+// so tapping "Interested" just dismissed the notification without opening it.
+//
 // REDUNDANCY: Three layers ensure the topic always opens:
-//   1. If a client is open: post a 'open-topic' message AND navigate it
+//   1. If a client is open: navigate it + postMessage
 //   2. If no client is open: openWindow(url)
-//   3. If both fail: the client-side topic-watcher effect will catch the
-//      ?topic= param on next page load
+//   3. If both fail: the client-side topic-watcher catches ?topic= on next load
 self.addEventListener('notificationclick', (event) => {
-  const isInterested = event.action === 'like'
   const isNotInterested = event.action === 'dislike'
-  const isAction = isInterested || isNotInterested
 
-  // Always close the notification:
-  //   - Regular tap → close + open article
-  //   - Interested → close + open article (fall through)
-  //   - Not Interested → close + don't open article (return early)
+  // Close the notification immediately (visual feedback).
   event.notification.close()
 
   const url = event.notification.data?.url || '/'
@@ -200,133 +202,117 @@ self.addEventListener('notificationclick', (event) => {
     const urlObj = new URL(url, self.location.origin)
     topicId = urlObj.searchParams.get('topic')
   } catch {
-    // url might be relative — try parsing it
     const match = url.match(/[?&]topic=([^&]+)/)
     if (match) topicId = match[1]
   }
 
-  // Handle action buttons (Interested / Not Interested)
-  if (isAction) {
-    // Track the feedback (positive for Interested, negative for Not Interested)
-    fetch('/api/notification/feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        notifId,
-        action: event.action, // 'like' or 'dislike'
-        title: topicTitle,
-      }),
-    }).catch(() => {})
+  // Wrap EVERYTHING in event.waitUntil so the SW stays alive until the
+  // article opens. Without this, Android Chrome kills the SW after the
+  // synchronous handler returns, before async openWindow/navigate resolves.
+  event.waitUntil((async () => {
+    // ── Track feedback for action buttons ──
+    // (fire-and-forget but inside waitUntil so SW doesn't die mid-fetch)
+    if (event.action) {
+      try {
+        await fetch('/api/notification/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            notifId,
+            action: event.action,
+            title: topicTitle,
+          }),
+        })
+      } catch {
+        // silent — tracking is best-effort
+      }
+    }
 
-    // "Not Interested" → just dismiss, don't open the article.
+    // ── "Not Interested" → dismiss only, don't open the article ──
     if (isNotInterested) {
       return
     }
 
-    // "Interested" → fall through to open the article (same as regular tap).
-    // Track the click too.
+    // ── Regular tap OR "Interested" → track click + open the article ──
     if (notifId) {
-      fetch('/api/notification/track', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          notifId,
-          action: 'click',
-          title: topicTitle,
-        }),
-      }).catch(() => {})
-    }
-    // Fall through to the open-article logic below.
-  } else {
-    // Regular tap — track the click (fire and forget).
-    if (notifId) {
-      fetch('/api/notification/track', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          notifId,
-          action: 'click',
-          title: topicTitle,
-        }),
-      }).catch(() => {})
-    }
-  }
-
-  event.waitUntil(
-    (async () => {
-      const clients = await self.clients.matchAll({
-        type: 'window',
-        includeUncontrolled: true,
-      })
-
-      // Find a client that's on our origin.
-      let targetClient = null
-      for (const client of clients) {
-        if (client.url.includes(self.location.origin)) {
-          targetClient = client
-          break
-        }
-      }
-
-      if (targetClient) {
-        // ── LAYER 1: App is already open ──
-        // Post a message so the client knows to open the topic (works even
-        // if navigate() silently fails or doesn't trigger a React re-render).
-        try {
-          targetClient.postMessage({
-            type: 'open-topic',
-            topicId,
-            url,
-            notifId,
-          })
-        } catch {
-          // postMessage might fail if client is unresponsive
-        }
-
-        // ALSO navigate the client to the URL (redundancy — if postMessage
-        // works, great; if not, navigate ensures the URL changes).
-        try {
-          await targetClient.navigate(url)
-        } catch {
-          // navigate can fail if the client is mid-navigation or crashed.
-          // The client-side topic-watcher will handle it on next load.
-        }
-
-        try {
-          await targetClient.focus()
-        } catch {
-          // focus can fail on some browsers — silent
-        }
-        return
-      }
-
-      // ── LAYER 2: No open client — open a new window ──
       try {
-        const newClient = await self.clients.openWindow(url)
-        // Post a message to the new client too (in case it loads fast
-        // enough to receive it before the page renders).
-        if (newClient && topicId) {
-          // Wait a moment for the client to be ready
-          setTimeout(() => {
-            try {
-              newClient.postMessage({
-                type: 'open-topic',
-                topicId,
-                url,
-                notifId,
-              })
-            } catch {
-              // silent
-            }
-          }, 1500)
-        }
+        await fetch('/api/notification/track', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            notifId,
+            action: 'click',
+            title: topicTitle,
+          }),
+        })
       } catch {
-        // openWindow can fail if popups are blocked. In that case the
-        // client-side topic-watcher won't help either — nothing more we
-        // can do.
+        // silent — tracking is best-effort
       }
-    })(),
-  )
+    }
+
+    // ── Open the article ──
+    const clients = await self.clients.matchAll({
+      type: 'window',
+      includeUncontrolled: true,
+    })
+
+    // Find a client on our origin.
+    let targetClient = null
+    for (const client of clients) {
+      if (client.url.includes(self.location.origin)) {
+        targetClient = client
+        break
+      }
+    }
+
+    if (targetClient) {
+      // ── LAYER 1: App is already open — navigate + focus ──
+      let navigated = false
+      try {
+        await targetClient.navigate(url)
+        navigated = true
+      } catch {
+        // navigate can fail if the client is mid-navigation or crashed
+      }
+      // Post a message as backup (in case navigate didn't trigger React)
+      try {
+        targetClient.postMessage({ type: 'open-topic', topicId, url, notifId })
+      } catch {
+        // silent
+      }
+      try {
+        await targetClient.focus()
+      } catch {
+        // focus can fail on some browsers
+      }
+      // If navigate failed, try openWindow as a last resort
+      if (!navigated) {
+        try {
+          await self.clients.openWindow(url)
+        } catch {
+          // silent
+        }
+      }
+      return
+    }
+
+    // ── LAYER 2: No open client — open a new window ──
+    try {
+      const newClient = await self.clients.openWindow(url)
+      if (newClient && topicId) {
+        // Post a message to the new client after it loads
+        setTimeout(() => {
+          try {
+            newClient.postMessage({ type: 'open-topic', topicId, url, notifId })
+          } catch {
+            // silent
+          }
+        }, 1500)
+      }
+    } catch {
+      // openWindow can fail if popups are blocked — nothing more we can do
+    }
+  })())
 })
 
 // ---------- Notification close (dismiss) ----------
@@ -346,47 +332,9 @@ self.addEventListener('notificationclose', (event) => {
   }
 })
 
-// ---------- Fetch strategy ----------
-self.addEventListener('fetch', (event) => {
-  const { request } = event
-  const url = new URL(request.url)
-
-  if (request.method !== 'GET') return
-  if (url.origin !== self.location.origin) return
-
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const clone = response.clone()
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone))
-          }
-          return response
-        })
-        .catch(() => caches.match(request).then((r) => r || new Response('Offline', { status: 503 }))),
-    )
-    return
-  }
-
-  if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request).catch(() => caches.match('/').then((r) => r || caches.match(request))),
-    )
-    return
-  }
-
-  event.respondWith(
-    caches.match(request).then(
-      (cached) =>
-        cached ||
-        fetch(request).then((response) => {
-          if (response.ok) {
-            const clone = response.clone()
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone))
-          }
-          return response
-        }),
-    ),
-  )
-})
+// ---------- NOTE: There is only ONE fetch handler (above, near the top).
+// The duplicate fetch handler that was here has been REMOVED in v10.
+// Having two fetch listeners caused both to call event.respondWith()
+// for the same navigation request, which produced undefined behavior
+// and broke PWA shortcut navigation (/?category=... was sometimes
+// served from a stale cache of '/' without the query param).

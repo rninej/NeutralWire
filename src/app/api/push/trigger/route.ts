@@ -110,6 +110,52 @@ function detectSectors(title: string, summary: string = ''): string[] {
   return Array.from(matched)
 }
 
+// ── Story fingerprinting (content-based dedup) ──
+// PROBLEM: topicId = hashId(bestTitle + '|' + firstSeen) is UNSTABLE across
+// cache refreshes. As new articles join a cluster, the "best" title (most
+// keywords) and firstSeen timestamp change, producing a DIFFERENT topicId
+// for the SAME ongoing story. This defeated the topicId-based sent-history
+// dedup — users got the same story notified again with a new topicId.
+//
+// SOLUTION: compute a content FINGERPRINT from the title's significant
+// keywords (order-independent, stem-aware, stopword-filtered). Two stories
+// about the same event share the same significant keywords regardless of
+// which outlet's headline was picked as "best". We store sent fingerprints
+// in Firebase and exclude any candidate whose fingerprint was already sent.
+//
+// This is the PRIMARY dedup layer; topicId-based history is a backup.
+const FINGERPRINT_STOPWORDS = new Set([
+  'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her',
+  'was', 'one', 'our', 'out', 'has', 'have', 'from', 'this', 'that',
+  'with', 'they', 'will', 'each', 'make', 'like', 'just', 'over', 'such',
+  'take', 'year', 'said', 'says', 'after', 'before', 'into', 'through',
+  'during', 'while', 'where', 'which', 'what', 'when', 'who', 'whom',
+  'whose', 'why', 'how', 'about', 'above', 'below', 'between', 'under',
+  'again', 'further', 'then', 'once', 'here', 'there', 'both', 'more',
+  'most', 'other', 'some', 'only', 'same', 'than', 'too', 'very', 'also',
+  'news', 'update', 'latest', 'live', 'report', 'reports', 'says', 'said',
+])
+
+function computeStoryFingerprint(title: string): string {
+  const normalized = title
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const words = normalized.split(' ').filter(Boolean)
+  const significant = words
+    .filter((w) => w.length >= 4 && !FINGERPRINT_STOPWORDS.has(w) && !/^\d+$/.test(w))
+    .map((w) => (w.endsWith('s') && w.length > 4 ? w.slice(0, -1) : w))
+  const unique = [...new Set(significant)].sort().slice(0, 8)
+  if (unique.length === 0) return 'fp_empty'
+  const joined = unique.join('|')
+  let h = 0
+  for (let i = 0; i < joined.length; i++) {
+    h = (Math.imul(31, h) + joined.charCodeAt(i)) | 0
+  }
+  return 'fp_' + (h >>> 0).toString(36)
+}
+
 /**
  * Pick the best story for a UK audience using AI.
  *
@@ -249,6 +295,11 @@ function pickBestStoryWithKeywords(
 // free-tier limits. After 14 days a story is "fresh again" — but in practice
 // the same topicId never reappears because news cycles move on.
 const GLOBAL_HISTORY_TTL_MS = 14 * 24 * 60 * 60 * 1000
+// Fingerprints are kept for 30 days — longer than topicIds because the same
+// STORY (same content, different topicId) can reappear across refreshes for
+// days. 30 days ensures a story notified once is never re-notified while it's
+// still in the news cycle.
+const FINGERPRINT_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 /**
  * Load the global sent-history map from Firebase.
@@ -286,6 +337,37 @@ async function recordGlobalHistory(topicIds: Set<string>): Promise<void> {
   }
   try {
     await firebasePatch('notification-sent-history', patch)
+  } catch {
+    // silent — best-effort
+  }
+}
+
+// ── Fingerprint sent-history (content-based dedup) ──
+// Storage: `notification-sent-fingerprints/<fingerprint> = timestamp`
+// This is the PRIMARY dedup layer — see computeStoryFingerprint() above.
+
+async function loadSentFingerprints(): Promise<Set<string>> {
+  const raw =
+    (await firebaseRead<Record<string, number>>('notification-sent-fingerprints')) || {}
+  const now = Date.now()
+  const set = new Set<string>()
+  for (const [fp, ts] of Object.entries(raw)) {
+    if (now - ts < FINGERPRINT_TTL_MS) {
+      set.add(fp)
+    }
+  }
+  return set
+}
+
+async function recordSentFingerprints(fingerprints: Set<string>): Promise<void> {
+  if (fingerprints.size === 0) return
+  const now = Date.now()
+  const patch: Record<string, number> = {}
+  for (const fp of fingerprints) {
+    patch[fp] = now
+  }
+  try {
+    await firebasePatch('notification-sent-fingerprints', patch)
   } catch {
     // silent — best-effort
   }
@@ -431,14 +513,50 @@ export async function GET(req: NextRequest) {
         'notification-stats',
       )) || {}
 
-    // ── GLOBAL NEVER-TWICE HISTORY ──
+    // ── GLOBAL NEVER-TWICE HISTORY (topicId layer) ──
     // Stories sent to ANY user in the last 14 days are excluded from the
-    // candidate pool entirely. This is the primary deduplication layer.
+    // candidate pool entirely. This is the secondary deduplication layer.
     const { sentSet: globalHistory, raw: rawHistory } = await loadGlobalHistory()
 
-    // Filter out globally-sent stories
-    const freshStories = topStories.filter((s) => !globalHistory.has(s.topicId))
-    const candidates = freshStories.length > 0 ? freshStories : topStories
+    // ── FINGERPRINT HISTORY (content layer — PRIMARY dedup) ──
+    // Stories whose CONTENT FINGERPRINT was sent in the last 30 days are
+    // excluded. This catches the same story reappearing with a DIFFERENT
+    // topicId (which happens when bestTitle/firstSeen change across cache
+    // refreshes). Without this, users got the same story notified again.
+    const sentFingerprints = await loadSentFingerprints()
+
+    // Filter out stories that were already sent — by topicId AND by content
+    // fingerprint. A story is "fresh" only if NEITHER its topicId nor its
+    // fingerprint has been sent before.
+    const freshStories = topStories.filter((s) => {
+      if (globalHistory.has(s.topicId)) return false
+      const fp = computeStoryFingerprint(s.title)
+      if (sentFingerprints.has(fp)) return false
+      return true
+    })
+
+    // CRITICAL: If ALL stories were already sent, do NOT fall back to the
+    // unfiltered list (that was the old bug — it re-sent duplicates).
+    // Instead, skip this slot entirely. No notification is better than a
+    // duplicate notification.
+    const candidates = freshStories
+
+    if (candidates.length === 0) {
+      console.log('[trigger] All candidate stories already sent — skipping slot', slot)
+      return NextResponse.json({
+        slot,
+        dryRun,
+        sent: 0,
+        personalized: 0,
+        fallback: 0,
+        sentTopicIds: [],
+        candidateCount: 0,
+        globalHistoryFiltered: topStories.length,
+        fingerprintFiltered: topStories.length,
+        reason: 'All stories already sent (dedup)',
+        time: new Date().toISOString(),
+      })
+    }
 
     // Pick the fallback story (AI-picked best UK story). This is used only
     // for devices with no interests/engagement OR when no candidate matches.
@@ -490,6 +608,20 @@ export async function GET(req: NextRequest) {
     // Skip in dry-run mode.
     if (!dryRun && personalizedResult.sentTopicIds.size > 0) {
       await recordGlobalHistory(personalizedResult.sentTopicIds)
+
+      // ── Record content fingerprints (PRIMARY dedup layer) ──
+      // This catches the same story reappearing with a different topicId.
+      const sentFingerprintsToRecord = new Set<string>()
+      const fullTopicMapForFp = new Map(topStories.map((t) => [t.topicId, t]))
+      for (const topicId of personalizedResult.sentTopicIds) {
+        const topic = fullTopicMapForFp.get(topicId)
+        if (topic) {
+          sentFingerprintsToRecord.add(computeStoryFingerprint(topic.title))
+        }
+      }
+      if (sentFingerprintsToRecord.size > 0) {
+        await recordSentFingerprints(sentFingerprintsToRecord)
+      }
 
       // ── Archive ALL sent topics so notification links work forever ──
       // When a user taps a notification, the client calls /api/topic/[id]
@@ -591,6 +723,7 @@ export async function GET(req: NextRequest) {
       sentTopicIds: Array.from(personalizedResult.sentTopicIds),
       candidateCount: personalCandidates.length,
       globalHistoryFiltered: topStories.length - freshStories.length,
+      fingerprintFiltered: topStories.length - freshStories.length,
       fallbackStory: fallbackStory.title.slice(0, 80),
       time: new Date().toISOString(),
     })

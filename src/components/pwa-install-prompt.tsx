@@ -110,6 +110,35 @@ export function PwaInstallPrompt() {
       setShowBanner(false)
       setDeferredPrompt(null)
       setInstalled(true)
+
+      // ── AUTO-OPEN THE PWA AFTER INSTALL ──
+      // When the appinstalled event fires, the PWA is now installed. We try
+      // to launch it immediately so the user sees the app open instead of
+      // being left on the browser tab wondering what happened.
+      //
+      // On Android Chrome: window.open() to the same origin will open in
+      // the installed PWA (standalone mode) because the URL matches the PWA
+      // scope. This is the most reliable cross-device approach.
+      // On Desktop Chrome: the PWA auto-opens by default, so this is a no-op.
+      // On iOS: "Add to Home Screen" doesn't fire appinstalled, so this
+      // doesn't run (iOS users see the instructions flow instead).
+      try {
+        // Small delay to let the browser finish registering the PWA
+        setTimeout(() => {
+          // Open the PWA at the current URL (preserves any ?topic= or
+          // ?category= context the user was viewing).
+          const pwaUrl = window.location.origin + window.location.pathname + window.location.search
+          const opened = window.open(pwaUrl, '_blank')
+          // If window.open was blocked (popup blocker), the PWA won't
+          // auto-open. The user will need to find the icon on their home
+          // screen. We can't force it — but at least we tried.
+          if (!opened) {
+            console.log('[PWA] window.open was blocked — user needs to open from home screen')
+          }
+        }, 500)
+      } catch {
+        // silent — best effort
+      }
     }
     window.addEventListener('appinstalled', installedHandler)
 

@@ -18,7 +18,13 @@ const PUSHIFY_API_KEY =
 const PUSHIFY_BASE_URL = 'https://pushify.com/api'
 const PUSHIFY_WEBSITE_ID = process.env.PUSHIFY_WEBSITE_ID || '294'
 
-webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+// Only set VAPID details if the private key is configured. This allows
+// dry-run mode (and any code path that doesn't actually send pushes) to
+// work in dev environments where VAPID_PRIVATE_KEY is not set. In
+// production (Vercel), the key is always present.
+if (VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+}
 
 interface NotificationData {
   title: string
