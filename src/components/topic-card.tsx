@@ -57,7 +57,11 @@ function proxyImage(url: string): string {
 }
 
 export function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDetail }: TopicCardProps) {
-  const [open, setOpen] = React.useState(defaultOpen || variant === 'featured')
+  // Sources are HIDDEN by default on ALL cards (including the featured
+  // first card). Users tap "View sources" to expand. Previously the featured
+  // card auto-opened its source list, which made the first news story look
+  // different from the rest.
+  const [open, setOpen] = React.useState(defaultOpen)
   const imageUrl = pickImage(topic)
   // Key the imgError state to the imageUrl so it auto-resets when the image changes.
   // This avoids stale error state from a previous render.
