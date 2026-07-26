@@ -1,13 +1,13 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-// Bumped to v12: added stale-while-revalidate caching for /api/news so the
-// PWA loads INSTANTLY from cache (was waiting 1-2s for the network on every
-// open). Also added /api/img caching for instant image proxy.
-// v11: fixed "processing notification" stuck on mobile — tracking fetches
-// are fire-and-forget. v10: fixed notificationclick, removed duplicate
-// fetch handler.
-const CACHE_NAME = 'neutralwire-v12'
+// Bumped to v13: removed the "Interested" action button from notifications
+// (per user request — a regular tap opens the article, so the button was
+// redundant and caused mobile UX issues). Only "Not Interested" remains.
+// v12: stale-while-revalidate for /api/news, /api/img caching.
+// v11: fixed "processing notification" stuck on mobile. v10: fixed
+// notificationclick, removed duplicate fetch handler.
+const CACHE_NAME = 'neutralwire-v13'
 // Don't cache '/' (the HTML page) — it changes on every deploy and serving
 // stale HTML causes hydration mismatches when the JS bundle is updated.
 // Only cache truly static assets.
@@ -228,15 +228,18 @@ self.addEventListener('push', (event) => {
       topicTitle: data.body, // store the title so we can use it for like/dislike tracking
     },
     image: data.image,
-    // "Interested" + "Not Interested" action buttons (shown at the bottom of
-    // the notification on Android Chrome and desktop Chrome).
-    // iOS Safari doesn't support action buttons, so taps still open the story.
+    // "Not Interested" action button (shown at the bottom of the notification
+    // on Android Chrome and desktop Chrome). iOS Safari doesn't support
+    // action buttons, so taps still open the story.
     //
     // Behavior:
-    //   - Interested      → opens the article (like a regular tap) + tracks positive
-    //   - Not Interested → dismisses the notification + tracks negative (doesn't open)
+    //   - Regular tap (no action)    → opens story, closes notification
+    //   - "Not Interested" (dislike) → DOESN'T open story, closes notification, tracks negative
+    //
+    // NOTE: The "Interested" button was removed per user request. A regular
+    // tap opens the article (same behavior "Interested" had), so the button
+    // was redundant and caused mobile UX issues.
     actions: [
-      { action: 'like', title: 'Interested', icon: '/icon-192.png' },
       { action: 'dislike', title: 'Not Interested', icon: '/icon-192.png' },
     ],
   }
@@ -250,23 +253,18 @@ self.addEventListener('push', (event) => {
 // Opens the specific news story URL (not just the app homepage).
 // Also tracks the click for the prediction system.
 //
-// Handles action buttons (Interested / Not Interested) at the bottom of the notification.
+// Handles the "Not Interested" action button at the bottom of the notification.
 //
 // Behavior:
 //   - Regular tap (no action)    → opens story, closes notification
-//   - "Interested" (like)        → opens story, closes notification, tracks positive
 //   - "Not Interested" (dislike) → DOESN'T open story, closes notification, tracks negative
 //
-// FIX (v11): On mobile, v10 awaited the tracking fetches BEFORE opening the
-// article. /api/notification/feedback does up to 5 Firebase read+write calls
-// (8s timeout each) — on a slow mobile network that blocked the article from
-// opening for seconds, and Android Chrome showed "Processing notification"
-// stuck. Desktop was fast enough to hide this.
+// (The "Interested" button was removed — a regular tap opens the article,
+//  which is the same behavior "Interested" had, so the button was redundant.)
 //
-// v11 fix: fire tracking as FIRE-AND-FORGET (no await), open the article
-// IMMEDIATELY. Also replaced the flaky client.navigate() (hangs on Android)
-// with focus() + postMessage — the client-side 'open-topic' handler opens
-// the topic and updates the URL.
+// FIX (v11): tracking fetches are FIRE-AND-FORGET (no await) so the article
+// opens immediately on mobile (was blocking on slow networks). Also replaced
+// the flaky client.navigate() (hangs on Android) with focus() + postMessage.
 //
 // REDUNDANCY: Three layers ensure the topic always opens:
 //   1. If a client is open: focus it + postMessage 'open-topic'
@@ -294,21 +292,18 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil((async () => {
     // ── Fire tracking as FIRE-AND-FORGET (NO await) ──
-    // These are best-effort analytics. /api/notification/feedback does up
-    // to 5 Firebase read+write calls — awaiting it blocked the article
-    // from opening on mobile ("Processing notification" stuck). We start
-    // the fetch but don't wait for it. The SW stays alive just long enough
-    // for openWindow/focus below; the tracking fetch continues in the
-    // background and completes (or is best-effort dropped).
+    // These are best-effort analytics. We start the fetch but don't wait
+    // for it so the article opens immediately on mobile.
     const trackHeaders = { 'Content-Type': 'application/json' }
-    if (event.action) {
+    if (isNotInterested) {
+      // "Not Interested" → track negative feedback
       fetch('/api/notification/feedback', {
         method: 'POST',
         headers: trackHeaders,
-        body: JSON.stringify({ notifId, action: event.action, title: topicTitle }),
+        body: JSON.stringify({ notifId, action: 'dislike', title: topicTitle }),
       }).catch(() => {})
-    }
-    if (!isNotInterested && notifId) {
+    } else if (notifId) {
+      // Regular tap → track click
       fetch('/api/notification/track', {
         method: 'POST',
         headers: trackHeaders,
@@ -321,7 +316,7 @@ self.addEventListener('notificationclick', (event) => {
       return
     }
 
-    // ── Open the article IMMEDIATELY ( Interested or regular tap ) ──
+    // ── Open the article IMMEDIATELY (regular tap) ──
     const clients = await self.clients.matchAll({
       type: 'window',
       includeUncontrolled: true,
