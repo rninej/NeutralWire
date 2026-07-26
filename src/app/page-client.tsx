@@ -174,19 +174,18 @@ export default function Home() {
   useEffect(() => setMounted(true), [])
 
   // --- Category / view state ---
-  // On mount, check URL for ?category= param (set by PWA shortcuts or
-  // user sharing a subtopic link). This lets each subtopic have its own URL
-  // (e.g. /?category=sports) that survives page refresh.
-  const [category, setCategoryState] = useState<Category>(() => {
-    if (typeof window === 'undefined') return 'relevant'
-    const params = new URLSearchParams(window.location.search)
-    const cat = params.get('category') as Category | null
-    const validCategories: Category[] = [
-      'relevant', 'mycountry', 'top', 'world', 'politics',
-      'business', 'technology', 'science', 'health', 'sports',
-    ]
-    return cat && validCategories.includes(cat) ? cat : 'relevant'
-  })
+  // Category state. ALWAYS initialized to 'relevant' (no lazy initializer
+  // that reads window) — this ensures the server render and client
+  // hydration produce the SAME initial value, avoiding hydration mismatches.
+  // The correct category from the URL (?category=politics) is applied AFTER
+  // hydration by the mount effect's readCategoryFromUrl() call.
+  //
+  // Previous approach used a lazy initializer that read window.location.search
+  // on the client. This caused a hydration mismatch: server rendered
+  // 'relevant' (no window), client expected 'politics' (from URL). React 19
+  // used the server value and the client value was lost — the "Relevant" tab
+  // stayed highlighted even when the URL said ?category=politics.
+  const [category, setCategoryState] = useState<Category>('relevant')
   const [view, setView] = useState<View>('feed')
 
   // ── Category ref (always-current value, used by URL listeners + fetch guard) ──
@@ -279,6 +278,22 @@ export default function Home() {
     window.addEventListener('popstate', handlePopState)
     document.addEventListener('visibilitychange', handleVisibility)
     window.addEventListener('pageshow', handlePageshow)
+
+    // ── MOUNT SYNC: read category from URL on mount ──
+    // CRITICAL FIX: In the production build (SSR), the useState initializer
+    // returns 'relevant' on the server (no window). The server-rendered HTML
+    // has "Relevant" highlighted. On client hydration, React uses the server
+    // value to match the HTML — the client's URL-read ('politics') may NOT
+    // take effect automatically (React 19 hydration mismatch behavior).
+    // The pageshow event that should fix this can fire BEFORE this effect
+    // registers the listener (timing race on page load).
+    //
+    // Calling readCategoryFromUrl() directly here (after registering
+    // listeners) guarantees the URL category is applied on mount, regardless
+    // of whether pageshow already fired or the useState initializer was
+    // overridden by hydration. This runs AFTER hydration completes.
+    readCategoryFromUrl()
+
     return () => {
       window.removeEventListener('popstate', handlePopState)
       document.removeEventListener('visibilitychange', handleVisibility)
