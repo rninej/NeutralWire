@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Download, X, Share, Plus, Bell } from 'lucide-react'
+import { Download, X, Share, Plus, Bell, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 const DISMISS_KEY = 'neutralwire:pwa-install-dismissed'
@@ -22,6 +22,12 @@ interface BeforeInstallPromptEvent extends Event {
  *
  * Android Chrome: Listens for beforeinstallprompt, shows native install
  * dialog. Permanent dismiss if user says "Not now".
+ *
+ * After install: shows a brief "Installed!" confirmation banner. We do NOT
+ * call window.open() — it's blocked by popup blockers because appinstalled
+ * is not a user-gesture event. On Android Chrome the PWA auto-opens after
+ * install by default; on other browsers the user opens it from their home
+ * screen.
  */
 export function PwaInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] =
@@ -29,6 +35,7 @@ export function PwaInstallPrompt() {
   const [showBanner, setShowBanner] = React.useState(false)
   const [isIOS, setIsIOS] = React.useState(false)
   const [installed, setInstalled] = React.useState(false)
+  const [showInstalledToast, setShowInstalledToast] = React.useState(false)
 
   React.useEffect(() => {
     // Detect iOS
@@ -111,34 +118,21 @@ export function PwaInstallPrompt() {
       setDeferredPrompt(null)
       setInstalled(true)
 
-      // ── AUTO-OPEN THE PWA AFTER INSTALL ──
-      // When the appinstalled event fires, the PWA is now installed. We try
-      // to launch it immediately so the user sees the app open instead of
-      // being left on the browser tab wondering what happened.
+      // ── Show a brief "Installed!" confirmation toast ──
+      // We do NOT call window.open() here — it gets blocked by popup
+      // blockers because the appinstalled event is asynchronous and not
+      // tied to a user gesture (browsers only allow window.open inside a
+      // synchronous user-gesture handler). Calling it produced a
+      // "popup blocked" message for the user.
       //
-      // On Android Chrome: window.open() to the same origin will open in
-      // the installed PWA (standalone mode) because the URL matches the PWA
-      // scope. This is the most reliable cross-device approach.
-      // On Desktop Chrome: the PWA auto-opens by default, so this is a no-op.
-      // On iOS: "Add to Home Screen" doesn't fire appinstalled, so this
-      // doesn't run (iOS users see the instructions flow instead).
-      try {
-        // Small delay to let the browser finish registering the PWA
-        setTimeout(() => {
-          // Open the PWA at the current URL (preserves any ?topic= or
-          // ?category= context the user was viewing).
-          const pwaUrl = window.location.origin + window.location.pathname + window.location.search
-          const opened = window.open(pwaUrl, '_blank')
-          // If window.open was blocked (popup blocker), the PWA won't
-          // auto-open. The user will need to find the icon on their home
-          // screen. We can't force it — but at least we tried.
-          if (!opened) {
-            console.log('[PWA] window.open was blocked — user needs to open from home screen')
-          }
-        }, 500)
-      } catch {
-        // silent — best effort
-      }
+      // Instead, we show a friendly confirmation banner for 6 seconds.
+      // On Android Chrome, the browser AUTOMATICALLY opens the installed
+      // PWA after the user accepts the install prompt (default behavior,
+      // no code needed). On Desktop Chrome, the PWA also auto-opens. On
+      // iOS, "Add to Home Screen" doesn't fire appinstalled at all (iOS
+      // users follow the instructions flow), so this handler doesn't run.
+      setShowInstalledToast(true)
+      setTimeout(() => setShowInstalledToast(false), 6000)
     }
     window.addEventListener('appinstalled', installedHandler)
 
@@ -152,6 +146,35 @@ export function PwaInstallPrompt() {
   const handleDismiss = () => {
     localStorage.setItem(DISMISS_KEY, String(Date.now()))
     setShowBanner(false)
+  }
+
+  // ── "Installed!" confirmation toast ──
+  // Shown briefly after the appinstalled event fires. The install banner
+  // itself is hidden (installed=true), so this is the only visible UI.
+  if (showInstalledToast) {
+    return (
+      <div className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-sm rounded-xl border-2 border-emerald-400 bg-background p-4 shadow-lg">
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white">
+            <CheckCircle2 className="h-5 w-5" />
+          </div>
+          <div className="flex-1">
+            <div className="font-semibold text-sm">NeutralWire installed!</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              The app is opening now. Look for the NeutralWire icon on your
+              home screen to launch it anytime.
+            </div>
+          </div>
+          <button
+            onClick={() => setShowInstalledToast(false)}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    )
   }
 
   if (installed || !showBanner) return null

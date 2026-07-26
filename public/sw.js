@@ -1,9 +1,11 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-// Bumped to v10: fixed notificationclick (Interested now opens article),
-// removed duplicate fetch handler that was breaking PWA shortcut navigation.
-const CACHE_NAME = 'neutralwire-v10'
+// Bumped to v11: fixed "processing notification" stuck on mobile — tracking
+// fetches are now fire-and-forget (was blocking article open on slow networks).
+// v10: fixed notificationclick (Interested now opens article), removed
+// duplicate fetch handler that was breaking PWA shortcut navigation.
+const CACHE_NAME = 'neutralwire-v11'
 // Don't cache '/' (the HTML page) — it changes on every deploy and serving
 // stale HTML causes hydration mismatches when the JS bundle is updated.
 // Only cache truly static assets.
@@ -176,14 +178,19 @@ self.addEventListener('push', (event) => {
 //   - "Interested" (like)        → opens story, closes notification, tracks positive
 //   - "Not Interested" (dislike) → DOESN'T open story, closes notification, tracks negative
 //
-// FIX (v10): The ENTIRE handler body is wrapped in event.waitUntil() so the
-// service worker stays alive until the article is actually opened. Previously,
-// the tracking fetches were fire-and-forget BEFORE event.waitUntil was called,
-// which let Android Chrome kill the SW before it could open the article —
-// so tapping "Interested" just dismissed the notification without opening it.
+// FIX (v11): On mobile, v10 awaited the tracking fetches BEFORE opening the
+// article. /api/notification/feedback does up to 5 Firebase read+write calls
+// (8s timeout each) — on a slow mobile network that blocked the article from
+// opening for seconds, and Android Chrome showed "Processing notification"
+// stuck. Desktop was fast enough to hide this.
+//
+// v11 fix: fire tracking as FIRE-AND-FORGET (no await), open the article
+// IMMEDIATELY. Also replaced the flaky client.navigate() (hangs on Android)
+// with focus() + postMessage — the client-side 'open-topic' handler opens
+// the topic and updates the URL.
 //
 // REDUNDANCY: Three layers ensure the topic always opens:
-//   1. If a client is open: navigate it + postMessage
+//   1. If a client is open: focus it + postMessage 'open-topic'
 //   2. If no client is open: openWindow(url)
 //   3. If both fail: the client-side topic-watcher catches ?topic= on next load
 self.addEventListener('notificationclick', (event) => {
@@ -206,26 +213,28 @@ self.addEventListener('notificationclick', (event) => {
     if (match) topicId = match[1]
   }
 
-  // Wrap EVERYTHING in event.waitUntil so the SW stays alive until the
-  // article opens. Without this, Android Chrome kills the SW after the
-  // synchronous handler returns, before async openWindow/navigate resolves.
   event.waitUntil((async () => {
-    // ── Track feedback for action buttons ──
-    // (fire-and-forget but inside waitUntil so SW doesn't die mid-fetch)
+    // ── Fire tracking as FIRE-AND-FORGET (NO await) ──
+    // These are best-effort analytics. /api/notification/feedback does up
+    // to 5 Firebase read+write calls — awaiting it blocked the article
+    // from opening on mobile ("Processing notification" stuck). We start
+    // the fetch but don't wait for it. The SW stays alive just long enough
+    // for openWindow/focus below; the tracking fetch continues in the
+    // background and completes (or is best-effort dropped).
+    const trackHeaders = { 'Content-Type': 'application/json' }
     if (event.action) {
-      try {
-        await fetch('/api/notification/feedback', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            notifId,
-            action: event.action,
-            title: topicTitle,
-          }),
-        })
-      } catch {
-        // silent — tracking is best-effort
-      }
+      fetch('/api/notification/feedback', {
+        method: 'POST',
+        headers: trackHeaders,
+        body: JSON.stringify({ notifId, action: event.action, title: topicTitle }),
+      }).catch(() => {})
+    }
+    if (!isNotInterested && notifId) {
+      fetch('/api/notification/track', {
+        method: 'POST',
+        headers: trackHeaders,
+        body: JSON.stringify({ notifId, action: 'click', title: topicTitle }),
+      }).catch(() => {})
     }
 
     // ── "Not Interested" → dismiss only, don't open the article ──
@@ -233,24 +242,7 @@ self.addEventListener('notificationclick', (event) => {
       return
     }
 
-    // ── Regular tap OR "Interested" → track click + open the article ──
-    if (notifId) {
-      try {
-        await fetch('/api/notification/track', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            notifId,
-            action: 'click',
-            title: topicTitle,
-          }),
-        })
-      } catch {
-        // silent — tracking is best-effort
-      }
-    }
-
-    // ── Open the article ──
+    // ── Open the article IMMEDIATELY ( Interested or regular tap ) ──
     const clients = await self.clients.matchAll({
       type: 'window',
       includeUncontrolled: true,
@@ -266,15 +258,10 @@ self.addEventListener('notificationclick', (event) => {
     }
 
     if (targetClient) {
-      // ── LAYER 1: App is already open — navigate + focus ──
-      let navigated = false
-      try {
-        await targetClient.navigate(url)
-        navigated = true
-      } catch {
-        // navigate can fail if the client is mid-navigation or crashed
-      }
-      // Post a message as backup (in case navigate didn't trigger React)
+      // ── LAYER 1: App is already open — focus + postMessage ──
+      // Don't use client.navigate() — it's flaky on Android (hangs/fails
+      // silently). Instead, focus the client and postMessage 'open-topic';
+      // the client-side handler opens the topic + updates the URL.
       try {
         targetClient.postMessage({ type: 'open-topic', topicId, url, notifId })
       } catch {
@@ -285,14 +272,6 @@ self.addEventListener('notificationclick', (event) => {
       } catch {
         // focus can fail on some browsers
       }
-      // If navigate failed, try openWindow as a last resort
-      if (!navigated) {
-        try {
-          await self.clients.openWindow(url)
-        } catch {
-          // silent
-        }
-      }
       return
     }
 
@@ -300,7 +279,8 @@ self.addEventListener('notificationclick', (event) => {
     try {
       const newClient = await self.clients.openWindow(url)
       if (newClient && topicId) {
-        // Post a message to the new client after it loads
+        // Post a message to the new client after it loads (backup for the
+        // ?topic= URL param, in case the client's topic-watcher is slow)
         setTimeout(() => {
           try {
             newClient.postMessage({ type: 'open-topic', topicId, url, notifId })
@@ -310,7 +290,8 @@ self.addEventListener('notificationclick', (event) => {
         }, 1500)
       }
     } catch {
-      // openWindow can fail if popups are blocked — nothing more we can do
+      // openWindow can fail if popups are blocked — the client-side
+      // topic-watcher will handle ?topic= on next manual launch
     }
   })())
 })
@@ -333,7 +314,7 @@ self.addEventListener('notificationclose', (event) => {
 })
 
 // ---------- NOTE: There is only ONE fetch handler (above, near the top).
-// The duplicate fetch handler that was here has been REMOVED in v10.
+// The duplicate fetch handler that was here has been REMOVED in v10/v11.
 // Having two fetch listeners caused both to call event.respondWith()
 // for the same navigation request, which produced undefined behavior
 // and broke PWA shortcut navigation (/?category=... was sometimes
