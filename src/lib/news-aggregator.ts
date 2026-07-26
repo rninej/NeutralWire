@@ -298,13 +298,20 @@ function engagementBoost(
 // This catches the common "same news, different worded titles" problem:
 //   "Berlin Pride attack: Police hunt suspect"
 //   "German police hunt fugitive after van ramming at Pride"
-// These may have Jaccard 0.15 (under 0.22) but share 2+ significant
-// keywords (berlin, pride, police, hunt, suspect, attack).
+// These share 3+ significant keywords (police, hunt, pride) AND have
+// Jaccard ~0.30 (high overall similarity).
 //
-// Merge criteria (LOWER than the initial clustering threshold):
-//   - Jaccard >= 0.12, OR
-//   - Share 2+ significant keywords (was 3 in initial pass)
+// Merge criteria (STRICTER than initial clustering — requires BOTH):
+//   - Jaccard >= 0.15  (meaningful overall title similarity)
+//   - Share 3+ significant keywords
 // AND within 48h of each other.
+//
+// Both conditions must hold (AND, not OR). The previous OR-based threshold
+// (Jaccard >= 0.12 OR shared >= 2) caused false-positive merges between
+// unrelated stories that shared 2 generic news words (e.g. "huge" +
+// "hands" merged a Barcola/PSG transfer story with a Gatwick water shortage
+// story). With AND, both titles must be genuinely similar overall AND share
+// multiple event-specific keywords.
 //
 // Merging combines articles, recalculates coverage/lean/image, and keeps
 // the title with the most keywords (best headline).
@@ -333,9 +340,24 @@ function mergeNearDuplicateTopics(topics: TopicArticle[]): TopicArticle[] {
         if (kwSets[i].has(w)) shared++
       }
 
-      // Merge if Jaccard >= 0.12 OR shared keywords >= 2 (lower thresholds
-      // than the initial clustering pass, which uses 0.22 / 3)
-      if (sim >= 0.12 || shared >= 2) {
+      // Merge ONLY if BOTH conditions hold:
+      //   - Jaccard >= 0.15  (meaningful overall title similarity)
+      //   - shared significant keywords >= 3  (at least 3 event-specific words in common)
+      //
+      // This is STRICTER than the previous OR-based threshold (Jaccard >= 0.12
+      // OR shared >= 2), which caused false-positive merges between unrelated
+      // stories that happened to share 2 generic news words (e.g. "huge" +
+      // "hands" merged a Barcola/PSG transfer story with a Gatwick water
+      // shortage story; "premier" + "league" + "clubs" merged it with a
+      // Premier League financial vote story).
+      //
+      // With AND, both titles must share 3+ significant keywords AND have a
+      // Jaccard similarity >= 0.15. This catches genuine same-event stories
+      // with different wording (e.g. "Berlin Pride attack: Police hunt
+      // suspect" vs "German police hunt fugitive after van ramming at Pride"
+      // → shared=3, Jaccard=0.30 → MERGE) while rejecting unrelated stories
+      // that share a few common words.
+      if (sim >= 0.15 && shared >= 3) {
         mergeIndices.push(j)
         merged[j] = true
       }
