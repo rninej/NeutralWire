@@ -98,6 +98,90 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : inter / union
 }
 
+// ---------- Sports topic detection ----------
+// Used to DEPRIORITISE sports stories in non-sports categories.
+//
+// PROBLEM: Sports stories (Premier League, F1, boxing, cricket) often have
+// very high coverage (6-9 sources) because every outlet has a sports desk.
+// On the Relevant / World / Top tabs they bubble to the top, pushing down
+// equally-important non-sports news (wars, elections, science) that has
+// fewer sources.
+//
+// SOLUTION: In every category EXCEPT 'sports', we apply a coverage penalty
+// to topics detected as sports. The penalty is large enough to push sports
+// stories below non-sports stories of similar coverage, but NOT so large
+// that a 10-source sports story disappears entirely — it just ranks below
+// a 5-source non-sports story instead of above it.
+//
+// Detection: keyword scan of title (+summary as backup). The keyword list
+// covers team names, leagues, competitions, sports terms, and athletes that
+// overwhelmingly indicate a sports story.
+const SPORTS_KEYWORDS = [
+  // Competitions / leagues (unambiguous)
+  'premier league', 'champions league', 'la liga', 'serie a', 'bundesliga',
+  'mls', 'nba', 'nfl', 'super bowl', 'nhl', 'stanley cup', 'fa cup',
+  'world cup', 'euro 2024', 'euro 2025', 'euro 2026', 'copa america', 'afcon',
+  'asian cup', 'wimbledon', 'french open', 'us open tennis', 'australian open',
+  'atp finals', 'wta finals', 'fifa', 'uefa', 'rugby world cup', 'six nations',
+  'tour de france', 'giro d\'italia', 'ryder cup', 'the masters tournament',
+  'pga championship', 'pba', 'ipl', 'the ashes',
+  // Sports-specific terms (unambiguous — wouldn't appear in political/business news)
+  'kickoff', 'kick-off', 'full-time', 'half-time', 'extra time',
+  'penalty shootout', 'penalty kick', 'goalkeeper', 'striker', 'midfielder',
+  'winger', 'transfer window', 'transfer fee',
+  'pole position', 'grand prix', 'grid position',
+  'set point', 'match point', 'break point', 'tiebreak', 'tie-break',
+  'innings', 'wicket', 'batsman', 'bowler', 'lbw',
+  'penalty try', 'scrum', 'lineout', 'try scorer',
+  'title fight', 'title bout', 'weigh-in',
+  'birdie', 'eagle', 'bogey', 'tee time', 'fairway', 'putt',
+  'semifinal', 'semi-final', 'quarterfinal', 'quarter-final',
+  // Teams (high-coverage ones that dominate sports feeds) — full names only
+  // to avoid false positives on city names in news.
+  'arsenal', 'chelsea', 'liverpool fc', 'man city', 'man united',
+  'manchester city', 'manchester united', 'tottenham', 'spurs',
+  'newcastle united', 'aston villa', 'west ham', 'brighton ',
+  'barcelona', 'real madrid', 'atletico madrid', 'bayern munich', 'dortmund',
+  'paris saint-germain', 'juventus', 'inter milan', 'ac milan',
+  'napoli', 'roma ', 'lazio', 'sevilla', 'valencia',
+  'ajax', 'porto', 'benfica', 'celtic fc', 'rangers fc',
+  'lakers', 'celtics', 'warriors', 'knicks', 'bulls', 'nuggets',
+  'cowboys', 'chiefs', 'eagles', '49ers', 'bills', 'ravens', 'steelers',
+  'packers', 'patriots',
+  // Athletes (unambiguous names)
+  'verstappen', 'leclerc', 'norris', 'piastri',
+  'djokovic', 'alcaraz', 'sinner', 'medvedev', 'zverev',
+  'swiatek', 'sabalenka', 'gauff', 'rybakina',
+  'joshua', 'fury', 'usyk', 'wildler', 'ngannou', 'prenga',
+  'mcilroy', 'scheffler', 'tiger woods',
+  'haaland', 'mbappe', 'vinicius', 'bellingham',
+  'de bruyne', 'gakpo', 'odegaard',
+  'suryavanshi',
+]
+
+/**
+ * Detect whether a topic is about sports, using its title and summary.
+ *
+ * Returns true if any sports keyword is found. Used to apply a coverage
+ * penalty in non-sports categories so sports stories rank lower.
+ */
+function isSportsTopic(topic: TopicArticle): boolean {
+  const text = `${topic.title} ${topic.summary || ''}`.toLowerCase()
+  for (const kw of SPORTS_KEYWORDS) {
+    if (text.includes(kw)) return true
+  }
+  // Backup: if a strong majority of the topic's articles come from sources
+  // categorized as 'sports' feeds, treat it as a sports topic. This catches
+  // stories that don't have obvious sports keywords (e.g. a transfer rumor
+  // phrased generically) but are clearly sports because every source is a
+  // sports feed.
+  if (topic.articles && topic.articles.length >= 3) {
+    const sportsCount = topic.articles.filter((a) => a.category === 'sports').length
+    if (sportsCount / topic.articles.length >= 0.6) return true
+  }
+  return false
+}
+
 // ---------- Content-based country relevance ----------
 // Used by the "My Country" tab to filter stories by TOPIC content, not just
 // by source. A story from BBC about Trump is NOT UK news — it's US politics
@@ -845,6 +929,33 @@ function extractAttr(block: string, tag: string, attr: string): string | null {
 
 function extractImageFromHtml(html: string): string | null {
   if (!html) return null
+
+  // ── srcset parsing: prefer the LARGEST image from srcset ──
+  // Many RSS descriptions include an <img> with a srcset attribute listing
+  // multiple resolutions (e.g. "img-240.jpg 240w, img-800.jpg 800w, img-1200.jpg 1200w").
+  // The old code only grabbed `src` (usually the smallest). We now parse
+  // srcset and pick the highest-resolution URL.
+  const srcsetMatch = html.match(/<img[^>]+srcset=["']([^"']+)["']/i)
+  if (srcsetMatch?.[1]) {
+    const srcset = srcsetMatch[1]
+    // Parse "url Nw, url Nw, ..." entries
+    const entries = srcset.split(',').map((entry) => {
+      const parts = entry.trim().split(/\s+/)
+      const url = parts[0]
+      const widthDescriptor = parts[1] || ''
+      const width = parseInt(widthDescriptor, 10) || 0
+      return { url, width }
+    })
+    // Pick the entry with the highest width (fallback to first if no widths)
+    const best = entries.sort((a, b) => b.width - a.width)[0]
+    if (best?.url) return best.url
+  }
+
+  // ── data-src / data-lazy-src: some feeds lazy-load images ──
+  const dataSrcMatch = html.match(/<img[^>]+data-src=["']([^"']+)["']/i)
+  if (dataSrcMatch?.[1]) return dataSrcMatch[1]
+
+  // ── Fallback: plain src attribute ──
   const m = html.match(/<img[^>]+src=["']([^"']+)["']/i)
   return m ? m[1] : null
 }
@@ -1283,14 +1394,119 @@ async function validateImageUrl(url: string): Promise<boolean> {
 }
 
 /**
+ * Upgrade a low-resolution RSS thumbnail URL to a higher-resolution variant
+ * for known publisher URL patterns. Returns the upgraded URL (or the
+ * original if no upgrade applies).
+ *
+ * RSS feeds often include small thumbnails (240px, 140px, 96px). Many
+ * publishers use predictable URL patterns where a dimension appears in
+ * the path/query — we can swap it for a larger dimension to get a
+ * full-resolution image suitable for cards (≥600px).
+ *
+ * Examples:
+ *   BBC:      /ace/standard/240/...  →  /ace/standard/800/...
+ *   Guardian: ?width=140             →  ?width=1200
+ *   NYT:      -mediumSquareAt3X      →  -articleLarge (or keep, it's 3x)
+ *   Independent: /width=1200 (already large, leave alone)
+ *   France24: /w:1280/ (already large, leave alone)
+ *   Telegraph: keep
+ *   CNBC:     ?v=...&w=1920 (already large, leave alone)
+ */
+function upgradeToHighRes(url: string): string {
+  if (!url) return url
+  try {
+    // BBC: /ace/standard/<N>/cpsprodpb/... → bump N to 800
+    // Also /ace/ic/<N>/ and /${N}x${N}/ variants
+    if (/ichef\.bbci\.co\.uk\//.test(url)) {
+      return url
+        .replace(/\/ace\/(?:standard|ic)\/\d+\//, '/ace/standard/800/')
+    }
+    // Guardian: width=NNN → width=1200
+    if (/i\.guim\.co\.uk\//.test(url)) {
+      return url.replace(/([?&])width=\d+/, '$1width=1200')
+    }
+    // NYT: -mediumSquareAt3X.jpg is 3x (good), but -thumbStandard / -small
+    // variants are tiny. Upgrade known small variants to -articleLarge.
+    if (/static\d?\.nyt\.com\//.test(url)) {
+      return url
+        .replace(/-thumbStandard\./, '-articleLarge.')
+        .replace(/-thumbLarge\./, '-articleLarge.')
+        .replace(/-small\./, '-articleLarge.')
+        .replace(/-mediumSquareAt3X\./, '-jumbo.') // jumbo is larger than mediumSquareAt3X
+    }
+    // Al Jazeera: /640/ or /240/ → /1280/
+    if (/www\.aljazeera\.com\//.test(url)) {
+      return url.replace(/\/(?:240|360|480|640)\//, '/1280/')
+    }
+    // HuffPost: resize as query param
+    if (/media\.cldnry\.s-nbcnews\.com\//.test(url)) {
+      return url.replace(/t_nbcnews-fp-\d+x\d+/, 't_nbcnews-fp-1200x630')
+    }
+    // Japan Times: keep /uploads/ images as-is (already full-res)
+    // Reuters/Independent/FT: already large in RSS
+    return url
+  } catch {
+    return url
+  }
+}
+
+/**
+ * Score an image URL by likely resolution quality (higher = better).
+ * Used to rank candidate images so we PREFER high-resolution URLs.
+ *
+ * Heuristics:
+ *   - URLs with explicit large dimension hints (width=1200, /1280/, -jumbo)
+ *     score highest
+ *   - OG images (from article pages) score higher than RSS thumbnails
+ *     (detected by typical RSS thumbnail patterns)
+ *   - URLs with tiny dimension hints (width=140, /96/, -thumbStandard) score
+ *     lowest — we still use them as a last resort but prefer larger ones
+ */
+function scoreImageUrl(url: string): number {
+  if (!url) return 0
+  const u = url.toLowerCase()
+  let score = 50 // baseline
+
+  // High-res hints (boost)
+  if (/width=1[0-9]{3}/.test(u)) score += 40 // width=1200, width=1920
+  else if (/width=[7-9]\d{2}/.test(u)) score += 25 // width=800
+  else if (/width=[4-6]\d{2}/.test(u)) score += 10 // width=600
+  else if (/width=\d{1,3}(?!\d)/.test(u)) score -= 20 // width=140, width=240
+
+  if (/\/(?:1[0-9]{3}|[7-9]\d{2})(?:x(?:1[0-9]{3}|[7-9]\d{2}))?\//.test(u)) score += 35 // /1280/ or /800x800/
+  else if (/\/(?:[4-6]\d{2})\//.test(u)) score += 10 // /600/
+  else if (/\/(?:[1-3]\d{2})\//.test(u)) score -= 15 // /240/, /140/
+
+  if (/-jumbo\.|-articleLarge\.|-superJumbo\./.test(u)) score += 30
+  if (/-mediumSquareAt3X\./.test(u)) score += 20 // 3x retina, decent
+  if (/-thumbStandard\.|-thumbLarge\.|-small\./.test(u)) score -= 25
+
+  // Known high-quality OG image hosts
+  if (/ichef\.bbci\.co\.uk\/ace\/(?:standard|ic)\/[6-9]\d{2}\//.test(u)) score += 15
+  if (/static\d?\.nyt\.com\/images\/.*-(?:jumbo|articleLarge|superJumbo)\./.test(u)) score += 15
+  if (/i\.guim\.co\.uk\/.*width=1[0-9]{3}/.test(u)) score += 15
+
+  return score
+}
+
+/**
  * For a topic, find the best HIGHEST-QUALITY image URL that works.
  *
- * Strategy:
- * 1. Always fetch OG images from article pages first — these are typically
- *    full-resolution (1200px+), much better than RSS thumbnails (240px).
- * 2. Fall back to existing article imageUrls (RSS-provided, may be small).
- * 3. Validate each candidate with a GET request.
- * 4. Prefer candidates with larger file sizes (proxy for higher resolution).
+ * Strategy (v2 — more images, higher resolution):
+ * 1. Collect candidates from BOTH sources in parallel:
+ *    a. OG images from article pages (typically 1200px+, full-resolution)
+ *    b. RSS-provided image URLs (often small thumbnails 140-240px)
+ * 2. Upgrade every RSS candidate via upgradeToHighRes() — swaps low-res
+ *    dimension hints (width=140, /240/) for high-res ones (width=1200, /800/)
+ *    on known publisher URL patterns (BBC, Guardian, NYT, Al Jazeera, ...).
+ * 3. Score every candidate via scoreImageUrl() — higher score = likely
+ *    higher resolution. Sort candidates by score DESC so we validate the
+ *    highest-quality ones first.
+ * 4. Validate each candidate (in quality order) with a GET request. Return
+ *    the FIRST one that works.
+ *
+ * This ensures: (a) more topics get images (we try OG + RSS + upgraded RSS),
+ * and (b) the chosen image is the highest-resolution available.
  *
  * Tries up to `maxAttempts` articles for OG images.
  */
@@ -1298,8 +1514,6 @@ async function findImageForTopic(
   topic: TopicArticle,
   maxAttempts = 5,
 ): Promise<string | null> {
-  // Collect OG image candidates from article pages (high quality).
-  const ogCandidates: string[] = []
   // Priority sources — ordered to PREFER sources whose images DON'T have
   // large watermarks/logos. The Guardian's images have a huge "Guardian"
   // logo in the corner that makes the site look like it's run by The
@@ -1320,32 +1534,43 @@ async function findImageForTopic(
     return score(a.sourceId) - score(b.sourceId)
   })
 
-  // Fetch OG images from up to maxAttempts articles in parallel.
-  const ogResults = await Promise.all(
-    sorted.slice(0, maxAttempts).map(async (a) => {
-      try {
-        return await fetchOgImage(a.link)
-      } catch {
-        return null
-      }
-    }),
-  )
-  for (const url of ogResults) {
-    if (url) ogCandidates.push(url)
-  }
+  // ── Collect ALL candidates in parallel: OG images + RSS images ──
+  // Fetch OG from up to maxAttempts articles. RSS images we already have
+  // (no fetch needed) — collect from the topic + all articles, then
+  // upgrade each to a high-res variant.
+  const ogFetchPromises = sorted.slice(0, maxAttempts).map(async (a) => {
+    try {
+      return await fetchOgImage(a.link)
+    } catch {
+      return null
+    }
+  })
 
-  // Validate OG candidates first (these are full-resolution).
-  for (const url of ogCandidates) {
-    if (await validateImageUrl(url)) return url
-  }
-
-  // Fall back to RSS-provided image URLs (may be lower quality).
   const rssCandidates: string[] = []
   if (topic.imageUrl) rssCandidates.push(topic.imageUrl)
   for (const a of topic.articles) {
     if (a.imageUrl) rssCandidates.push(a.imageUrl)
   }
-  for (const url of rssCandidates) {
+  // Upgrade each RSS candidate to high-res + dedup
+  const upgradedRss = Array.from(
+    new Set(rssCandidates.map((u) => upgradeToHighRes(u)).filter(Boolean)),
+  )
+
+  const ogResults = await Promise.all(ogFetchPromises)
+  // Also upgrade OG image URLs to high-res (some publishers return small
+  // OG thumbnails, e.g. BBC's og:image sometimes points to /ace/standard/240/)
+  const ogCandidates = ogResults
+    .filter((u): u is string => !!u)
+    .map((u) => upgradeToHighRes(u))
+
+  // ── Combine + score + sort (highest quality first) ──
+  const allCandidates = Array.from(new Set([...ogCandidates, ...upgradedRss]))
+  const scored = allCandidates
+    .map((url) => ({ url, score: scoreImageUrl(url) }))
+    .sort((a, b) => b.score - a.score)
+
+  // ── Validate in quality order — return first working URL ──
+  for (const { url } of scored) {
     if (await validateImageUrl(url)) return url
   }
 
@@ -1462,7 +1687,22 @@ function clusterTopics(
         bestTitle = a.title
         bestSummary = a.description
       }
-      if (!bestImage && a.imageUrl) bestImage = a.imageUrl
+      // Pick the HIGHEST-QUALITY image across all articles in the cluster
+      // (was: first non-null image). We score each candidate by likely
+      // resolution and keep the best. This means even before the
+      // findImageForTopic() OG-fetch pass, the topic already has the
+      // best RSS-provided image rather than just the first one.
+      if (a.imageUrl) {
+        const upgraded = upgradeToHighRes(a.imageUrl)
+        if (!bestImage) {
+          bestImage = upgraded
+        } else {
+          // Replace if this candidate scores higher than current best
+          if (scoreImageUrl(upgraded) > scoreImageUrl(bestImage)) {
+            bestImage = upgraded
+          }
+        }
+      }
       if (a.iso < firstSeen) firstSeen = a.iso
       if (a.iso > latestSeen) latestSeen = a.iso
     }
@@ -1604,23 +1844,53 @@ export async function aggregateCategory(
     // For other categories, sort by coverage desc then recency desc.
     let filtered: TopicArticle[]
     if (isMyCountryMode || isSportsMode) {
-      // AI already ranked — just filter + slice, preserve AI order
+      // AI already ranked — just filter + slice, preserve AI order.
+      // (Sports mode: no sports penalty — this IS the sports tab.)
       filtered = relevantTopics
         .filter((t) => t.coverage >= minCoverage)
         .slice(0, limit)
     } else {
+      // ── Sports deprioritisation in non-sports categories ──
+      // Sports stories (Premier League, F1, boxing) often have very high
+      // coverage because every outlet has a sports desk — they bubble to
+      // the top of Relevant/World/Top tabs, pushing down equally-important
+      // non-sports news (wars, elections, science) with fewer sources.
+      //
+      // We apply a coverage penalty to sports topics so they rank lower.
+      // The penalty treats a sports story as if it had ~4 fewer sources:
+      //   effectiveCoverage = coverage - 4 (min 0)
+      // This means a 7-source sports story (effective 3) ranks BELOW a
+      // 5-source non-sports story (effective 5), but ABOVE a 2-source
+      // non-sports story. Sports stories still appear, just further down.
+      //
+      // The penalty ONLY applies when there are non-sports stories to
+      // show — if a category is dominated by sports (rare for non-sports
+      // tabs), we don't want to show an empty feed.
+      const SPORTS_PENALTY = 4
+      const hasNonSports = relevantTopics.some((t) => !isSportsTopic(t))
+      const applySportsPenalty = hasNonSports
+
+      const effectiveCoverage = (t: TopicArticle): number => {
+        if (!applySportsPenalty) return t.coverage
+        return isSportsTopic(t) ? Math.max(0, t.coverage - SPORTS_PENALTY) : t.coverage
+      }
+
       filtered = relevantTopics
         .filter((t) => t.coverage >= minCoverage)
         .sort((a, b) => {
           if (isRelevantMode) {
             const la = a.localCoverage ?? 0
             const lb = b.localCoverage ?? 0
-            const scoreA = a.coverage * 10 + la * 5 + (la > 0 ? 30 : 0)
-            const scoreB = b.coverage * 10 + lb * 5 + (lb > 0 ? 30 : 0)
+            const ea = effectiveCoverage(a)
+            const eb = effectiveCoverage(b)
+            const scoreA = ea * 10 + la * 5 + (la > 0 ? 30 : 0)
+            const scoreB = eb * 10 + lb * 5 + (lb > 0 ? 30 : 0)
             if (scoreB !== scoreA) return scoreB - scoreA
             return b.latestSeen - a.latestSeen
           }
-          if (b.coverage !== a.coverage) return b.coverage - a.coverage
+          const ea = effectiveCoverage(a)
+          const eb = effectiveCoverage(b)
+          if (eb !== ea) return eb - ea
           return b.latestSeen - a.latestSeen
         })
         .slice(0, limit)
@@ -1640,10 +1910,17 @@ export async function aggregateCategory(
     // per topic. Runs in parallel for speed.
     await shortenLongTitles(filtered)
 
-    const topicsForImageCheck = filtered.slice(0, 10)
+    // ── Image validation + fallback (expanded) ──
+    // Validate + upgrade images for the TOP 15 topics (was 10) so more
+    // stories get a working high-resolution image. Each topic tries:
+    //   - OG images from up to 5 articles (was 3) — more candidates
+    //   - Upgraded RSS thumbnails (width=140 → width=1200, etc.)
+    //   - Scored + sorted by likely resolution (highest first)
+    // Runs in parallel for speed.
+    const topicsForImageCheck = filtered.slice(0, 15)
     await Promise.all(
       topicsForImageCheck.map(async (topic) => {
-        const img = await findImageForTopic(topic, 3)
+        const img = await findImageForTopic(topic, 5)
         if (img) topic.imageUrl = img
         else topic.imageUrl = null // ensure broken URLs are cleared
       }),
