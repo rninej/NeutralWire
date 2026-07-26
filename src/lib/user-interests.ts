@@ -32,6 +32,45 @@ export type SectorId = (typeof SECTORS)[number]['id']
 
 const INTERESTS_KEY = 'neutralwire:interests'
 const ENGAGEMENT_KEY = 'neutralwire:engagement'
+const SEEN_TOPICS_KEY = 'neutralwire:seen-topics'
+
+// ── Seen-topics tracking (client-side) ──
+// Records which topicIds the user has already opened. Used to DEMOTE seen
+// topics in the feed so users see fresh content instead of stories they
+// already read.
+//
+// Storage: localStorage, a map of topicId → timestamp. Pruned to the last
+// 200 entries (FIFO) to keep localStorage small.
+
+export function getSeenTopics(): Record<string, number> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = localStorage.getItem(SEEN_TOPICS_KEY)
+    if (!raw) return {}
+    return JSON.parse(raw) as Record<string, number>
+  } catch {
+    return {}
+  }
+}
+
+export function markTopicSeen(topicId: string): void {
+  if (typeof window === 'undefined' || !topicId) return
+  try {
+    const seen = getSeenTopics()
+    seen[topicId] = Date.now()
+    // Prune: keep only the 200 most-recent entries
+    const entries = Object.entries(seen).sort((a, b) => b[1] - a[1])
+    const pruned = entries.slice(0, 200)
+    localStorage.setItem(SEEN_TOPICS_KEY, JSON.stringify(Object.fromEntries(pruned)))
+  } catch {
+    // silent — localStorage might be full
+  }
+}
+
+export function isTopicSeen(topicId: string): boolean {
+  if (typeof window === 'undefined' || !topicId) return false
+  return topicId in getSeenTopics()
+}
 
 // ── Interests (selected during onboarding) ──
 

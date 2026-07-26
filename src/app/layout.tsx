@@ -76,6 +76,20 @@ export default function RootLayout({
         {/* iOS PWA: allow standalone display + push notifications */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
+        {/* ── Performance: preconnect to key external domains ── */}
+        {/* Firebase RTDB — used for news cache, summaries, device data */}
+        <link rel="preconnect" href="https://neutralwire-2f24e-default-rtdb.europe-west1.firebasedatabase.app" />
+        <link rel="dns-prefetch" href="https://neutralwire-2f24e-default-rtdb.europe-west1.firebasedatabase.app" />
+        {/* Major image CDNs — preconnect so image proxy fetches are faster */}
+        <link rel="dns-prefetch" href="https://ichef.bbci.co.uk" />
+        <link rel="dns-prefetch" href="https://static01.nyt.com" />
+        <link rel="dns-prefetch" href="https://i.guim.co.uk" />
+        <link rel="dns-prefetch" href="https://s.france24.com" />
+        <link rel="dns-prefetch" href="https://static.independent.co.uk" />
+        <link rel="dns-prefetch" href="https://www.japantimes.co.jp" />
+        {/* Preload the news API — the FIRST request the page makes. This
+            starts the fetch before the JS bundle finishes parsing. */}
+        <link rel="preload" as="fetch" href="/api/news?category=relevant&limit=24&minCoverage=1" crossOrigin="anonymous" />
       </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}

@@ -182,6 +182,237 @@ function isSportsTopic(topic: TopicArticle): boolean {
   return false
 }
 
+// ---------- Recency scoring ----------
+// Used to boost FRESH stories and decay STALE ones in the ranking.
+//
+// PROBLEM: Pure coverage-based ranking lets a 36-hour-old 8-source story
+// dominate over a 2-hour-old 5-source story. Users see stale news at the
+// top instead of the latest developments.
+//
+// SOLUTION: Add a recency boost/penalty to the sort score:
+//   < 3h old:  +15  (breaking — strong boost)
+//   < 6h old:  +8   (fresh — moderate boost)
+//   < 12h old: +3   (recent — small boost)
+//   < 24h old:  0   (neutral)
+//   < 36h old: -5   (stale — small penalty)
+//   >= 36h:   -15   (very stale — strong penalty)
+//
+// This is ADDITIVE to the coverage score (coverage*10), so a 12-source
+// stale story (120 - 15 = 105) still beats a 5-source fresh story
+// (50 + 15 = 65) — coverage remains king. But a 6-source stale story
+// (60 - 15 = 45) loses to a 5-source fresh story (50 + 15 = 65), which
+// is the desired behaviour: fresh developments surface above yesterday's
+// news at similar coverage.
+function recencyBoost(topic: TopicArticle): number {
+  const ageMs = Date.now() - topic.latestSeen
+  const ageH = ageMs / (60 * 60 * 1000)
+  if (ageH < 3) return 15
+  if (ageH < 6) return 8
+  if (ageH < 12) return 3
+  if (ageH < 24) return 0
+  if (ageH < 36) return -5
+  return -15
+}
+
+// ---------- Aggregate engagement scoring ----------
+// Reads notification-stats from Firebase (keyword → {clicks, likes, dislikes}).
+// Topics whose keywords match high-engagement keywords get a boost — this
+// is an aggregate popularity signal across ALL users (stories people are
+// clicking/liking rank higher).
+//
+// Cached in-process for 5 minutes to avoid a Firebase read on every call.
+interface EngagementStats {
+  clicks?: number
+  opens?: number
+  dismisses?: number
+  likes?: number
+  dislikes?: number
+}
+let ENGAGEMENT_CACHE: { ts: number; stats: Record<string, EngagementStats> } | null = null
+const ENGAGEMENT_TTL_MS = 5 * 60 * 1000
+
+async function loadEngagementStats(): Promise<Record<string, EngagementStats>> {
+  if (ENGAGEMENT_CACHE && Date.now() - ENGAGEMENT_CACHE.ts < ENGAGEMENT_TTL_MS) {
+    return ENGAGEMENT_CACHE.stats
+  }
+  try {
+    const stats =
+      (await firebaseRead<Record<string, EngagementStats>>('notification-stats')) || {}
+    ENGAGEMENT_CACHE = { ts: Date.now(), stats }
+    return stats
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Compute an engagement boost for a topic based on aggregate click/like
+ * stats stored in Firebase (notification-stats).
+ *
+ * Extracts significant keywords from the title (same logic as the feedback
+ * endpoint) and sums (clicks + likes*2 - dislikes*3) across all matched
+ * keywords. Returns a boost in the range [-20, +20].
+ *
+ * A topic that matches keywords users have been clicking/liking gets a
+ * positive boost (max +20). A topic matching heavily-disliked keywords
+ * gets a penalty (min -20). Topics with no engagement data get 0.
+ */
+function engagementBoost(
+  topic: TopicArticle,
+  stats: Record<string, EngagementStats>,
+): number {
+  if (!stats || Object.keys(stats).length === 0) return 0
+  // Extract significant keywords (mirrors /api/notification/feedback logic)
+  const stopWords = new Set([
+    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+    'of', 'with', 'from', 'by', 'is', 'was', 'are', 'were', 'be', 'been',
+    'this', 'that', 'it', 'its', 'they', 'them', 'their', 'there', 'we',
+    'us', 'our', 'you', 'your', 'he', 'she', 'his', 'her', 'not', 'no',
+    'has', 'have', 'had', 'will', 'would', 'can', 'could', 'should',
+    'about', 'after', 'before', 'during', 'over', 'under', 'up', 'down',
+    'out', 'off', 'than', 'too', 'very', 'just', 'also', 'only', 'says',
+    'said', 'say', 'new', 'one', 'two', 'amid', 'news', 'report',
+  ])
+  const keywords = (topic.title + ' ' + (topic.summary || ''))
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 4 && !stopWords.has(w))
+    .slice(0, 8)
+
+  let score = 0
+  for (const kw of keywords) {
+    const s = stats[kw]
+    if (!s) continue
+    score += (s.clicks || 0) * 1 + (s.likes || 0) * 2 - (s.dislikes || 0) * 3
+  }
+  // Clamp to [-20, +20] so engagement is a tie-breaker, not a dominator
+  return Math.max(-20, Math.min(20, score))
+}
+
+// ---------- Post-clustering near-duplicate merge ----------
+// After clusterTopics, do a SECOND pass to merge topics that are clearly
+// about the same event but were clustered separately (different wording,
+// different articles, Jaccard just under the initial 0.22 threshold).
+//
+// This catches the common "same news, different worded titles" problem:
+//   "Berlin Pride attack: Police hunt suspect"
+//   "German police hunt fugitive after van ramming at Pride"
+// These may have Jaccard 0.15 (under 0.22) but share 2+ significant
+// keywords (berlin, pride, police, hunt, suspect, attack).
+//
+// Merge criteria (LOWER than the initial clustering threshold):
+//   - Jaccard >= 0.12, OR
+//   - Share 2+ significant keywords (was 3 in initial pass)
+// AND within 48h of each other.
+//
+// Merging combines articles, recalculates coverage/lean/image, and keeps
+// the title with the most keywords (best headline).
+function mergeNearDuplicateTopics(topics: TopicArticle[]): TopicArticle[] {
+  if (topics.length < 2) return topics
+
+  const kwSets = topics.map((t) => titleKeywords(t.title))
+  const merged = new Array(topics.length).fill(false)
+  const result: TopicArticle[] = []
+
+  for (let i = 0; i < topics.length; i++) {
+    if (merged[i]) continue
+    // Collect indices of topics to merge with topic[i]
+    const mergeIndices = [i]
+    merged[i] = true
+
+    for (let j = i + 1; j < topics.length; j++) {
+      if (merged[j]) continue
+      // Time window: 48h
+      if (Math.abs(topics[i].latestSeen - topics[j].latestSeen) > 48 * 60 * 60 * 1000) continue
+
+      const sim = jaccard(kwSets[i], kwSets[j])
+      // Count shared significant keywords
+      let shared = 0
+      for (const w of kwSets[j]) {
+        if (kwSets[i].has(w)) shared++
+      }
+
+      // Merge if Jaccard >= 0.12 OR shared keywords >= 2 (lower thresholds
+      // than the initial clustering pass, which uses 0.22 / 3)
+      if (sim >= 0.12 || shared >= 2) {
+        mergeIndices.push(j)
+        merged[j] = true
+      }
+    }
+
+    if (mergeIndices.length === 1) {
+      result.push(topics[i])
+      continue
+    }
+
+    // Merge the cluster into a single topic
+    const cluster = mergeIndices.map((idx) => topics[idx])
+    const allArticles = cluster.flatMap((t) => t.articles || [])
+    // Dedup articles by link
+    const seenLinks = new Set<string>()
+    const dedupArticles = allArticles.filter((a) => {
+      if (seenLinks.has(a.link)) return false
+      seenLinks.add(a.link)
+      return true
+    })
+
+    // Pick the best title (most significant keywords)
+    let bestTitleIdx = mergeIndices[0]
+    for (const idx of mergeIndices) {
+      if (kwSets[idx].size > kwSets[bestTitleIdx].size) {
+        bestTitleIdx = idx
+      }
+    }
+    const bestTitle = topics[bestTitleIdx].title
+    const bestSummary = topics[bestTitleIdx].summary
+
+    // Pick the best image (highest score)
+    let bestImage = cluster[0].imageUrl
+    for (const t of cluster) {
+      if (t.imageUrl && (!bestImage || scoreImageUrl(t.imageUrl) > scoreImageUrl(bestImage))) {
+        bestImage = t.imageUrl
+      }
+    }
+
+    // Recompute lean counts from deduped articles
+    let leanLeft = 0, leanCenter = 0, leanRight = 0
+    const seenSourceIds = new Set<string>()
+    let firstSeen = cluster[0].firstSeen
+    let latestSeen = cluster[0].latestSeen
+    for (const a of dedupArticles) {
+      if (!seenSourceIds.has(a.sourceId)) {
+        seenSourceIds.add(a.sourceId)
+        if (a.leaning === 'left') leanLeft++
+        else if (a.leaning === 'center') leanCenter++
+        else leanRight++
+      }
+      if (a.iso < firstSeen) firstSeen = a.iso
+      if (a.iso > latestSeen) latestSeen = a.iso
+    }
+    // Sum local coverage from cluster members (best estimate without re-deriving
+    // the localSourceIds set, which isn't available in this function)
+    const localCoverage = cluster.reduce((sum, t) => sum + (t.localCoverage || 0), 0)
+
+    result.push({
+      topicId: hashId(bestTitle + '|' + firstSeen),
+      title: bestTitle,
+      summary: bestSummary,
+      imageUrl: bestImage,
+      coverage: dedupArticles.length,
+      leanLeft,
+      leanCenter,
+      leanRight,
+      firstSeen,
+      latestSeen,
+      articles: dedupArticles.sort((a, b) => b.iso - a.iso),
+      localCoverage,
+    })
+  }
+
+  return result
+}
+
 // ---------- Content-based country relevance ----------
 // Used by the "My Country" tab to filter stories by TOPIC content, not just
 // by source. A story from BBC about Trump is NOT UK news — it's US politics
@@ -1783,7 +2014,11 @@ export async function aggregateCategory(
     const isMyCountryMode = category === 'mycountry' && localSet.size > 0
     const isSportsMode = category === 'sports'
 
-    const topics = clusterTopics(fresh, (isRelevantMode || isMyCountryMode) ? localSet : new Set())
+    // Cluster articles into topics, then run a SECOND merge pass to catch
+    // near-duplicates that slipped through the initial clustering (same
+    // event, different worded titles). See mergeNearDuplicateTopics().
+    const clustered = clusterTopics(fresh, (isRelevantMode || isMyCountryMode) ? localSet : new Set())
+    const topics = mergeNearDuplicateTopics(clustered)
 
     // For `mycountry` mode: use the AI fallback chain to filter + rank
     // topics by country relevance.
@@ -1875,22 +2110,31 @@ export async function aggregateCategory(
         return isSportsTopic(t) ? Math.max(0, t.coverage - SPORTS_PENALTY) : t.coverage
       }
 
+      // ── Load aggregate engagement stats (cached 5 min) ──
+      // Topics matching keywords users are clicking/liking get a boost;
+      // topics matching disliked keywords get a penalty. Range [-20, +20].
+      const engStats = await loadEngagementStats()
+
       filtered = relevantTopics
         .filter((t) => t.coverage >= minCoverage)
         .sort((a, b) => {
+          // ── Relevant mode: local boost + recency + engagement ──
           if (isRelevantMode) {
             const la = a.localCoverage ?? 0
             const lb = b.localCoverage ?? 0
             const ea = effectiveCoverage(a)
             const eb = effectiveCoverage(b)
-            const scoreA = ea * 10 + la * 5 + (la > 0 ? 30 : 0)
-            const scoreB = eb * 10 + lb * 5 + (lb > 0 ? 30 : 0)
+            const scoreA = ea * 10 + la * 5 + (la > 0 ? 30 : 0) + recencyBoost(a) + engagementBoost(a, engStats)
+            const scoreB = eb * 10 + lb * 5 + (lb > 0 ? 30 : 0) + recencyBoost(b) + engagementBoost(b, engStats)
             if (scoreB !== scoreA) return scoreB - scoreA
             return b.latestSeen - a.latestSeen
           }
+          // ── Other categories: coverage + recency + engagement ──
           const ea = effectiveCoverage(a)
           const eb = effectiveCoverage(b)
-          if (eb !== ea) return eb - ea
+          const scoreA = ea * 10 + recencyBoost(a) + engagementBoost(a, engStats)
+          const scoreB = eb * 10 + recencyBoost(b) + engagementBoost(b, engStats)
+          if (scoreB !== scoreA) return scoreB - scoreA
           return b.latestSeen - a.latestSeen
         })
         .slice(0, limit)

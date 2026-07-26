@@ -1,11 +1,13 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-// Bumped to v11: fixed "processing notification" stuck on mobile — tracking
-// fetches are now fire-and-forget (was blocking article open on slow networks).
-// v10: fixed notificationclick (Interested now opens article), removed
-// duplicate fetch handler that was breaking PWA shortcut navigation.
-const CACHE_NAME = 'neutralwire-v11'
+// Bumped to v12: added stale-while-revalidate caching for /api/news so the
+// PWA loads INSTANTLY from cache (was waiting 1-2s for the network on every
+// open). Also added /api/img caching for instant image proxy.
+// v11: fixed "processing notification" stuck on mobile — tracking fetches
+// are fire-and-forget. v10: fixed notificationclick, removed duplicate
+// fetch handler.
+const CACHE_NAME = 'neutralwire-v12'
 // Don't cache '/' (the HTML page) — it changes on every deploy and serving
 // stale HTML causes hydration mismatches when the JS bundle is updated.
 // Only cache truly static assets.
@@ -79,6 +81,83 @@ self.addEventListener('fetch', (event) => {
         })
       }),
     )
+    return
+  }
+
+  // ── /api/news → STALE-WHILE-REVALIDATE (instant PWA load) ──
+  // This is the BIGGEST speed win for the PWA: when the app opens, it
+  // requests /api/news. Instead of waiting 1-2s for the network, we serve
+  // the CACHED response INSTANTLY (if available), then fetch a fresh copy
+  // in the background and update the cache for next time.
+  //
+  // Flow:
+  //   1. First open: no cache → fetch from network, cache it, return it
+  //   2. Subsequent opens: serve cache INSTANTLY → fetch fresh in background
+  //      → update cache (next open gets the fresh data)
+  //   3. Offline: serve cache (or the last-known-good response)
+  //
+  // We cache each (category, country, limit) combination separately so
+  // switching tabs doesn't serve the wrong category's cache.
+  if (req.url.includes('/api/news')) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(CACHE_NAME)
+        const cached = await cache.match(req)
+
+        // Kick off a background fetch to update the cache (revalidate).
+        // Don't await it — we return the cached response immediately.
+        const networkFetch = fetch(req, { cache: 'no-store' })
+          .then((res) => {
+            if (res.ok) {
+              cache.put(req, res.clone())
+            }
+            return res
+          })
+          .catch(() => null)
+
+        // If we have a cached response, return it INSTANTLY.
+        // The network fetch continues in the background to update the cache.
+        if (cached) {
+          return cached
+        }
+
+        // No cache — wait for the network (first-ever load).
+        const networkRes = await networkFetch
+        if (networkRes) return networkRes
+
+        // Network failed and no cache — return a minimal empty response
+        // so the app doesn't crash (it'll show "no stories available").
+        return new Response(
+          JSON.stringify({ topics: [], sourceCount: 0, articleCount: 0 }),
+          { headers: { 'Content-Type': 'application/json' } },
+        )
+      })(),
+    )
+    return
+  }
+
+  // ── /api/img → cache-first (images don't change) ──
+  // Image proxy responses are immutable (same URL = same image). Cache-
+  // first means instant image load on repeat visits. Fall back to network
+  // if not cached. Cache for 24h (handled by the cache name bump on deploy).
+  if (req.url.includes('/api/img')) {
+    event.respondWith(
+      caches.match(req).then((cached) => {
+        if (cached) return cached
+        return fetch(req).then((res) => {
+          if (res.ok) {
+            const clone = res.clone()
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, clone))
+          }
+          return res
+        }).catch(() => {
+          // Network failed and no cache — return a 503 so the img tag's
+          // onError handler shows the placeholder (topic-card handles this).
+          return new Response('', { status: 503, headers: { 'Content-Type': 'text/plain' } })
+        })
+      }),
+    )
+    return
   }
 })
 

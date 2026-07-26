@@ -51,6 +51,8 @@ import {
   getEngagement,
   personalizationBoost,
   bumpEngagementForTopic,
+  getSeenTopics,
+  markTopicSeen,
   type EngagementStats,
 } from '@/lib/user-interests'
 
@@ -355,16 +357,18 @@ export default function Home() {
     detailTopicRef.current = detailTopic
   }, [detailTopic])
 
-  // --- User interests + engagement (for personalization) ---
+  // --- User interests + engagement + seen-topics (for personalization) ---
   const [interests, setInterestsState] = useState<string[]>([])
   const [engagement, setEngagement] = useState<EngagementStats>({})
+  const [seenTopics, setSeenTopics] = useState<Record<string, number>>({})
 
-  // Load interests + engagement from localStorage on mount, and refresh
-  // whenever the onboarding flow saves new interests.
+  // Load interests + engagement + seen-topics from localStorage on mount,
+  // and refresh whenever the onboarding flow saves new interests.
   useEffect(() => {
     const load = () => {
       setInterestsState(getInterests())
       setEngagement(getEngagement())
+      setSeenTopics(getSeenTopics())
     }
     load()
     window.addEventListener('neutralwire:interests-changed', load)
@@ -379,8 +383,12 @@ export default function Home() {
   }, [])
 
   // Track engagement when a user opens a topic detail.
+  // Also marks the topic as "seen" so it gets demoted in the feed (users
+  // see fresh content instead of stories they already read).
   const handleOpenDetail = React.useCallback((topic: TopicArticle) => {
     setDetailTopic(topic)
+    markTopicSeen(topic.topicId)
+    setSeenTopics(getSeenTopics())
     const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
     if (deviceId) {
       bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'click')
@@ -735,11 +743,18 @@ export default function Home() {
       )
     }
 
+    // ── Seen-topic demotion ──
+    // Topics the user has already opened get pushed DOWN in the feed so
+    // they see fresh content. We apply a score penalty (-15) to seen
+    // topics. This runs even without interests/engagement so all users
+    // benefit. Seen topics are NOT hidden (they still appear, just lower).
+    const seenTopicIds = new Set(Object.keys(seenTopics))
+
     // Only personalise when there's no active search (otherwise the user
     // is looking for something specific and we shouldn't hide results).
     const hasInterests = interests.length > 0
     const hasEngagement = Object.keys(engagement).length > 0
-    if (debouncedSearch || (!hasInterests && !hasEngagement)) {
+    if (debouncedSearch || (!hasInterests && !hasEngagement && seenTopicIds.size === 0)) {
       return list
     }
 
@@ -747,10 +762,15 @@ export default function Home() {
     // preserves original order for ties (so equal-boost stories keep
     // their aggregator ordering, which already prioritises local + fresh).
     //
+    // Seen topics get a -15 penalty (demoted below unseen stories of
+    // similar coverage).
     // Topics with very negative scores (< -10) are HIDDEN — the user has
     // strongly disliked this sector, so we don't show them at all.
     const scored = list
-      .map((t) => ({ topic: t, score: personalizationBoost(t, interests, engagement) }))
+      .map((t) => ({
+        topic: t,
+        score: personalizationBoost(t, interests, engagement) - (seenTopicIds.has(t.topicId) ? 15 : 0),
+      }))
       .sort((a, b) => b.score - a.score)
 
     // Hide heavily-disliked topics (score < -10)
@@ -758,7 +778,7 @@ export default function Home() {
     // If hiding everything would leave nothing, show all (better than empty)
     const finalList = visible.length > 0 ? visible : scored
     return finalList.map((entry) => entry.topic)
-  }, [topics, debouncedSearch, interests, engagement])
+  }, [topics, debouncedSearch, interests, engagement, seenTopics])
 
   // Track whether local search yielded no results — triggers API search.
   useEffect(() => {
@@ -1181,6 +1201,7 @@ export default function Home() {
                     <TopicCard
                       key={featured.topicId + (featured.imageUrl || '')}
                       topic={featured}
+                      variant="featured"
                       onOpenDetail={handleOpenDetail}
                     />
                   )}

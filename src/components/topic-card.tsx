@@ -118,6 +118,14 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
           <img
             src={proxyImage(imageUrl!)}
             alt=""
+            // Lazy-load images that are below the fold. The featured card
+            // (variant === 'featured') loads eagerly for fast LCP.
+            loading={variant === 'featured' ? 'eager' : 'lazy'}
+            // Fetchpriority hint: 'high' for the featured image (above the
+            // fold), 'low' for the rest so the browser prioritises the
+            // first visible image.
+            // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
+            fetchpriority={variant === 'featured' ? 'high' : 'low'}
             className="h-full w-full object-cover"
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
