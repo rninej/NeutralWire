@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 /**
- * Generate dynamic OG metadata for shared links.
+ *  Generate dynamic OG metadata for shared links.
  *
  * When a link like /?topic=abc123 is shared on WhatsApp/Twitter/etc, the
  * crawler fetches the page HTML and reads the og:image meta tag. We look
