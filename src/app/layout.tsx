@@ -105,20 +105,44 @@ export default function RootLayout({
           </ErrorBoundary>
           <Toaster />
         </ThemeProvider>
-        {/* Service worker registration — required for PWA install + push notifications */}
+        {/* Service worker registration — required for PWA install + push notifications.
+            Passes updateViaCache: 'none' so the browser ALWAYS fetches the
+            latest sw.js (never a stale cached copy). Also listens for a new
+            SW taking over and reloads the page so the new notification
+            config (e.g. removed action buttons) takes effect immediately. */}
         <script
           dangerouslySetInnerHTML={{
             __html: `
               if ('serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
-                  navigator.serviceWorker.register('/sw.js').then(
+                  navigator.serviceWorker.register('/sw.js', {
+                    updateViaCache: 'none'  // always fetch fresh sw.js
+                  }).then(
                     function(registration) {
                       console.log('[SW] registered:', registration.scope);
+                      // If a new SW is waiting to activate, tell it to skip
+                      // waiting immediately (it already calls skipWaiting on
+                      // install, but this covers the case where it's already
+                      // installed but waiting).
+                      if (registration.waiting) {
+                        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+                      }
                     },
                     function(err) {
                       console.warn('[SW] registration failed:', err);
                     }
                   );
+
+                  // When a new SW takes over (controllerchange), reload the
+                  // page ONCE so the new notification config applies. We use
+                  // a flag to avoid reload loops.
+                  var refreshing = false;
+                  navigator.serviceWorker.addEventListener('controllerchange', function() {
+                    if (refreshing) return;
+                    refreshing = true;
+                    console.log('[SW] new controller took over — reloading');
+                    window.location.reload();
+                  });
                 });
               }
             `,

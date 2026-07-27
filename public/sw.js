@@ -1,13 +1,14 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-// Bumped to v13: removed the "Interested" action button from notifications
-// (per user request — a regular tap opens the article, so the button was
-// redundant and caused mobile UX issues). Only "Not Interested" remains.
-// v12: stale-while-revalidate for /api/news, /api/img caching.
-// v11: fixed "processing notification" stuck on mobile. v10: fixed
-// notificationclick, removed duplicate fetch handler.
-const CACHE_NAME = 'neutralwire-v13'
+// Bumped to v14: force SW update to take effect immediately. The v13 change
+// (removed "Interested" button) wasn't reaching existing PWA installs because
+// the old SW stayed in 'waiting' state (default browser behavior waits until
+// all tabs close). v14 adds SKIP_WAITING message handling + the page now
+// passes updateViaCache:'none' and auto-reloads on controllerchange.
+// v13: removed "Interested" button. v12: SWR caching. v11: fire-and-forget
+// tracking. v10: fixed notificationclick.
+const CACHE_NAME = 'neutralwire-v14'
 // Don't cache '/' (the HTML page) — it changes on every deploy and serving
 // stale HTML causes hydration mismatches when the JS bundle is updated.
 // Only cache truly static assets.
@@ -165,6 +166,13 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'START_SCHEDULE_POLL') {
     startSchedulePolling()
+  }
+  // Allow the page to tell a waiting SW to skip waiting and activate
+  // immediately. This is used when the registration finds a new SW in the
+  // 'waiting' state — the page posts SKIP_WAITING, the new SW activates,
+  // and the controllerchange listener reloads the page.
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
   }
 })
 
