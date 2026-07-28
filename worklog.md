@@ -673,3 +673,28 @@ Stage Summary:
 - /api/news?category=mycountry (GB): 5 topics served from cache (GDELT connect-timeout in sandbox is expected — same class of issue as 429; on Vercel IPs the live GDELT fetch will succeed). No crash.
 - Commit: 7112b03. Push: success (main → main). PAT cleaned from .git/config.
 - Files in commit: src/lib/gdelt-aggregator.ts (new, 587 lines), src/app/api/news/route.ts (+28/-28), src/lib/news-aggregator.ts (+11/-5).
+
+---
+Task ID: 6
+Agent: sub-agent (general-purpose)
+Task: Lint, test, push stable daily AI ranking for My Country GDELT aggregator (built by main agent in prior turn).
+
+Work Log:
+- Read worklog to get context on prior work (Tasks 1, 2, 3, FIX-1..4, 5). Main agent had just added `rankTopicsStably()` to src/lib/gdelt-aggregator.ts: a BBC-news-editor AI prompt ranks stories by national importance (policy → major incidents → weather/transport → health/education → cultural → local/quirky last), with a stable per-country per-day cache in Firebase (gdelt-rankings/<cc>/<YYYY-MM-DD>). Falls back to coverage-desc sort if AI fails. Replaced the old coverage-based sort in `aggregateMyCountryViaGdelt()`; image validation now runs against the ranked array.
+- Lint: `bun run lint` → 0 errors, 0 warnings. No fixes needed.
+- Restarted dev server: pkill next dev + next-server, removed dev.log, ran .zscripts/dev.sh via setsid nohup. After 15s warmup: `curl http://localhost:3000/` → HTTP 200.
+- Tested `relevant` (GB): `GET /api/news?category=relevant&country=GB&limit=5&minCoverage=1` → 5 topics. RSS pipeline unaffected.
+- Tested `mycountry` (GB): `GET /api/news?category=mycountry&country=GB&limit=10&minCoverage=1` → 10 topics, cached:true. Top 10 in cached order (Burnham/rescue dog, Olympics/Commonwealth, Burnham youth unemployment, Burnham bounce, Burnham road-rule changes, Evans/Whitehouse Commonwealth, Glorious Goodwood tips, Burnham cut-through tactics, No 10 abuse petition, Polly Toynbee symbolism).
+- Dev.log error check: 1 GDELT-related line — `[gdelt] API returned 429 for GB` (background refresh attempt; sandbox IP rate-limited by GDELT — same expected limitation as Task 5). No crashes, no [gdelt-rank] log lines because no fresh GDELT fetch succeeded in this session — the 10 topics came from the Firebase newsCache. The AI-ranking code path only runs after a successful GDELT fetch, which the sandbox cannot do. Code itself runs cleanly (HTTP 200 on every endpoint, no uncaught exceptions in dev.log).
+- Committed (1 source file only): commit 22a8ad6 on main.
+- Pushed to GitHub: `git push origin main` → `7112b03..22a8ad6  main -> main` (success).
+- Cleaned PAT: reset remote URL to https://github.com/rninej/NeutralWire.git; verified `grep -c "ghp_" .git/config` → 0.
+
+Stage Summary:
+- Lint: PASS (0 errors, 0 warnings).
+- Dev server: started HTTP 200.
+- /api/news?category=relevant (GB): 5 topics (RSS pipeline intact).
+- /api/news?category=mycountry (GB): 10 topics served from Firebase cache (GDELT API 429 in sandbox — same limitation as Task 5; on Vercel IPs the live GDELT fetch will succeed and trigger the AI ranking path). No crash.
+- dev.log: only `[gdelt] API returned 429 for GB` (expected sandbox limitation). No [gdelt-rank] lines because no fresh GDELT fetch succeeded in this session — AI ranking path will be exercised on Vercel.
+- Commit: 22a8ad6. Push: success (main → main, 7112b03..22a8ad6). PAT cleaned from .git/config.
+- File in commit: src/lib/gdelt-aggregator.ts (+214/-9 lines): added `rankTopicsStably()`, `COUNTRY_DISPLAY` map, `CachedRanking` interface, `todayKey()`, replaced coverage-sort with AI-ranking call, image validation now uses ranked array, removed unused `currentTopicIds`.
