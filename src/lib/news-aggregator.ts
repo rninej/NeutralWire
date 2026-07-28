@@ -1349,25 +1349,31 @@ function wordCount(s: string): number {
 }
 
 /**
- * Check if a title needs shortening (>15 words).
+ * Check if a title needs shortening (>15 words OR >140 characters).
+ * GDELT titles can be very long, so the character check catches verbose
+ * headlines that have few words but many characters.
  */
 function titleNeedsShortening(title: string): boolean {
-  return wordCount(title) > 15
+  return wordCount(title) > 15 || title.length > 140
 }
 
 /**
  * Shorten long titles using the AI fallback chain.
  *
- * For each topic with >15 words, calls callAI with a prompt asking for a
- * concise 6-12 word headline that preserves the key facts.
+ * For each topic with >15 words OR >140 characters, calls callAI with a
+ * prompt asking for a concise 6-12 word headline that preserves the key
+ * facts.
  *
  * Result is cached in Firebase (title-rewrites/<topicId>) and in-process
  * so subsequent loads are instant.
  *
  * Operates IN PLACE on the topics array — modifies topic.title.
  * Runs in parallel for speed (batches of 5 to avoid rate limits).
+ *
+ * Exported so the GDELT aggregator (gdelt-aggregator.ts) can call it on
+ * GDELT-sourced topics too.
  */
-async function shortenLongTitles(topics: TopicArticle[]): Promise<void> {
+export async function shortenLongTitles(topics: TopicArticle[]): Promise<void> {
   // Find topics that need shortening
   const toShorten = topics.filter((t) => titleNeedsShortening(t.title))
   if (toShorten.length === 0) return

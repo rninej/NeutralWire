@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import type { Category } from '@/lib/news-sources'
 import { NEWS_SOURCES } from '@/lib/news-sources'
-import { aggregateCategory, type TopicArticle } from '@/lib/news-aggregator'
+import { aggregateCategory, shortenLongTitles, type TopicArticle } from '@/lib/news-aggregator'
+import { aggregateMyCountryViaGdelt } from '@/lib/gdelt-aggregator'
 import {
   readCachedNews,
   refreshCategory,
@@ -75,18 +76,41 @@ export async function GET(req: NextRequest) {
   // when scrolling to the bottom. Non-virtual categories stay at 40.
   const cacheLimit = isVirtualCategory(category) ? 60 : 40
 
+  // ── Aggregation backend selector ──
+  // `mycountry` uses the GDELT Cloud API (aggregates ALL news outlets for
+  // the visitor's country — thousands of local + national papers, no AI
+  // filtering needed). All other categories use the RSS-based aggregator.
+  const isMyCountry = category === 'mycountry'
+
+  const aggregate = async (): Promise<{
+    topics: TopicArticle[]
+    sourceCount: number
+    articleCount: number
+  }> => {
+    if (isMyCountry) {
+      // GDELT backend for My Country — comprehensive country-specific news
+      const gdeltResult = await aggregateMyCountryViaGdelt(country, cacheLimit)
+      // Shorten long titles (>140 chars) via AI in the background
+      await shortenLongTitles(gdeltResult.topics)
+      return gdeltResult
+    }
+    // RSS backend for all other categories
+    const rssResult = await aggregateCategory(category, {
+      limit: cacheLimit,
+      minCoverage: 1,
+      countrySourceIds,
+      countryCode: country,
+    })
+    return rssResult
+  }
+
   // 1. Try cache first.
   let cached = await readCachedNews(category, country)
 
   // 2. If no cache at all → do one synchronous aggregate.
   if (!cached) {
     try {
-      const agg = await aggregateCategory(category, {
-        limit: cacheLimit,
-        minCoverage: 1,
-        countrySourceIds,
-        countryCode: country,
-      })
+      const agg = await aggregate()
       const payload = {
         updatedAt: Date.now(),
         sourceCount: agg.sourceCount,
@@ -121,14 +145,7 @@ export async function GET(req: NextRequest) {
   const stale = isStale(cached)
   if (stale && canRefresh(category, country)) {
     if (wait) {
-      const fresh = await refreshCategory(category, country, (c) =>
-        aggregateCategory(c, {
-          limit: cacheLimit,
-          minCoverage: 1,
-          countrySourceIds,
-          countryCode: country,
-        }),
-      )
+      const fresh = await refreshCategory(category, country, async () => aggregate())
       if (fresh) {
         return NextResponse.json({
           category,
@@ -146,14 +163,7 @@ export async function GET(req: NextRequest) {
     } else {
       after(async () => {
         try {
-          await refreshCategory(category, country, (c) =>
-            aggregateCategory(c, {
-              limit: cacheLimit,
-              minCoverage: 1,
-              countrySourceIds,
-              countryCode: country,
-            }),
-          )
+          await refreshCategory(category, country, async () => aggregate())
         } catch (err) {
           console.warn(`[api/news] background refresh ${category}/${country} failed:`, err)
         }
