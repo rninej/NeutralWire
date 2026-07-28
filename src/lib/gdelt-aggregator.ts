@@ -44,6 +44,8 @@
 
 import type { Leaning } from '@/lib/news-sources'
 import type { TopicArticle, FeedArticle } from '@/lib/news-aggregator'
+import { callAI } from '@/lib/ai-providers'
+import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
 const GDELT_API_URL = 'https://api.gdeltproject.org/api/v2/doc/doc'
 
@@ -100,6 +102,207 @@ const COUNTRY_TO_GDELT: Record<string, string> = {
   PH: 'Philippines',
   TH: 'Thailand',
   VN: 'Vietnam',
+}
+
+// Country code → short display name for AI prompts (e.g. "the UK", "the US")
+const COUNTRY_DISPLAY: Record<string, string> = {
+  US: 'the US', GB: 'the UK', UK: 'the UK', CA: 'Canada', AU: 'Australia',
+  IE: 'Ireland', NZ: 'New Zealand', IN: 'India', HK: 'Hong Kong',
+  SG: 'Singapore', JP: 'Japan', KR: 'South Korea', CN: 'China',
+  TW: 'Taiwan', DE: 'Germany', FR: 'France', ES: 'Spain', IT: 'Italy',
+  PT: 'Portugal', NL: 'the Netherlands', BE: 'Belgium', CH: 'Switzerland',
+  AT: 'Austria', SE: 'Sweden', NO: 'Norway', DK: 'Denmark', FI: 'Finland',
+  PL: 'Poland', BR: 'Brazil', AR: 'Argentina', MX: 'Mexico', CL: 'Chile',
+  CO: 'Colombia', ZA: 'South Africa', NG: 'Nigeria', KE: 'Kenya',
+  EG: 'Egypt', IL: 'Israel', SA: 'Saudi Arabia', AE: 'the UAE',
+  TR: 'Turkey', RU: 'Russia', UA: 'Ukraine', PK: 'Pakistan',
+  BD: 'Bangladesh', ID: 'Indonesia', MY: 'Malaysia', PH: 'the Philippines',
+  TH: 'Thailand', VN: 'Vietnam',
+}
+
+// ── Stable daily AI ranking ──
+// The ranking is cached per-country per-day in Firebase at:
+//   gdelt-rankings/<countryCode>/<YYYY-MM-DD> = { rankedTopicIds: [...], topicTitles: {...}, ts: ... }
+//
+// STABILITY: Once a ranking is written for a day, it's the final order until
+// the next day. This means the top stories stay in the same position all day
+// (like BBC News) — they don't reshuffle on every refresh. New stories that
+// arrive during the day are appended at the end (or the ranking is refreshed
+// if >30% of topicIds are new).
+//
+// AI RANKING: The AI acts as a news editor — it sees all topic titles and
+// ranks them by national importance (policy, major events, crime, weather
+// warnings, infrastructure) rather than raw coverage. This produces a
+// BBC-style top-stories list instead of a coverage-sorted feed.
+
+interface CachedRanking {
+  rankedTopicIds: string[]
+  topicTitles: Record<string, string> // topicId → title (for detecting changes)
+  ts: number
+}
+
+/**
+ * Get today's date key (YYYY-MM-DD) in UTC. The ranking is stable for the
+ * UTC day so it's consistent across timezones.
+ */
+function todayKey(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+/**
+ * Rank GDELT topics using AI, with a stable daily cache.
+ *
+ * Flow:
+ *   1. Check Firebase for today's cached ranking (gdelt-rankings/<cc>/<date>).
+ *   2. If cached AND >70% of current topicIds are in the cached ranking →
+ *      use the cached order (stable for the day). New topics are appended.
+ *   3. If no cache OR too many new topics → call the AI to rank all topics,
+ *      write the result to Firebase, return the AI-ranked order.
+ *   4. If the AI fails → fall back to coverage-desc + recency-desc sort.
+ */
+async function rankTopicsStably(
+  topics: TopicArticle[],
+  countryCode: string,
+): Promise<TopicArticle[]> {
+  if (topics.length === 0) return topics
+  if (topics.length === 1) return topics
+
+  const cc = countryCode.toUpperCase()
+  const dateKey = todayKey()
+  const cachePath = `gdelt-rankings/${cc}/${dateKey}`
+
+  // 1. Check Firebase for today's cached ranking
+  let cached: CachedRanking | null = null
+  try {
+    cached = await firebaseRead<CachedRanking>(cachePath)
+  } catch {
+    // silent
+  }
+
+  const topicMap = new Map(topics.map((t) => [t.topicId, t]))
+
+  // 2. If cached, check how many current topics are already ranked
+  if (cached && cached.rankedTopicIds && cached.rankedTopicIds.length > 0) {
+    const rankedSet = new Set(cached.rankedTopicIds)
+    const knownCount = topics.filter((t) => rankedSet.has(t.topicId)).length
+    const knownRatio = knownCount / topics.length
+
+    if (knownRatio >= 0.7) {
+      // ≥70% of topics are already ranked → use cached order, append new ones
+      const ordered: TopicArticle[] = []
+      const used = new Set<string>()
+      for (const id of cached.rankedTopicIds) {
+        const topic = topicMap.get(id)
+        if (topic) {
+          ordered.push(topic)
+          used.add(id)
+        }
+      }
+      // Append new topics (not in the cached ranking) at the end, sorted by recency
+      const newTopics = topics
+        .filter((t) => !used.has(t.topicId))
+        .sort((a, b) => b.latestSeen - a.latestSeen)
+      ordered.push(...newTopics)
+
+      console.log(`[gdelt-rank] ${cc}/${dateKey}: using cached ranking (${knownCount}/${topics.length} known, ${newTopics.length} new)`)
+      return ordered
+    }
+  }
+
+  // 3. No cache or too many new topics → call the AI to rank
+  const countryDisplay = COUNTRY_DISPLAY[cc] || COUNTRY_TO_GDELT[cc] || cc
+
+  // Build the story list for the AI (numbered, with coverage)
+  // Limit to top 40 by coverage so the AI prompt isn't too long
+  const candidates = [...topics]
+    .sort((a, b) => b.coverage - a.coverage)
+    .slice(0, 40)
+  const storyList = candidates
+    .map((t, i) => `${i + 1}. ${t.title}`)
+    .join('\n')
+
+  const systemPrompt = `You are the lead news editor for a ${countryDisplay} news app. Your job is to rank today's ${countryDisplay} news stories by NATIONAL IMPORTANCE — the way BBC News or a serious national broadcaster would order their top stories.
+
+RANKING CRITERIA (most important first):
+1. National policy, government decisions, major political developments
+2. Major incidents: disasters, attacks, accidents, crime stories of national significance
+3. Weather warnings, infrastructure failures, transport disruptions affecting many people
+4. Health, education, economic news that affects the general public
+5. Cultural stories, notable deaths, human-interest stories of broad appeal
+6. Local/quirky stories go LAST
+
+DEMOTE:
+- Celebrity gossip, entertainment trivia
+- Sports (already filtered but if any slip through, rank them last)
+- Foreign news with no ${countryDisplay} angle
+- Niche industry stories with no general-public relevance
+
+Respond with ONLY a comma-separated list of story numbers (1-${candidates.length}) in ranked order, MOST IMPORTANT FIRST.
+Example: 3,1,7,5,12,2,8
+No explanation, no other text, JUST the numbers.`
+
+  const userPrompt = `Country: ${countryDisplay}
+Today's ${countryDisplay} news stories:
+
+${storyList}
+
+Rank these stories by national importance for ${countryDisplay} readers. Return ONLY the comma-separated list of story numbers, most important first.`
+
+  try {
+    const aiResponse = await callAI({ systemPrompt, userPrompt, maxTokens: 200 })
+
+    if (aiResponse) {
+      // Parse the comma-separated list of numbers
+      const numbers = aiResponse
+        .replace(/[^0-9,\s]/g, ' ')
+        .split(/[,\s]+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+        .map((s) => parseInt(s, 10))
+        .filter((n) => !isNaN(n) && n >= 1 && n <= candidates.length)
+
+      if (numbers.length > 0) {
+        // Map numbers back to topics (1-based → 0-based), dedup
+        const ranked: TopicArticle[] = []
+        const used = new Set<string>()
+        for (const n of numbers) {
+          const topic = candidates[n - 1]
+          if (topic && !used.has(topic.topicId)) {
+            ranked.push(topic)
+            used.add(topic.topicId)
+          }
+        }
+        // Append any topics the AI didn't rank (sorted by coverage desc)
+        const unranked = topics.filter((t) => !used.has(t.topicId))
+          .sort((a, b) => b.coverage - a.coverage)
+        ranked.push(...unranked)
+
+        // 4. Cache the ranking in Firebase for the day
+        const ranking: CachedRanking = {
+          rankedTopicIds: ranked.map((t) => t.topicId),
+          topicTitles: Object.fromEntries(topics.map((t) => [t.topicId, t.title])),
+          ts: Date.now(),
+        }
+        try {
+          await firebaseWrite(cachePath, ranking)
+        } catch {
+          // silent — best-effort cache
+        }
+
+        console.log(`[gdelt-rank] ${cc}/${dateKey}: AI ranked ${numbers.length} topics, ${unranked.length} appended, cached to Firebase`)
+        return ranked
+      }
+    }
+  } catch (err) {
+    console.warn(`[gdelt-rank] AI ranking failed for ${cc}, falling back to coverage sort:`, err)
+  }
+
+  // 5. AI failed → fall back to coverage desc + recency desc
+  console.warn(`[gdelt-rank] ${cc}/${dateKey}: using fallback coverage sort`)
+  return topics.sort((a, b) => {
+    if (b.coverage !== a.coverage) return b.coverage - a.coverage
+    return b.latestSeen - a.latestSeen
+  })
 }
 
 interface GdeltArticle {
@@ -538,14 +741,16 @@ export async function aggregateMyCountryViaGdelt(
   // ── Cluster into topics ──
   const topics = clusterGdeltArticles(articles)
 
-  // ── Sort: coverage desc, then recency desc ──
-  topics.sort((a, b) => {
-    if (b.coverage !== a.coverage) return b.coverage - a.coverage
-    return b.latestSeen - a.latestSeen
-  })
+  // ── Rank topics using AI with a stable daily cache ──
+  // The AI acts as a news editor, ranking stories by national importance
+  // (policy, major events, crime, weather) rather than raw coverage. The
+  // ranking is cached per-country per-day in Firebase so it stays stable
+  // all day (like BBC News) — it doesn't reshuffle on every refresh.
+  // Only re-ranks when >30% of topicIds are new.
+  const ranked = await rankTopicsStably(topics, cc)
 
-  // ── Validate images for the top 15 topics ──
-  const topicsForImageCheck = topics.slice(0, 15)
+  // ── Validate images for the top 15 ranked topics ──
+  const topicsForImageCheck = ranked.slice(0, 15)
   await Promise.all(
     topicsForImageCheck.map(async (topic) => {
       if (!topic.imageUrl) {
@@ -575,9 +780,9 @@ export async function aggregateMyCountryViaGdelt(
   )
 
   // ── Slice to limit ──
-  const result = topics.slice(0, limit)
+  const result = ranked.slice(0, limit)
 
-  console.log(`[gdelt] ${cc}: fetched ${raw.length} articles → ${articles.length} after filter → ${topics.length} topics → ${result.length} returned`)
+  console.log(`[gdelt] ${cc}: fetched ${raw.length} articles → ${articles.length} after filter → ${topics.length} topics → ${result.length} returned (AI-ranked)`)
 
   return {
     topics: result,
