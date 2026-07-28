@@ -17,6 +17,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  // metadataBase: ensures all relative URLs in metadata (OG images, icons,
+  // canonical) resolve to absolute URLs using the production domain.
+  // Required for correct OG link previews on WhatsApp/Twitter/etc when
+  // shared from neutralwire.org.
+  metadataBase: new URL("https://neutralwire.org"),
   title: "NeutralWire — Compare News Bias Across Sources",
   description:
     "A free, open news aggregator that compares how left, center, and right outlets cover the same stories. Auto-detects your country for relevant local + world news. Built with public RSS feeds — no API keys, no paywalls.",
@@ -47,6 +52,13 @@ export const metadata: Metadata = {
     title: "NeutralWire",
     description: "Compare how left, center, and right outlets cover the same stories.",
     type: "website",
+    siteName: "NeutralWire",
+  },
+  // Canonical URL: tells search engines that neutralwire.org is the
+  // primary domain (not neutralwire.vercel.app). Combined with metadataBase,
+  // this produces <link rel="canonical" href="https://neutralwire.org/">.
+  alternates: {
+    canonical: "/",
   },
 };
 

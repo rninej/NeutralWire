@@ -15,9 +15,9 @@ export const maxDuration = 10
 // because in dev the trigger runs against `localhost:3000` — push
 // notifications sent with localhost URLs are useless (phones can't reach
 // localhost). Always use the production URL so notification clicks always
-// land on neutralwire.vercel.app.
+// land on neutralwire.org.
 const PRODUCTION_ORIGIN =
-  process.env.NEXT_PUBLIC_SITE_URL || 'https://neutralwire.vercel.app'
+  process.env.NEXT_PUBLIC_SITE_URL || 'https://neutralwire.org'
 
 /**
  * Sector keyword detection (mirrors src/lib/user-interests.ts SECTOR_KEYWORDS).
@@ -427,7 +427,7 @@ async function pruneGlobalHistory(
  *
  * URL FIX:
  *   All notification click URLs and image URLs use PRODUCTION_ORIGIN
- *   (https://neutralwire.vercel.app), NOT req.nextUrl.origin. This ensures
+ *   (https://neutralwire.org), NOT req.nextUrl.origin. This ensures
  *   notifications always link to the live site even when the trigger is
  *   called from localhost or a preview URL.
  *

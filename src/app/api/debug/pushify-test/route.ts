@@ -10,25 +10,25 @@ export async function GET() {
 
   const tests = [
     // Maybe it needs 'action_url' instead of 'url'
-    { name: 'action_url', body: { title: 'Test', body: 'Hello', action_url: 'https://neutralwire.vercel.app', website_id: '294' } },
+    { name: 'action_url', body: { title: 'Test', body: 'Hello', action_url: 'https://neutralwire.org', website_id: '294' } },
     // Maybe 'notification_title' + 'notification_body'
-    { name: 'notification_title+body', body: { notification_title: 'Test', notification_body: 'Hello', url: 'https://neutralwire.vercel.app', website_id: '294' } },
+    { name: 'notification_title+body', body: { notification_title: 'Test', notification_body: 'Hello', url: 'https://neutralwire.org', website_id: '294' } },
     // Maybe it needs 'cta_url' + 'cta_text'
-    { name: 'cta_url+cta_text', body: { title: 'Test', body: 'Hello', cta_url: 'https://neutralwire.vercel.app', cta_text: 'Read', website_id: '294' } },
+    { name: 'cta_url+cta_text', body: { title: 'Test', body: 'Hello', cta_url: 'https://neutralwire.org', cta_text: 'Read', website_id: '294' } },
     // Maybe 'link' instead of 'url'
-    { name: 'link', body: { title: 'Test', body: 'Hello', link: 'https://neutralwire.vercel.app', website_id: '294' } },
+    { name: 'link', body: { title: 'Test', body: 'Hello', link: 'https://neutralwire.org', website_id: '294' } },
     // Maybe 'target_url'
-    { name: 'target_url', body: { title: 'Test', body: 'Hello', target_url: 'https://neutralwire.vercel.app', website_id: '294' } },
+    { name: 'target_url', body: { title: 'Test', body: 'Hello', target_url: 'https://neutralwire.org', website_id: '294' } },
     // Maybe 'click_url'
-    { name: 'click_url', body: { title: 'Test', body: 'Hello', click_url: 'https://neutralwire.vercel.app', website_id: '294' } },
+    { name: 'click_url', body: { title: 'Test', body: 'Hello', click_url: 'https://neutralwire.org', website_id: '294' } },
     // Maybe it needs 'segment_id' or 'audience'
-    { name: 'segment_id', body: { title: 'Test', body: 'Hello', url: 'https://neutralwire.vercel.app', website_id: '294', segment_id: 'all' } },
+    { name: 'segment_id', body: { title: 'Test', body: 'Hello', url: 'https://neutralwire.org', website_id: '294', segment_id: 'all' } },
     // Maybe 'is_scheduled' + 'scheduled_at'
-    { name: 'is_scheduled', body: { title: 'Test', body: 'Hello', url: 'https://neutralwire.vercel.app', website_id: '294', is_scheduled: false } },
+    { name: 'is_scheduled', body: { title: 'Test', body: 'Hello', url: 'https://neutralwire.org', website_id: '294', is_scheduled: false } },
     // Maybe 'type' field
-    { name: 'type', body: { title: 'Test', body: 'Hello', url: 'https://neutralwire.vercel.app', website_id: '294', type: 'all' } },
+    { name: 'type', body: { title: 'Test', body: 'Hello', url: 'https://neutralwire.org', website_id: '294', type: 'all' } },
     // Maybe 'send_type'
-    { name: 'send_type', body: { title: 'Test', body: 'Hello', url: 'https://neutralwire.vercel.app', website_id: '294', send_type: 'all' } },
+    { name: 'send_type', body: { title: 'Test', body: 'Hello', url: 'https://neutralwire.org', website_id: '294', send_type: 'all' } },
   ]
 
   for (const test of tests) {

@@ -361,7 +361,7 @@ async function callOpenRouter(
       headers: {
         Authorization: `Bearer ${OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://neutralwire.vercel.app',
+        'HTTP-Referer': 'https://neutralwire.org',
         'X-Title': 'NeutralWire',
       },
       body: JSON.stringify(body),

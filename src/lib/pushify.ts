@@ -445,7 +445,7 @@ async function sendViaWebPush(
   if (!allDevices) return { success: false, sent: 0 }
 
   // Build absolute icon URLs (iOS requires full URLs, not relative paths).
-  const origin = notification.origin || 'https://neutralwire.vercel.app'
+  const origin = notification.origin || 'https://neutralwire.org'
   const iconUrl = `${origin}/icon-192.png`
   const badgeUrl = `${origin}/icon-192.png`
 

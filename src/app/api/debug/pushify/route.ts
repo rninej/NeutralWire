@@ -26,7 +26,7 @@ export async function GET() {
     })),
     subscriberCount,
     instructions: websites.length === 0
-      ? 'No websites registered on Pushify. Go to pushify.com dashboard → Add Website → enter neutralwire.vercel.app. Then copy the pixel key and set NEXT_PUBLIC_PUSHIFY_PIXEL_KEY env var on Vercel.'
+      ? 'No websites registered on Pushify. Go to pushify.com dashboard → Add Website → enter neutralwire.org. Then copy the pixel key and set NEXT_PUBLIC_PUSHIFY_PIXEL_KEY env var on Vercel.'
       : 'Pushify website found. Make sure the pixel key is set as NEXT_PUBLIC_PUSHIFY_PIXEL_KEY on Vercel.',
   })
 }
