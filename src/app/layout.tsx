@@ -22,10 +22,10 @@ export const metadata: Metadata = {
   // Required for correct OG link previews on WhatsApp/Twitter/etc when
   // shared from neutralwire.org.
   metadataBase: new URL("https://neutralwire.org"),
-  title: "NeutralWire — Compare News Bias Across Sources",
+  title: "NeutralWire — See How Every Outlet Spins the Same Story",
   description:
-    "A free, open news aggregator that compares how left, center, and right outlets cover the same stories. Auto-detects your country for relevant local + world news. Built with public RSS feeds — no API keys, no paywalls.",
-  keywords: ["news", "bias", "media bias", "neutralwire", "news aggregator", "left right center"],
+    "Is your news feeding you the full picture? NeutralWire compares how left, right, and center outlets cover the SAME story — side by side. See the bias, spot the spin, decide for yourself. Free, no paywalls, auto-detects your country. Try it before your next headline.",
+  keywords: ["news", "bias", "media bias", "neutralwire", "news aggregator", "left right center", "unbiased news", "compare news"],
   authors: [{ name: "NeutralWire" }],
   manifest: "/manifest.json",
   // Google Search Console verification
@@ -49,8 +49,8 @@ export const metadata: Metadata = {
     title: "NeutralWire",
   },
   openGraph: {
-    title: "NeutralWire",
-    description: "Compare how left, center, and right outlets cover the same stories.",
+    title: "NeutralWire — See How Every Outlet Spins the Same Story",
+    description: "Is your news feeding you the full picture? Compare how left, right, and center outlets cover the SAME story — side by side. See the bias, spot the spin, decide for yourself.",
     type: "website",
     siteName: "NeutralWire",
   },
@@ -59,6 +59,11 @@ export const metadata: Metadata = {
   // this produces <link rel="canonical" href="https://neutralwire.org/">.
   alternates: {
     canonical: "/",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "NeutralWire — See How Every Outlet Spins the Same Story",
+    description: "Is your news feeding you the full picture? Compare how left, right, and center outlets cover the SAME story — side by side. See the bias, spot the spin.",
   },
 };
 

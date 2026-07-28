@@ -53,6 +53,8 @@ import {
   bumpEngagementForTopic,
   getSeenTopics,
   markTopicSeen,
+  getCountryNewsCount,
+  bumpCountryNewsCount,
   type EngagementStats,
 } from '@/lib/user-interests'
 
@@ -313,6 +315,11 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [topics, setTopics] = useState<TopicArticle[]>([])
+  // My Country topics fetched separately for interspersing in the Relevant tab.
+  // These are GDELT-sourced country stories (topicId starts with 'g').
+  const [myCountryTopics, setMyCountryTopics] = useState<TopicArticle[]>([])
+  // Dynamic count of country stories to show in Relevant (adapts to engagement).
+  const [countryNewsCount, setCountryNewsCount] = useState(3)
   const [fetchedAt, setFetchedAt] = useState<Date | null>(null)
   const [isCached, setIsCached] = useState(false)
   const [isFresh, setIsFresh] = useState(true)
@@ -410,13 +417,15 @@ export default function Home() {
   const [engagement, setEngagement] = useState<EngagementStats>({})
   const [seenTopics, setSeenTopics] = useState<Record<string, number>>({})
 
-  // Load interests + engagement + seen-topics from localStorage on mount,
-  // and refresh whenever the onboarding flow saves new interests.
+  // Load interests + engagement + seen-topics + country-news-count from
+  // localStorage on mount, and refresh whenever the onboarding flow saves
+  // new interests.
   useEffect(() => {
     const load = () => {
       setInterestsState(getInterests())
       setEngagement(getEngagement())
       setSeenTopics(getSeenTopics())
+      setCountryNewsCount(getCountryNewsCount())
     }
     load()
     window.addEventListener('neutralwire:interests-changed', load)
@@ -433,6 +442,9 @@ export default function Home() {
   // Track engagement when a user opens a topic detail.
   // Also marks the topic as "seen" so it gets demoted in the feed (users
   // see fresh content instead of stories they already read).
+  // If the topic is a My Country story (GDELT-sourced, topicId starts with
+  // 'g') opened from the Relevant tab, bump the country-news count up (+1)
+  // so more country stories appear in Relevant next time.
   const handleOpenDetail = React.useCallback((topic: TopicArticle) => {
     setDetailTopic(topic)
     markTopicSeen(topic.topicId)
@@ -445,6 +457,22 @@ export default function Home() {
         setEngagement(getEngagement())
         window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
       }, 200)
+    }
+    // ── Dynamic country-news count ──
+    // If the user clicked a GDELT-sourced country story (topicId starts
+    // with 'g') while on the Relevant tab, increase the count of country
+    // stories to show in Relevant (max 5). This adapts the mix based on
+    // user interest — clicking country stories → more appear.
+    if (
+      typeof window !== 'undefined' &&
+      topic.topicId.startsWith('g') &&
+      window.location.search.includes('category=relevant') === false &&
+      !window.location.search.includes('category=')
+    ) {
+      // On the default relevant tab (no ?category= param), a click on a
+      // country story means the user is interested → bump up.
+      const newCount = bumpCountryNewsCount(1)
+      setCountryNewsCount(newCount)
     }
   }, [])
 
@@ -869,8 +897,62 @@ export default function Home() {
     // Re-sort after demoting excess local topics
     capped.sort((a, b) => b.score - a.score)
 
-    return capped.map((entry) => entry.topic)
-  }, [topics, debouncedSearch, interests, engagement, seenTopics, country])
+    let result = capped.map((entry) => entry.topic)
+
+    // ── Intersperse My Country topics into the Relevant feed ──
+    // A few GDELT-sourced country stories are placed at strategic positions:
+    //   - 1 story at position 2 (index 1) — high visibility
+    //   - 1 story at mid-rank (index = length/2) — mid visibility
+    //   - 1 story at the bottom — low visibility
+    // The count adapts: if countryNewsCount is 0, none are shown; if 5, more
+    // are interspersed. This only runs on the 'relevant' category (not
+    // mycountry, since that's ALL country news already) and only when there's
+    // no active search.
+    if (
+      category === 'relevant' &&
+      !debouncedSearch &&
+      myCountryTopics.length > 0 &&
+      countryNewsCount > 0 &&
+      result.length >= 6
+    ) {
+      const mcAvailable = myCountryTopics.slice(0, countryNewsCount)
+      if (mcAvailable.length > 0) {
+        // Build the interspersed list. We insert country stories at:
+        //   pos 2 (index 1), pos mid (index = floor(len/2)), pos bottom (index = len-1)
+        // For counts > 3, we spread them more evenly.
+        const insertPositions: number[] = []
+        if (countryNewsCount >= 1) insertPositions.push(1) // position 2
+        if (countryNewsCount >= 2) insertPositions.push(Math.floor(result.length / 2)) // mid
+        if (countryNewsCount >= 3) insertPositions.push(result.length - 1) // bottom
+        // For counts 4-5, add positions at 1/4 and 3/4
+        if (countryNewsCount >= 4) insertPositions.push(Math.floor(result.length / 4))
+        if (countryNewsCount >= 5) insertPositions.push(Math.floor(result.length * 3 / 4))
+
+        // Sort positions descending so inserting at later positions first
+        // doesn't shift earlier positions
+        insertPositions.sort((a, b) => b - a)
+        const interspersed = [...result]
+        const usedMcIds = new Set<string>()
+        let mcIdx = 0
+        for (const pos of insertPositions) {
+          // Find the next available mycountry topic (not already used)
+          while (mcIdx < mcAvailable.length && usedMcIds.has(mcAvailable[mcIdx].topicId)) {
+            mcIdx++
+          }
+          if (mcIdx >= mcAvailable.length) break
+          const mcTopic = mcAvailable[mcIdx]
+          usedMcIds.add(mcTopic.topicId)
+          mcIdx++
+          // Insert at position (clamped to valid range)
+          const clampedPos = Math.max(0, Math.min(interspersed.length, pos))
+          interspersed.splice(clampedPos, 0, mcTopic)
+        }
+        result = interspersed
+      }
+    }
+
+    return result
+  }, [topics, debouncedSearch, interests, engagement, seenTopics, country, category, myCountryTopics, countryNewsCount])
 
   // Track whether local search yielded no results — triggers API search.
   useEffect(() => {
@@ -975,6 +1057,39 @@ export default function Home() {
               // silent
             }
           }
+        }
+
+        // ── Fetch My Country topics for interspersing in Relevant ──
+        // When on the 'relevant' tab and we have a country, also fetch a
+        // few mycountry stories (GDELT-sourced). These are interspersed
+        // into the relevant feed at positions 2, mid, and bottom by the
+        // filteredTopics memo. The count adapts based on user engagement
+        // (clicking a country story → +1, disliking → -1).
+        if (cat === 'relevant' && country && country.code !== 'INT') {
+          try {
+            const mcParams = new URLSearchParams({
+              category: 'mycountry',
+              limit: '5',
+              minCoverage: '1',
+              country: country.code,
+            })
+            const mcRes = await fetch(`/api/news?${mcParams.toString()}`, { cache: 'no-store' })
+            if (mcRes.ok) {
+              const mcJson: NewsResponse = await mcRes.json()
+              if (reqId === reqIdRef.current && mcJson.topics) {
+                // Filter out any that are already in the relevant topics
+                // (dedup by topicId)
+                const existingIds = new Set(allTopics.map((t) => t.topicId))
+                const unique = mcJson.topics.filter((t) => !existingIds.has(t.topicId))
+                setMyCountryTopics(unique)
+              }
+            }
+          } catch {
+            // silent — mycountry interspersing is best-effort
+          }
+        } else {
+          // Clear mycountry topics when not on relevant tab
+          setMyCountryTopics([])
         }
       } catch (e) {
         if (reqId !== reqIdRef.current) return

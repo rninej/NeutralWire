@@ -72,6 +72,42 @@ export function isTopicSeen(topicId: string): boolean {
   return topicId in getSeenTopics()
 }
 
+// ── Country-news-in-Relevant dynamic count ──
+// Tracks how many My Country stories to intersperse in the Relevant feed.
+// Starts at 3 (one at pos 2, one at mid, one at bottom).
+// +1 when the user clicks a country story in Relevant (max 5).
+// -1 when the user dislikes a country story (min 0).
+// This adapts the mix based on user interest.
+const COUNTRY_NEWS_COUNT_KEY = 'neutralwire:country-news-count'
+const COUNTRY_NEWS_MIN = 0
+const COUNTRY_NEWS_MAX = 5
+const COUNTRY_NEWS_DEFAULT = 3
+
+export function getCountryNewsCount(): number {
+  if (typeof window === 'undefined') return COUNTRY_NEWS_DEFAULT
+  try {
+    const raw = localStorage.getItem(COUNTRY_NEWS_COUNT_KEY)
+    if (!raw) return COUNTRY_NEWS_DEFAULT
+    const n = parseInt(raw, 10)
+    if (isNaN(n)) return COUNTRY_NEWS_DEFAULT
+    return Math.max(COUNTRY_NEWS_MIN, Math.min(COUNTRY_NEWS_MAX, n))
+  } catch {
+    return COUNTRY_NEWS_DEFAULT
+  }
+}
+
+export function bumpCountryNewsCount(delta: number): number {
+  if (typeof window === 'undefined') return COUNTRY_NEWS_DEFAULT
+  try {
+    const current = getCountryNewsCount()
+    const next = Math.max(COUNTRY_NEWS_MIN, Math.min(COUNTRY_NEWS_MAX, current + delta))
+    localStorage.setItem(COUNTRY_NEWS_COUNT_KEY, String(next))
+    return next
+  } catch {
+    return COUNTRY_NEWS_DEFAULT
+  }
+}
+
 // ── Interests (selected during onboarding) ──
 
 export function getInterests(): string[] {

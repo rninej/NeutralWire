@@ -25,12 +25,12 @@ export async function generateMetadata({
   const topicId = typeof params.topic === 'string' ? params.topic : undefined
 
   const defaultMeta: Metadata = {
-    title: 'NeutralWire — Compare News Bias Across Sources',
+    title: 'NeutralWire — See How Every Outlet Spins the Same Story',
     description:
-      'A free, open news aggregator that compares how left, center, and right outlets cover the same stories.',
+      'Is your news feeding you the full picture? NeutralWire compares how left, right, and center outlets cover the SAME story — side by side. See the bias, spot the spin, decide for yourself. Free, no paywalls, auto-detects your country.',
     openGraph: {
-      title: 'NeutralWire',
-      description: 'Compare how left, center, and right outlets cover the same stories.',
+      title: 'NeutralWire — See How Every Outlet Spins the Same Story',
+      description: 'Is your news feeding you the full picture? Compare how left, right, and center outlets cover the SAME story — side by side. See the bias, spot the spin, decide for yourself.',
       type: 'website',
     },
   }

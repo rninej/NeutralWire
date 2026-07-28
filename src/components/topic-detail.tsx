@@ -210,6 +210,17 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
       }, 300)
+      // ── Dynamic country-news count ──
+      // If the user disliked a GDELT-sourced country story (topicId starts
+      // with 'g'), decrease the count of country stories to show in Relevant
+      // (min 0). This adapts the mix — disliking country stories → fewer appear.
+      if (topic.topicId.startsWith('g')) {
+        import('@/lib/user-interests').then(({ bumpCountryNewsCount }) => {
+          const newCount = bumpCountryNewsCount(-1)
+          window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
+          return newCount
+        }).catch(() => {})
+      }
     }
   }
 
