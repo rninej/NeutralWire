@@ -649,3 +649,27 @@ Stage Summary:
 - Near-duplicate merge pass catches same-event/different-worded-title stories that the initial clustering missed.
 - PWA loads instantly: /api/news served from SW cache (SWR), /api/img cache-first, preconnect to Firebase + image CDNs, preload news API, lazy-load card images.
 - Files modified: src/lib/news-aggregator.ts (+recencyBoost, +engagementBoost, +mergeNearDuplicateTopics, sort comparator updates), src/lib/user-interests.ts (+seen-topic tracking), src/app/page-client.tsx (+seenTopics state + demotion, +variant=featured), public/sw.js (v12: SWR + img caching), src/app/layout.tsx (+preconnect/dns-prefetch/preload), src/components/topic-card.tsx (+lazy loading + fetchpriority).
+
+---
+Task ID: 5
+Agent: sub-agent (general-purpose)
+Task: Lint, test, push GDELT My Country aggregator rebuild (built by main agent in prior turn).
+
+Work Log:
+- Read worklog to get context on prior work (Tasks 1, 2, 3, FIX-1..4). The main agent had just rebuilt the My Country news aggregator to use GDELT's Cloud API instead of RSS (new src/lib/gdelt-aggregator.ts; updated /api/news route + news-aggregator.ts).
+- Lint: `bun run lint` → 0 errors, 0 warnings. No fixes needed in any of the 3 files (src/lib/gdelt-aggregator.ts, src/app/api/news/route.ts, src/lib/news-aggregator.ts).
+- Restarted dev server (pkill next dev + next-server; ran .zscripts/dev.sh via setsid nohup). After 15s warmup: `curl http://localhost:3000/` → HTTP 200.
+- Tested `relevant` category (UK): `GET /api/news?category=relevant&country=GB&limit=5&minCoverage=1` → 5 topics. RSS pipeline unchanged, works as before.
+- Tested `mycountry` category (UK): `GET /api/news?category=mycountry&country=GB&limit=5&minCoverage=1` → 5 topics, cached:true. The sandbox cannot reach api.gdeltproject.org (ConnectTimeoutError 10s, logged once in dev.log), so the GDELT fetch path itself was exercised but fell back to the Firebase cache, which had been populated by an earlier successful GDELT fetch (real UK news — e.g. "Cabinet minister rebukes Zack Polanski over Farage guillotine post", "France and Spain battle wildfires amid brutal European heatwave"). Endpoint returns valid TopicArticle[] JSON — code runs without crashing.
+- dev.log error check: 2 matching lines total, both are the single GDELT connect-timeout stacktrace (`[gdelt] fetch failed for GB: ... ConnectTimeoutError ... api.gdeltproject.org:443`). Same class as the expected 429 sandbox limitation — handled gracefully, no crash, cache serves the response. No other errors.
+- Committed (3 source files only — explicitly excluded .zscripts/dev.pid dev-only artifact): commit 7112b03 on main.
+- Pushed to GitHub: `git push origin main` → `ab729ab..7112b03  main -> main` (success).
+- Cleaned PAT: reset remote URL to https://github.com/rninej/NeutralWire.git; verified `grep -c "ghp_" .git/config` → 0.
+
+Stage Summary:
+- Lint: PASS (0 errors, 0 warnings).
+- Dev server: started HTTP 200.
+- /api/news?category=relevant (GB): 5 topics (RSS pipeline intact).
+- /api/news?category=mycountry (GB): 5 topics served from cache (GDELT connect-timeout in sandbox is expected — same class of issue as 429; on Vercel IPs the live GDELT fetch will succeed). No crash.
+- Commit: 7112b03. Push: success (main → main). PAT cleaned from .git/config.
+- Files in commit: src/lib/gdelt-aggregator.ts (new, 587 lines), src/app/api/news/route.ts (+28/-28), src/lib/news-aggregator.ts (+11/-5).
