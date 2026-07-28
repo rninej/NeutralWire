@@ -1343,8 +1343,15 @@ function CategoryTab({
 }) {
   // For 'mycountry', show the user's actual country code (e.g. "UK", "US")
   // instead of the generic "My Country" label.
+  // NOTE: The ISO 3166-1 alpha-2 code for the United Kingdom is "GB", but
+  // users expect to see "UK" (the common abbreviation). We map GB → UK for
+  // display only; the API still uses "GB" under the hood.
+  const displayCode = (code: string): string => {
+    if (code === 'GB') return 'UK'
+    return code.toUpperCase()
+  }
   const label = cat === 'mycountry'
-    ? (country?.code && country.code !== 'INT' ? country.code.toUpperCase() : 'My Country')
+    ? (country?.code && country.code !== 'INT' ? displayCode(country.code) : 'My Country')
     : CATEGORY_LABELS[cat]
 
   return (

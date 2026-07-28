@@ -813,23 +813,28 @@ Which story numbers (1-${aiTopics.length}) are ABOUT ${countryName} (exclude US/
     const aiResponse = await callAI({ systemPrompt, userPrompt })
 
     if (!aiResponse) {
-      // AI FAILED — return ONLY previously-approved topics (default-deny).
-      // Do NOT fall back to keyword filtering — that would let non-UK
-      // stories through. Instead, return the cached/known-good list.
-      console.warn(`[ai-filter] AI returned no response for ${cc}, returning ${previouslyApproved.size} previously-approved topics only`)
+      // AI FAILED — fall back to keyword-based country filtering.
+      // Previously this returned ONLY previously-approved topics (default-deny),
+      // which meant when the AI was unavailable (no API keys, rate-limited),
+      // users saw almost no stories in My Country. Now we use the keyword
+      // filter (isTopicAboutCountry) as a fallback — it catches UK-relevant
+      // stories using a curated keyword list (UK politicians, cities, NHS,
+      // parliament, etc.) and excludes obvious non-UK stories via the
+      // safety net (isObviouslyNotAboutCountry). This isn't as smart as the
+      // AI but shows real UK news instead of an empty/horrid feed.
+      console.warn(`[ai-filter] AI returned no response for ${cc}, falling back to keyword filtering`)
+      const keywordFiltered = topics
+        .filter((t) => isTopicAboutCountry(t, countryCode))
+        .filter((t) => !isObviouslyNotAboutCountry(t, countryCode))
+        .sort((a, b) => b.coverage - a.coverage)
+      if (keywordFiltered.length > 0) return keywordFiltered
+      // Last resort: if keyword filtering returned nothing, return
+      // previously-approved topics (if any) so the feed isn't totally empty.
       const approvedSet = previouslyApproved
-      const topicMap = new Map(topics.map((t) => [t.topicId, t]))
-      // Return previously-approved topics in coverage order (best we can do
-      // without the AI's ranking)
       const result = topics
         .filter((t) => approvedSet.has(t.topicId))
         .sort((a, b) => b.coverage - a.coverage)
-      if (result.length > 0) return result
-      // If we have NO previously-approved topics AND the AI failed, return
-      // empty (don't show anything unvetted). This is better than showing
-      // non-UK stories.
-      console.warn(`[ai-filter] No previously-approved topics for ${cc}, returning empty list (default-deny)`)
-      return []
+      return result
     }
 
     // Parse the comma-separated list of numbers
@@ -842,8 +847,13 @@ Which story numbers (1-${aiTopics.length}) are ABOUT ${countryName} (exclude US/
       .filter((n) => !isNaN(n) && n >= 1 && n <= aiTopics.length)
 
     if (numbers.length === 0) {
-      // AI returned nothing parseable — return previously-approved only.
-      console.warn(`[ai-filter] AI returned no valid numbers for ${cc}, returning ${previouslyApproved.size} previously-approved topics`)
+      // AI returned nothing parseable — fall back to keyword filtering.
+      console.warn(`[ai-filter] AI returned no valid numbers for ${cc}, falling back to keyword filtering`)
+      const keywordFiltered = topics
+        .filter((t) => isTopicAboutCountry(t, countryCode))
+        .filter((t) => !isObviouslyNotAboutCountry(t, countryCode))
+        .sort((a, b) => b.coverage - a.coverage)
+      if (keywordFiltered.length > 0) return keywordFiltered
       const approvedSet = previouslyApproved
       return topics
         .filter((t) => approvedSet.has(t.topicId))
@@ -910,8 +920,13 @@ Which story numbers (1-${aiTopics.length}) are ABOUT ${countryName} (exclude US/
 
     return rankedTopics
   } catch (err) {
-    // AI threw — return previously-approved only (default-deny).
-    console.warn(`[ai-filter] AI failed for ${cc}, returning ${previouslyApproved.size} previously-approved:`, err)
+    // AI threw — fall back to keyword filtering (same as the no-response case).
+    console.warn(`[ai-filter] AI failed for ${cc}, falling back to keyword filtering:`, err)
+    const keywordFiltered = topics
+      .filter((t) => isTopicAboutCountry(t, countryCode))
+      .filter((t) => !isObviouslyNotAboutCountry(t, countryCode))
+      .sort((a, b) => b.coverage - a.coverage)
+    if (keywordFiltered.length > 0) return keywordFiltered
     const approvedSet = previouslyApproved
     return topics
       .filter((t) => approvedSet.has(t.topicId))
@@ -1133,7 +1148,15 @@ function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedA
     if (cleanTitle.length < 8) continue
 
     // Skip non-English articles.
-    const decodedTitle = decodeEntities(cleanTitle)
+    // Decode entities FIRST (so &lt;a href&gt; becomes <a href>),
+    // then STRIP HTML tags (so <a href='...'>text</a> becomes 'text'),
+    // then decode entities AGAIN (in case stripping revealed new entities).
+    // Without stripHtml, RSS titles containing escaped HTML like
+    // &lt;a href='...'&gt;Police conducting enquiries...&lt;/a&gt; would
+    // show up as literal HTML code in the topic title.
+    let decodedTitle = decodeEntities(cleanTitle)
+    decodedTitle = stripHtml(decodedTitle)
+    decodedTitle = decodeEntities(decodedTitle)
     if (!isEnglish(decodedTitle)) continue
 
     // Make the title concise — strip source prefixes, remove live/live updates
