@@ -17,6 +17,8 @@ export interface CountryInfo {
   code: string // ISO 3166-1 alpha-2 (e.g. "US", "GB", "HK")
   name: string
   flag: string // emoji flag
+  city?: string // detected city name (e.g. "London", "Manchester") — used for local news boosting
+  region?: string // detected region/state (e.g. "England", "California")
 }
 
 // ---------- ISO code → flag emoji ----------
@@ -146,9 +148,12 @@ export async function detectCountryServer(
   }
 
   try {
+    // Fetch country + city + region from ip-api.com (free tier, 45 req/min).
+    // City/region are used to boost local news in the Relevant + My Country
+    // tabs (a few stories about the user's city/town appear in the feed).
     const url = `http://ip-api.com/json/${encodeURIComponent(
       ip,
-    )}?fields=country,countryCode`
+    )}?fields=country,countryCode,city,regionName`
     const res = await fetch(url, {
       signal: AbortSignal.timeout(5000),
       cache: 'no-store',
@@ -160,6 +165,8 @@ export async function detectCountryServer(
     const data = (await res.json()) as {
       country?: string
       countryCode?: string
+      city?: string
+      regionName?: string
     }
     if (!data.countryCode) {
       SERVER_CACHE.set(ip, { ts: Date.now(), info: null })
@@ -169,6 +176,8 @@ export async function detectCountryServer(
       code: data.countryCode.toUpperCase(),
       name: data.country || countryName(data.countryCode),
       flag: isoToFlag(data.countryCode),
+      city: data.city || undefined,
+      region: data.regionName || undefined,
     }
     SERVER_CACHE.set(ip, { ts: Date.now(), info })
     return info
@@ -231,7 +240,7 @@ export async function detectCountryClient(): Promise<CountryInfo | null> {
  * Tries multiple CORS-friendly geolocation APIs in order.
  */
 async function detectCountryClientFresh(): Promise<CountryInfo | null> {
-  // 1. ipwho.is — CORS-friendly, free, no key
+  // 1. ipwho.is — CORS-friendly, free, no key. Returns city + region too.
   try {
     const res = await fetch('https://ipwho.is/', {
       signal: AbortSignal.timeout(6000),
@@ -241,12 +250,16 @@ async function detectCountryClientFresh(): Promise<CountryInfo | null> {
         success: boolean
         country_code?: string
         country?: string
+        city?: string
+        region?: string
       }
       if (data.success && data.country_code) {
         return {
           code: data.country_code.toUpperCase(),
           name: data.country || countryName(data.country_code),
           flag: isoToFlag(data.country_code),
+          city: data.city || undefined,
+          region: data.region || undefined,
         }
       }
     }
@@ -254,7 +267,7 @@ async function detectCountryClientFresh(): Promise<CountryInfo | null> {
     // try next
   }
 
-  // 2. reallyfreegeoip.org — CORS-friendly, free, no key
+  // 2. reallyfreegeoip.org — CORS-friendly, free, no key. Returns city + region.
   try {
     const res = await fetch('https://reallyfreegeoip.org/json/', {
       signal: AbortSignal.timeout(6000),
@@ -263,12 +276,16 @@ async function detectCountryClientFresh(): Promise<CountryInfo | null> {
       const data = (await res.json()) as {
         country_code?: string
         country_name?: string
+        city?: string
+        region_name?: string
       }
       if (data.country_code) {
         return {
           code: data.country_code.toUpperCase(),
           name: data.country_name || countryName(data.country_code),
           flag: isoToFlag(data.country_code),
+          city: data.city || undefined,
+          region: data.region_name || undefined,
         }
       }
     }

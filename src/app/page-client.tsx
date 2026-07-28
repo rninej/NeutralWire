@@ -774,6 +774,11 @@ export default function Home() {
   // boost based on the user's selected interests + per-sector engagement
   // scores. The boost RE-ORDERS topics (high-coverage stories still rank
   // well, but stories matching user interests rise to the top).
+  //
+  // ── Local city news boosting ──
+  // If the user's city is detected, topics mentioning that city get a
+  // boost so a few local stories appear in the feed. Capped at <20% of
+  // the visible feed so local news is a supplement, not a flood.
   const filteredTopics = React.useMemo(() => {
     let list = topics
     if (debouncedSearch) {
@@ -791,17 +796,24 @@ export default function Home() {
     }
 
     // ── Seen-topic demotion ──
-    // Topics the user has already opened get pushed DOWN in the feed so
-    // they see fresh content. We apply a score penalty (-15) to seen
-    // topics. This runs even without interests/engagement so all users
-    // benefit. Seen topics are NOT hidden (they still appear, just lower).
     const seenTopicIds = new Set(Object.keys(seenTopics))
+
+    // ── Local city detection ──
+    // Scan topics for mentions of the user's detected city. These get a
+    // boost so a few local stories surface in the feed (capped at <20%).
+    const cityName = country?.city?.trim()
+    const cityNameLower = cityName?.toLowerCase()
+    const isLocalTopic = (t: TopicArticle): boolean => {
+      if (!cityNameLower || cityNameLower.length < 3) return false
+      const text = `${t.title} ${t.summary}`.toLowerCase()
+      return text.includes(cityNameLower)
+    }
 
     // Only personalise when there's no active search (otherwise the user
     // is looking for something specific and we shouldn't hide results).
     const hasInterests = interests.length > 0
     const hasEngagement = Object.keys(engagement).length > 0
-    if (debouncedSearch || (!hasInterests && !hasEngagement && seenTopicIds.size === 0)) {
+    if (debouncedSearch || (!hasInterests && !hasEngagement && seenTopicIds.size === 0 && !cityNameLower)) {
       return list
     }
 
@@ -811,21 +823,54 @@ export default function Home() {
     //
     // Seen topics get a -15 penalty (demoted below unseen stories of
     // similar coverage).
+    // Local-city topics get a +18 boost (surfaces them above non-local
+    // stories of similar coverage, but the cap below limits how many
+    // appear in the final feed).
     // Topics with very negative scores (< -10) are HIDDEN — the user has
     // strongly disliked this sector, so we don't show them at all.
+    const LOCAL_BOOST = 18
     const scored = list
       .map((t) => ({
         topic: t,
-        score: personalizationBoost(t, interests, engagement) - (seenTopicIds.has(t.topicId) ? 15 : 0),
+        score:
+          personalizationBoost(t, interests, engagement) -
+          (seenTopicIds.has(t.topicId) ? 15 : 0) +
+          (isLocalTopic(t) ? LOCAL_BOOST : 0),
+        isLocal: isLocalTopic(t),
       }))
       .sort((a, b) => b.score - a.score)
 
     // Hide heavily-disliked topics (score < -10)
     const visible = scored.filter((entry) => entry.score > -10)
     // If hiding everything would leave nothing, show all (better than empty)
-    const finalList = visible.length > 0 ? visible : scored
-    return finalList.map((entry) => entry.topic)
-  }, [topics, debouncedSearch, interests, engagement, seenTopics])
+    const finalScored = visible.length > 0 ? visible : scored
+
+    // ── Cap local-city topics at <20% of the feed ──
+    // The boost surfaces local topics, but we don't want them to dominate.
+    // After sorting, we allow at most 20% of the returned topics to be
+    // local-city topics. Extra local topics are demoted to their natural
+    // position (they still appear, just not all at the top).
+    const maxLocal = Math.max(1, Math.floor(finalScored.length * 0.2))
+    let localCount = 0
+    const capped = finalScored.map((entry) => {
+      if (entry.isLocal) {
+        localCount++
+        if (localCount > maxLocal) {
+          // Demote this local topic — remove the boost by restoring its
+          // non-boosted score so it falls to its natural position.
+          return {
+            ...entry,
+            score: entry.score - LOCAL_BOOST,
+          }
+        }
+      }
+      return entry
+    })
+    // Re-sort after demoting excess local topics
+    capped.sort((a, b) => b.score - a.score)
+
+    return capped.map((entry) => entry.topic)
+  }, [topics, debouncedSearch, interests, engagement, seenTopics, country])
 
   // Track whether local search yielded no results — triggers API search.
   useEffect(() => {

@@ -70,6 +70,11 @@ export async function GET(req: NextRequest) {
     ? sourcesForCountry(country)
     : []
 
+  // Virtual categories (relevant, mycountry) get MORE topics cached (60)
+  // so infinite scroll has more to load — users were running out of news
+  // when scrolling to the bottom. Non-virtual categories stay at 40.
+  const cacheLimit = isVirtualCategory(category) ? 60 : 40
+
   // 1. Try cache first.
   let cached = await readCachedNews(category, country)
 
@@ -77,7 +82,7 @@ export async function GET(req: NextRequest) {
   if (!cached) {
     try {
       const agg = await aggregateCategory(category, {
-        limit: 40,
+        limit: cacheLimit,
         minCoverage: 1,
         countrySourceIds,
         countryCode: country,
@@ -118,7 +123,7 @@ export async function GET(req: NextRequest) {
     if (wait) {
       const fresh = await refreshCategory(category, country, (c) =>
         aggregateCategory(c, {
-          limit: 40,
+          limit: cacheLimit,
           minCoverage: 1,
           countrySourceIds,
           countryCode: country,
@@ -143,7 +148,7 @@ export async function GET(req: NextRequest) {
         try {
           await refreshCategory(category, country, (c) =>
             aggregateCategory(c, {
-              limit: 40,
+              limit: cacheLimit,
               minCoverage: 1,
               countrySourceIds,
               countryCode: country,

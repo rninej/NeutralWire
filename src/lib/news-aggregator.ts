@@ -2123,11 +2123,36 @@ export async function aggregateCategory(
     //
     // For other categories, sort by coverage desc then recency desc.
     let filtered: TopicArticle[]
-    if (isMyCountryMode || isSportsMode) {
-      // AI already ranked — just filter + slice, preserve AI order.
-      // (Sports mode: no sports penalty — this IS the sports tab.)
+    if (isSportsMode) {
+      // Sports tab: AI already ranked — just filter + slice, preserve AI order.
+      // No sports penalty here — this IS the sports tab.
       filtered = relevantTopics
         .filter((t) => t.coverage >= minCoverage)
+        .slice(0, limit)
+    } else if (isMyCountryMode) {
+      // My Country: AI already ranked, BUT we still apply the sports penalty
+      // (re-sort by effective coverage + recency). Sports stories dominate UK
+      // feeds (every outlet has a sports desk) and would otherwise push down
+      // non-sports UK news. The AI ranking is preserved as a tie-breaker via
+      // stable sort.
+      const SPORTS_PENALTY = 4
+      const hasNonSports = relevantTopics.some((t) => !isSportsTopic(t))
+      const applySportsPenalty = hasNonSports
+      const effectiveCoverage = (t: TopicArticle): number => {
+        if (!applySportsPenalty) return t.coverage
+        return isSportsTopic(t) ? Math.max(0, t.coverage - SPORTS_PENALTY) : t.coverage
+      }
+      const engStats = await loadEngagementStats()
+      filtered = relevantTopics
+        .filter((t) => t.coverage >= minCoverage)
+        .sort((a, b) => {
+          const ea = effectiveCoverage(a)
+          const eb = effectiveCoverage(b)
+          const scoreA = ea * 10 + recencyBoost(a) + engagementBoost(a, engStats)
+          const scoreB = eb * 10 + recencyBoost(b) + engagementBoost(b, engStats)
+          if (scoreB !== scoreA) return scoreB - scoreA
+          return b.latestSeen - a.latestSeen
+        })
         .slice(0, limit)
     } else {
       // ── Sports deprioritisation in non-sports categories ──
