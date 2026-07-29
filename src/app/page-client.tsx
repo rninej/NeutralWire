@@ -1402,32 +1402,44 @@ export default function Home() {
               <BiasColumns topics={filteredTopics} />
             ) : (
               <>
-                {/* Topic grid — featured story is the first card, same size as others */}
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {featured && (
-                    <TopicCard
-                      key={featured.topicId + (featured.imageUrl || '')}
-                      topic={featured}
-                      variant="featured"
-                      onOpenDetail={handleOpenDetail}
-                    />
-                  )}
-                  {rest.map((t) => (
-                    <TopicCard
-                      key={t.topicId + (t.imageUrl || '')}
-                      topic={t}
-                      onOpenDetail={handleOpenDetail}
-                    />
-                  ))}
-                  {/* Older topics loaded via infinite scroll */}
-                  {olderTopics.map((t) => (
-                    <TopicCard
-                      key={t.topicId + (t.imageUrl || '')}
-                      topic={t}
-                      onOpenDetail={handleOpenDetail}
-                    />
-                  ))}
-                </div>
+                {/* ── Sectioned BBC-style layout for Relevant tab ── */}
+                {/* Mobile: mixed sizes with category section headers.
+                    Desktop: grid with hero + sections. */}
+                {category === 'relevant' && !debouncedSearch ? (
+                  <SectionedFeed
+                    topics={filteredTopics}
+                    olderTopics={olderTopics}
+                    onOpenDetail={handleOpenDetail}
+                    country={country}
+                    interests={interests}
+                  />
+                ) : (
+                  /* Default grid for other categories / search */
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    {featured && (
+                      <TopicCard
+                        key={featured.topicId + (featured.imageUrl || '')}
+                        topic={featured}
+                        variant="featured"
+                        onOpenDetail={handleOpenDetail}
+                      />
+                    )}
+                    {rest.map((t) => (
+                      <TopicCard
+                        key={t.topicId + (t.imageUrl || '')}
+                        topic={t}
+                        onOpenDetail={handleOpenDetail}
+                      />
+                    ))}
+                    {olderTopics.map((t) => (
+                      <TopicCard
+                        key={t.topicId + (t.imageUrl || '')}
+                        topic={t}
+                        onOpenDetail={handleOpenDetail}
+                      />
+                    ))}
+                  </div>
+                )}
 
                 {/* Infinite scroll sentinel + loading animation */}
                 <div ref={sentinelRef} className="flex justify-center py-8">
@@ -1547,6 +1559,182 @@ function LoadingState() {
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading from Firebase cache…
       </div>
+    </div>
+  )
+}
+
+// ── Sector detection for sectioned layout ──
+// Mirrors the SECTOR_KEYWORDS in user-interests.ts but simplified for
+// client-side sectioning. Topics are grouped into sections by their
+// primary sector so the Relevant tab shows category headers (like BBC).
+const SECTOR_KEYWORDS_FEED: Record<string, string[]> = {
+  politics: ['trump', 'biden', 'starmer', 'parliament', 'congress', 'senate', 'election', 'vote', 'labour', 'conservative', 'democrat', 'republican', 'government', 'minister', 'prime minister', 'president', 'policy', 'cabinet', 'downing street', 'white house', 'supreme court', 'court ruling', 'lawmaker', 'legislation'],
+  world: ['ukraine', 'russia', 'putin', 'china', 'israel', 'gaza', 'hamas', 'iran', 'middle east', 'europe', 'nato', 'united nations', 'refugee', 'ceasefire', 'nuclear', 'war', 'conflict'],
+  business: ['stock', 'market', 'economy', 'inflation', 'interest rate', 'federal reserve', 'gdp', 'recession', 'tariff', 'trade war', 'merger', 'acquisition', 'earnings', 'ipo', 'oil price', 'wall street', 'banking', 'finance', 'profit', 'billion'],
+  technology: ['ai ', 'artificial intelligence', 'openai', 'google', 'apple', 'microsoft', 'meta ', 'facebook', 'amazon', 'tesla', 'nvidia', 'chip', 'semiconductor', 'tiktok', 'elon musk', 'iphone', 'android', 'startup', 'crypto', 'bitcoin', 'cyber', 'hack'],
+  science: ['nasa', 'spacex', 'rocket', 'mars', 'moon', 'space', 'astronaut', 'telescope', 'physics', 'chemistry', 'biology', 'genome', 'dna', 'researchers', 'scientists', 'discovery', 'breakthrough', 'climate', 'carbon', 'earthquake', 'volcano'],
+  health: ['covid', 'pandemic', 'who ', 'vaccine', 'hospital', 'nhs', 'fda', 'medicine', 'drug', 'pharma', 'cancer', 'disease', 'outbreak', 'virus', 'flu', 'mental health', 'diabetes', 'heart', 'stroke'],
+  sports: ['premier league', 'champions league', 'world cup', 'nba', 'nfl', 'arsenal', 'chelsea', 'liverpool', 'man city', 'barcelona', 'real madrid', 'cricket', 'rugby', 'golf', 'f1', 'formula 1', 'boxing', 'ufc', 'olympics', 'football', 'tennis'],
+}
+
+function detectSectorForFeed(title: string, summary: string = ''): string {
+  const text = `${title} ${summary}`.toLowerCase()
+  for (const [sector, keywords] of Object.entries(SECTOR_KEYWORDS_FEED)) {
+    for (const kw of keywords) {
+      if (text.includes(kw)) return sector
+    }
+  }
+  return 'general'
+}
+
+const SECTOR_LABELS: Record<string, string> = {
+  politics: 'Politics',
+  world: 'World News',
+  business: 'Business',
+  technology: 'Technology',
+  science: 'Science',
+  health: 'Health',
+  sports: 'Sports',
+  general: 'More News',
+}
+
+/**
+ * SectionedFeed — BBC-style layout for the Relevant tab.
+ *
+ * Splits topics into sections by sector (Headlines, World, Business, Politics,
+ * Technology, Science, etc.). Each section has a header label and a mix of
+ * card sizes (hero, default, mini). On mobile, this shows 4+ stories at once
+ * (using mini cards in 2-column rows) instead of one-by-one scroll.
+ *
+ * Personalized: sections matching the user's interests appear first.
+ */
+function SectionedFeed({
+  topics,
+  olderTopics,
+  onOpenDetail,
+  country,
+  interests,
+}: {
+  topics: TopicArticle[]
+  olderTopics: TopicArticle[]
+  onOpenDetail: (topic: TopicArticle) => void
+  country?: CountryInfo | null
+  interests: string[]
+}) {
+  const allTopics = [...topics, ...olderTopics]
+  if (allTopics.length === 0) return null
+
+  // ── Split into sections ──
+  // First 5 topics = "Top Headlines" (1 hero + 2 default + 2 mini)
+  // Remaining topics are grouped by detected sector
+  const headlines = allTopics.slice(0, 5)
+  const remaining = allTopics.slice(5)
+
+  // Group remaining by sector
+  const sections: Record<string, TopicArticle[]> = {}
+  for (const topic of remaining) {
+    const sector = detectSectorForFeed(topic.title, topic.summary)
+    if (!sections[sector]) sections[sector] = []
+    sections[sector].push(topic)
+  }
+
+  // Sort sections: user interests first, then by topic count (most topics first)
+  const interestSet = new Set(interests)
+  const sortedSectors = Object.keys(sections).sort((a, b) => {
+    const aInterest = interestSet.has(a) ? 1 : 0
+    const bInterest = interestSet.has(b) ? 1 : 0
+    if (aInterest !== bInterest) return bInterest - aInterest
+    return sections[b].length - sections[a].length
+  })
+
+  return (
+    <div className="space-y-8">
+      {/* ── Top Headlines section ── */}
+      <section>
+        <h2 className="mb-3 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
+          Top Headlines
+        </h2>
+        {/* Hero card (full width on mobile, first headline) */}
+        {headlines[0] && (
+          <div className="mb-4">
+            <TopicCard
+              key={headlines[0].topicId}
+              topic={headlines[0]}
+              variant="hero"
+              onOpenDetail={onOpenDetail}
+            />
+          </div>
+        )}
+        {/* 2 default cards side-by-side on mobile+ */}
+        {headlines.length > 1 && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {headlines.slice(1, 3).map((t) => (
+              <TopicCard
+                key={t.topicId}
+                topic={t}
+                onOpenDetail={onOpenDetail}
+              />
+            ))}
+          </div>
+        )}
+        {/* Remaining headlines as mini cards (2 per row on mobile) */}
+        {headlines.length > 3 && (
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {headlines.slice(3).map((t) => (
+              <TopicCard
+                key={t.topicId}
+                topic={t}
+                variant="mini"
+                onOpenDetail={onOpenDetail}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ── Sector sections ── */}
+      {sortedSectors.map((sector) => {
+        const sectionTopics = sections[sector]
+        if (sectionTopics.length === 0) return null
+        const label = SECTOR_LABELS[sector] || sector
+        const isInterested = interestSet.has(sector)
+
+        return (
+          <section key={sector}>
+            <h2 className="mb-3 flex items-center gap-2 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
+              {label}
+              {isInterested && (
+                <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                  Following
+                </span>
+              )}
+            </h2>
+            {/* First topic in section: default card */}
+            {sectionTopics[0] && (
+              <div className="mb-4">
+                <TopicCard
+                  key={sectionTopics[0].topicId}
+                  topic={sectionTopics[0]}
+                  onOpenDetail={onOpenDetail}
+                />
+              </div>
+            )}
+            {/* Remaining topics: mini cards in a responsive grid */}
+            {sectionTopics.length > 1 && (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {sectionTopics.slice(1, 6).map((t) => (
+                  <TopicCard
+                    key={t.topicId}
+                    topic={t}
+                    variant="mini"
+                    onOpenDetail={onOpenDetail}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )
+      })}
     </div>
   )
 }

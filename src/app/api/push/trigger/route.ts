@@ -110,20 +110,24 @@ function detectSectors(title: string, summary: string = ''): string[] {
   return Array.from(matched)
 }
 
-// ── Story fingerprinting (content-based dedup) ──
-// PROBLEM: topicId = hashId(bestTitle + '|' + firstSeen) is UNSTABLE across
-// cache refreshes. As new articles join a cluster, the "best" title (most
-// keywords) and firstSeen timestamp change, producing a DIFFERENT topicId
-// for the SAME ongoing story. This defeated the topicId-based sent-history
-// dedup — users got the same story notified again with a new topicId.
+// ── Story fingerprinting + keyword-overlap dedup ──
+// PROBLEM: The same news event gets different titles across cache refreshes
+// (different outlets, different wording). The old exact-set fingerprint
+// failed to catch these — e.g. "Almost 4,000 evacuated from Bordeaux as
+// wildfires rage" and "France and Spain battle wildfires" were treated as
+// different stories because their keyword SETS differ, even though they're
+// the SAME event.
 //
-// SOLUTION: compute a content FINGERPRINT from the title's significant
-// keywords (order-independent, stem-aware, stopword-filtered). Two stories
-// about the same event share the same significant keywords regardless of
-// which outlet's headline was picked as "best". We store sent fingerprints
-// in Firebase and exclude any candidate whose fingerprint was already sent.
+// SOLUTION: TWO-LAYER dedup:
+//   1. Strict fingerprint (exact keyword set match) — catches identical titles
+//   2. KEYWORD OVERLAP — stores the significant keywords for each sent
+//      notification. A candidate is skipped if it shares 3+ significant
+//      keywords with ANY previously sent notification. This catches the same
+//      event described differently (e.g. both wildfire titles share
+//      "wildfires" + "france" + "spain" = 3 keywords → skipped).
 //
-// This is the PRIMARY dedup layer; topicId-based history is a backup.
+// The keyword overlap check runs against all sent notifications in the last
+// 14 days (max ~42 entries at 3/day). It's fast — O(candidates × 42 × 8).
 const FINGERPRINT_STOPWORDS = new Set([
   'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her',
   'was', 'one', 'our', 'out', 'has', 'have', 'from', 'this', 'that',
@@ -134,6 +138,8 @@ const FINGERPRINT_STOPWORDS = new Set([
   'again', 'further', 'then', 'once', 'here', 'there', 'both', 'more',
   'most', 'other', 'some', 'only', 'same', 'than', 'too', 'very', 'also',
   'news', 'update', 'latest', 'live', 'report', 'reports', 'says', 'said',
+  'almost', 'amid', 'amidst', 'people', 'still', 'could', 'would', 'should',
+  'near', 'site', 'sites', 'rage', 'battle', 'brutal',
 ])
 
 function computeStoryFingerprint(title: string): string {
@@ -154,6 +160,55 @@ function computeStoryFingerprint(title: string): string {
     h = (Math.imul(31, h) + joined.charCodeAt(i)) | 0
   }
   return 'fp_' + (h >>> 0).toString(36)
+}
+
+/**
+ * Extract significant keywords from a title (for keyword-overlap dedup).
+ * Returns an array of stemmed, stopword-filtered keywords.
+ */
+function extractTitleKeywords(title: string): string[] {
+  const normalized = title
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const words = normalized.split(' ').filter(Boolean)
+  const significant = words
+    .filter((w) => w.length >= 4 && !FINGERPRINT_STOPWORDS.has(w) && !/^\d+$/.test(w))
+    .map((w) => (w.endsWith('s') && w.length > 4 ? w.slice(0, -1) : w))
+  return [...new Set(significant)].slice(0, 10)
+}
+
+/**
+ * Check if a candidate's keywords overlap with any sent notification's
+ * keywords. Returns true if the candidate is a DUPLICATE (should be skipped).
+ *
+ * A candidate is a duplicate if it shares 3+ significant keywords with any
+ * sent notification. This catches the same event described differently:
+ *   "4,000 evacuated from Bordeaux as wildfires rage" → [bordeaux, wildfire, evacuate, france, spain, tourist]
+ *   "France and Spain battle wildfires" → [france, spain, wildfire, european, heatwave]
+ *   → shared: wildfire, france, spain = 3 → DUPLICATE
+ */
+function isDuplicateByKeywordOverlap(
+  candidateKeywords: string[],
+  sentKeywords: Array<{ keywords: string[]; ts: number }>,
+  threshold = 3,
+): boolean {
+  if (candidateKeywords.length === 0) return false
+  const candidateSet = new Set(candidateKeywords)
+  const now = Date.now()
+  const TTL_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
+
+  for (const sent of sentKeywords) {
+    // Skip entries older than TTL
+    if (now - sent.ts > TTL_MS) continue
+    let overlap = 0
+    for (const kw of sent.keywords) {
+      if (candidateSet.has(kw)) overlap++
+      if (overlap >= threshold) return true
+    }
+  }
+  return false
 }
 
 /**
@@ -373,6 +428,44 @@ async function recordSentFingerprints(fingerprints: Set<string>): Promise<void> 
   }
 }
 
+// ── Sent-keyword storage (for keyword-overlap dedup) ──
+// Storage: notification-sent-keywords/<notifKey> = { keywords: [...], ts: ... }
+// We use a single Firebase read to load ALL sent keywords, then check each
+// candidate against them in-memory. This catches the same event described
+// differently (the strict fingerprint misses these).
+
+async function loadSentKeywords(): Promise<Array<{ keywords: string[]; ts: number }>> {
+  const raw =
+    (await firebaseRead<Record<string, { keywords: string[]; ts: number }>>(
+      'notification-sent-keywords',
+    )) || {}
+  const now = Date.now()
+  const TTL_MS = 14 * 24 * 60 * 60 * 1000
+  const result: Array<{ keywords: string[]; ts: number }> = []
+  for (const entry of Object.values(raw)) {
+    if (entry && Array.isArray(entry.keywords) && now - entry.ts < TTL_MS) {
+      result.push(entry)
+    }
+  }
+  return result
+}
+
+async function recordSentKeywords(
+  keywords: Array<{ key: string; keywords: string[] }>,
+): Promise<void> {
+  if (keywords.length === 0) return
+  const now = Date.now()
+  const patch: Record<string, { keywords: string[]; ts: number }> = {}
+  for (const entry of keywords) {
+    patch[entry.key] = { keywords: entry.keywords, ts: now }
+  }
+  try {
+    await firebasePatch('notification-sent-keywords', patch)
+  } catch {
+    // silent — best-effort
+  }
+}
+
 /**
  * Prune entries older than TTL from the global sent-history.
  * Runs occasionally to keep the Firebase node small.
@@ -518,20 +611,31 @@ export async function GET(req: NextRequest) {
     // candidate pool entirely. This is the secondary deduplication layer.
     const { sentSet: globalHistory, raw: rawHistory } = await loadGlobalHistory()
 
-    // ── FINGERPRINT HISTORY (content layer — PRIMARY dedup) ──
+    // ── FINGERPRINT HISTORY (content layer) ──
     // Stories whose CONTENT FINGERPRINT was sent in the last 30 days are
     // excluded. This catches the same story reappearing with a DIFFERENT
     // topicId (which happens when bestTitle/firstSeen change across cache
-    // refreshes). Without this, users got the same story notified again.
+    // refreshes).
     const sentFingerprints = await loadSentFingerprints()
 
-    // Filter out stories that were already sent — by topicId AND by content
-    // fingerprint. A story is "fresh" only if NEITHER its topicId nor its
-    // fingerprint has been sent before.
+    // ── KEYWORD OVERLAP DEDUP (catches same event, different wording) ──
+    // This is the PRIMARY dedup layer. The strict fingerprint misses stories
+    // about the same event that are worded differently (e.g. "4,000 evacuated
+    // from Bordeaux as wildfires rage" vs "France and Spain battle wildfires"
+    // → both about the same wildfire event but different keyword sets).
+    // We store the significant keywords for each sent notification and check
+    // if a candidate shares 3+ keywords with any sent notification.
+    const sentKeywords = await loadSentKeywords()
+
+    // Filter out stories that were already sent — by topicId, fingerprint,
+    // AND keyword overlap. A story is "fresh" only if it passes ALL checks.
     const freshStories = topStories.filter((s) => {
       if (globalHistory.has(s.topicId)) return false
       const fp = computeStoryFingerprint(s.title)
       if (sentFingerprints.has(fp)) return false
+      // Keyword overlap check — catches same event, different wording
+      const keywords = extractTitleKeywords(s.title)
+      if (isDuplicateByKeywordOverlap(keywords, sentKeywords, 3)) return false
       return true
     })
 
@@ -609,18 +713,28 @@ export async function GET(req: NextRequest) {
     if (!dryRun && personalizedResult.sentTopicIds.size > 0) {
       await recordGlobalHistory(personalizedResult.sentTopicIds)
 
-      // ── Record content fingerprints (PRIMARY dedup layer) ──
+      // ── Record content fingerprints (dedup layer 1) ──
       // This catches the same story reappearing with a different topicId.
       const sentFingerprintsToRecord = new Set<string>()
+      // ── Record keywords (dedup layer 2 — catches same event, different wording) ──
+      const sentKeywordsToRecord: Array<{ key: string; keywords: string[] }> = []
       const fullTopicMapForFp = new Map(topStories.map((t) => [t.topicId, t]))
       for (const topicId of personalizedResult.sentTopicIds) {
         const topic = fullTopicMapForFp.get(topicId)
         if (topic) {
           sentFingerprintsToRecord.add(computeStoryFingerprint(topic.title))
+          // Also record the keywords for overlap-based dedup
+          sentKeywordsToRecord.push({
+            key: `${todayKey}_${slot}_${topicId.slice(-6)}`,
+            keywords: extractTitleKeywords(topic.title),
+          })
         }
       }
       if (sentFingerprintsToRecord.size > 0) {
         await recordSentFingerprints(sentFingerprintsToRecord)
+      }
+      if (sentKeywordsToRecord.length > 0) {
+        await recordSentKeywords(sentKeywordsToRecord)
       }
 
       // ── Archive ALL sent topics so notification links work forever ──

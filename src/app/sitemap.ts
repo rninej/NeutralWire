@@ -11,9 +11,10 @@ import type { CategoryCachePayload } from '@/lib/news-aggregator'
  *   - All cached news topics (/?topic=<topicId>) — so every news story
  *     gets indexed by Google
  *
- * Topics are read from the Firebase news cache. The sitemap is regenerated
- * on each request (Google crawls it periodically), so new stories that
- * arrive via GDELT/RSS are automatically included.
+ * CACHED for 1 hour in-memory to avoid excessive Firebase reads. Google
+ * crawls the sitemap periodically; without caching, each crawl triggered
+ * 2 full Firebase reads (newsCache + archive) which caused 700MB/day
+ * download usage. With caching, Firebase is read at most once per hour.
  *
  * URL: https://neutralwire.org/sitemap.xml
  */
@@ -33,10 +34,20 @@ const CATEGORIES = [
   'sports',
 ] as const
 
+// ── In-memory cache (1 hour TTL) ──
+// Prevents excessive Firebase reads when Google crawls the sitemap.
+let SITEMAP_CACHE: { ts: number; data: MetadataRoute.Sitemap } | null = null
+const SITEMAP_CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
+
 export const dynamic = 'force-dynamic'
-export const revalidate = 0
+export const revalidate = 3600 // 1 hour — Next.js-level cache as backup
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  // Return cached result if fresh
+  if (SITEMAP_CACHE && Date.now() - SITEMAP_CACHE.ts < SITEMAP_CACHE_TTL_MS) {
+    return SITEMAP_CACHE.data
+  }
+
   const entries: MetadataRoute.Sitemap = []
 
   // 1. Homepage
@@ -66,7 +77,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       for (const [cacheKey, payload] of Object.entries(allCache)) {
         if (!payload?.topics) continue
         for (const topic of payload.topics) {
-          // Only include topics with a valid topicId and recent lastSeen
           if (!topic.topicId) continue
           const lastMod = topic.latestSeen ? new Date(topic.latestSeen) : now
           entries.push({
@@ -82,15 +92,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     // If Firebase read fails, still return the homepage + category pages
   }
 
-  // 4. Archive topics (old stories that have been pushed out of the live
-  // cache but are still accessible via /?topic=). These have lower priority
-  // since they're older, but Google should still index them so shared links
-  // work in search results.
+  // 4. Archive topics (old stories that are still accessible via /?topic=)
+  // Limited to 500 most recent to keep Firebase read small.
   try {
     const archive = await firebaseRead<Record<string, { archivedAt?: number; latestSeen?: number }>>('archive')
     if (archive) {
-      // Only include the 500 most recent archived topics (to keep the sitemap
-      // under Google's 50,000 URL limit)
       const archivedEntries = Object.entries(archive)
         .filter(([id]) => id)
         .sort((a, b) => (b[1]?.archivedAt || 0) - (a[1]?.archivedAt || 0))
@@ -109,13 +115,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     // silent
   }
 
-  // Google allows max 50,000 URLs per sitemap. If we somehow exceed that,
-  // slice to the highest-priority entries (homepage + categories first,
-  // then most-recent topics).
+  // Google allows max 50,000 URLs per sitemap.
   const MAX_URLS = 50000
-  if (entries.length > MAX_URLS) {
-    return entries.slice(0, MAX_URLS)
-  }
+  const result = entries.length > MAX_URLS ? entries.slice(0, MAX_URLS) : entries
 
-  return entries
+  // Cache the result
+  SITEMAP_CACHE = { ts: Date.now(), data: result }
+
+  return result
 }

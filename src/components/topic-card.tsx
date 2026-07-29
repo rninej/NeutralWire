@@ -10,7 +10,7 @@ import type { TopicArticle } from '@/lib/news-aggregator'
 
 interface TopicCardProps {
   topic: TopicArticle
-  variant?: 'default' | 'featured' | 'compact'
+  variant?: 'default' | 'featured' | 'compact' | 'hero' | 'mini'
   defaultOpen?: boolean
   onOpenDetail?: (topic: TopicArticle) => void
 }
@@ -82,6 +82,49 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
     onOpenDetail?.(topic)
   }
 
+  // ── MINI variant: compact horizontal card (thumbnail left, title right) ──
+  // Used in dense lists where 4+ stories should be visible at once on mobile.
+  if (variant === 'mini') {
+    return (
+      <Card
+        className={cn(
+          'overflow-hidden p-0 gap-0 flex flex-row items-stretch',
+          onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
+        )}
+        onClick={handleCardClick}
+      >
+        {showImage && (
+          <div className="relative w-24 h-24 shrink-0 overflow-hidden bg-muted">
+            <img
+              src={proxyImage(imageUrl!)}
+              alt=""
+              loading="lazy"
+              className="h-full w-full object-cover"
+              onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
+            />
+          </div>
+        )}
+        <div className="flex flex-col gap-1 p-2.5 flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <Badge variant="secondary" className="text-[9px] px-1.5 py-0">
+              {topic.coverage}src
+            </Badge>
+            <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+              {mounted ? formatTime(topic.latestSeen) : ''}
+            </span>
+          </div>
+          <h3 className="font-semibold text-xs leading-tight line-clamp-3">
+            {topic.title}
+          </h3>
+        </div>
+      </Card>
+    )
+  }
+
+  // ── HERO variant: large card with image on TOP, big title below ──
+  // Used for the top story in each section. Full-width on mobile.
+  const isHero = variant === 'hero'
+
   return (
     <Card
       className={cn(
@@ -90,8 +133,23 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
       )}
       onClick={handleCardClick}
     >
-      {/* Header: title + meta (always at the top) */}
-      <div className="flex flex-col gap-2 p-4 pb-3">
+      {/* Image (hero: on top, large; default: below header) */}
+      {showImage && isHero && (
+        <div className="relative w-full overflow-hidden bg-muted aspect-[16/9]">
+          <img
+            src={proxyImage(imageUrl!)}
+            alt=""
+            loading={variant === 'featured' || isHero ? 'eager' : 'lazy'}
+            // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
+            fetchpriority={variant === 'featured' || isHero ? 'high' : 'low'}
+            className="h-full w-full object-cover"
+            onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
+          />
+        </div>
+      )}
+
+      {/* Header: title + meta */}
+      <div className={cn('flex flex-col gap-2', isHero ? 'p-4 pb-3' : 'p-4 pb-3')}>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary" className="text-[10px]">
             {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
@@ -104,15 +162,16 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         <h3
           className={cn(
             'font-semibold leading-snug',
-            variant === 'compact' ? 'text-sm' : 'text-base',
+            isHero ? 'text-lg sm:text-xl' : 'text-base',
+            variant === 'compact' ? 'text-sm' : '',
           )}
         >
           {topic.title}
         </h3>
       </div>
 
-      {/* Image (only if available; no placeholder otherwise) */}
-      {showImage && (
+      {/* Image (non-hero: below header) */}
+      {showImage && !isHero && (
         <div
           className={cn(
             'relative w-full overflow-hidden bg-muted',
@@ -122,12 +181,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
           <img
             src={proxyImage(imageUrl!)}
             alt=""
-            // Lazy-load images that are below the fold. The featured card
-            // (variant === 'featured') loads eagerly for fast LCP.
             loading={variant === 'featured' ? 'eager' : 'lazy'}
-            // Fetchpriority hint: 'high' for the featured image (above the
-            // fold), 'low' for the rest so the browser prioritises the
-            // first visible image.
             // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
             fetchpriority={variant === 'featured' ? 'high' : 'low'}
             className="h-full w-full object-cover"
@@ -138,8 +192,10 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
 
       {/* Description (below header, or below image if image exists) */}
       {topic.summary && variant !== 'compact' && (
-        <div className={cn('px-4', showImage ? 'pt-3' : '')}>
-          <p className="text-sm text-muted-foreground line-clamp-3">{topic.summary}</p>
+        <div className={cn('px-4', showImage && !isHero ? 'pt-3' : '')}>
+          <p className={cn('text-muted-foreground line-clamp-3', isHero ? 'text-sm' : 'text-sm')}>
+            {topic.summary}
+          </p>
         </div>
       )}
 
