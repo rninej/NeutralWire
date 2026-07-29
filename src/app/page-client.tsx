@@ -1267,15 +1267,16 @@ export default function Home() {
               />
             ))}
 
-            {/* Search bubble button — opens the search bar */}
+            {/* Search button — opens the search bar */}
             <button
               type="button"
               onClick={() => setShowSearch(true)}
-              className="inline-flex items-center justify-center rounded-md bg-muted p-1.5 text-foreground/80 hover:bg-muted/80 transition-colors"
+              className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-[11px] font-medium sm:text-xs"
               aria-label="Search"
               title="Search news"
             >
               <Search className="h-3.5 w-3.5" />
+              <span>Search</span>
             </button>
           </div>
         </div>
@@ -1357,9 +1358,9 @@ export default function Home() {
               <BiasColumns topics={filteredTopics} />
             ) : (
               <>
-                {/* ── Mobile: sectioned layout for Relevant tab ── */}
+                {/* ── Mobile: sectioned layout for ALL tabs ── */}
                 {/* Desktop: simple grid layout (clean, fills space properly) */}
-                {category === 'relevant' && !debouncedSearch ? (
+                {!debouncedSearch ? (
                   <>
                     {/* Mobile: sectioned layout (1 large + rest mini per section) */}
                     <div className="lg:hidden">
@@ -1609,10 +1610,18 @@ function SectionedFeed({
   if (allTopics.length === 0) return null
 
   // ── Split into sections ──
-  // First 5 topics = "Top Headlines" (1 hero + 2 default + 2 mini)
-  // Remaining topics are grouped by detected sector
-  const headlines = allTopics.slice(0, 5)
-  const remaining = allTopics.slice(5)
+  // First 5 topics = "Top Headlines" (1 hero + rest mini)
+  // Guarantee the FIRST headline has an image (it's the hero card — looks
+  // bad without one). If the first topic has no image, swap it with the
+  // first topic that does.
+  let headlines = allTopics.slice(0, 5)
+  if (headlines.length > 0 && !headlines[0].imageUrl) {
+    const firstWithImage = allTopics.find((t, i) => i >= 1 && t.imageUrl)
+    if (firstWithImage) {
+      headlines = [firstWithImage, ...headlines.filter((t) => t.topicId !== firstWithImage.topicId)]
+    }
+  }
+  const remaining = allTopics.filter((t) => !headlines.includes(t))
 
   // Group remaining by sector
   const sections: Record<string, TopicArticle[]> = {}
