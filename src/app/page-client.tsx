@@ -305,6 +305,7 @@ export default function Home() {
 
   // --- Search state ---
   const [search, setSearch] = useState('')
+  const [showSearch, setShowSearch] = useState(false)
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [apiSearchLoading, setApiSearchLoading] = useState(false)
   const [apiSearchResult, setApiSearchResult] = useState<SearchResponse | null>(null)
@@ -1265,34 +1266,56 @@ export default function Home() {
                 country={country}
               />
             ))}
+
+            {/* Search bubble button — opens the search bar */}
+            <button
+              type="button"
+              onClick={() => setShowSearch(true)}
+              className="inline-flex items-center justify-center rounded-md bg-muted p-1.5 text-foreground/80 hover:bg-muted/80 transition-colors"
+              aria-label="Search"
+              title="Search news"
+            >
+              <Search className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
       </header>
 
       {/* Main */}
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
-        {/* Search bar */}
-        <div className="mb-4 flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search all cached articles across the spectrum…"
-              className="pl-8 pr-8"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={handleClearSearch}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="Clear search"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
+        {/* Search bar (hidden by default — shown when search bubble is clicked) */}
+        {showSearch && (
+          <div className="mb-4 flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search all cached articles across the spectrum…"
+                className="pl-8 pr-8"
+                autoFocus
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={handleClearSearch}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setShowSearch(false); setSearch('') }}
+              className="gap-1"
+            >
+              <X className="h-4 w-4" />
+            </Button>
           </div>
-        </div>
+        )}
 
         {/* Search results (full-catalog API search) — replaces the normal view
             when local search yields nothing and an API search is running. */}
@@ -1305,74 +1328,6 @@ export default function Home() {
           />
         ) : (
           <>
-            {/* View switcher + meta */}
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <Tabs value={view} onValueChange={(v) => setView(v as View)}>
-                <TabsList>
-                  <TabsTrigger value="feed" className="gap-1.5 text-xs">
-                    <TrendingUp className="h-3.5 w-3.5" /> Feed
-                  </TabsTrigger>
-                  <TabsTrigger value="columns" className="gap-1.5 text-xs">
-                    <Filter className="h-3.5 w-3.5" /> Bias Split
-                  </TabsTrigger>
-                  <TabsTrigger value="sources" className="gap-1.5 text-xs">
-                    Sources
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-
-              <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-                <span>
-                  {loading
-                    ? 'Loading…'
-                    : refreshing
-                      ? 'Refreshing from RSS…'
-                      : `${filteredTopics.length} topics · ${articleCount} articles`}
-                </span>
-                {fetchedAt && (
-                  <span className="hidden items-center gap-1 sm:inline-flex">
-                    · updated {mounted ? fetchedAt.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
-                    {isCached && !isFresh && (
-                      <span className="text-amber-500">(cached)</span>
-                    )}
-                  </span>
-                )}
-                <select
-                  value={minCoverage}
-                  onChange={(e) => setMinCoverage(Number(e.target.value))}
-                  className="rounded-md border bg-background px-1.5 py-1 text-xs"
-                  aria-label="Minimum coverage filter"
-                  title="Minimum sources per topic"
-                >
-                  <option value={1}>All stories</option>
-                  <option value={2}>2+ sources</option>
-                  <option value={3}>3+ sources</option>
-                  <option value={4}>4+ sources</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Bias legend */}
-            <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-              <span className="font-semibold text-foreground">Bias legend:</span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-blue-500" />
-                Left
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-zinc-500" />
-                Center
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
-                Right
-              </span>
-              <span className="ml-auto hidden items-center gap-1 sm:inline-flex">
-                <Info className="h-3 w-3" />
-                Bias ratings are community approximations, not authoritative.
-              </span>
-            </div>
-
             {/* Content */}
             {error ? (
               <Card className="flex flex-col items-center gap-3 p-12 text-center">
@@ -1695,9 +1650,9 @@ function SectionedFeed({
               )}
             </h2>
             {/* ── Same format for ALL sections: 1 large (hero) + rest mini ── */}
-            {/* Desktop: 3-column grid — hero spans 1 col + 3 rows (left),
-                mini cards fill cols 2-3. Fills full width, no blank space.
-                Mobile: hero full width on top, mini cards in 2-col grid below. */}
+            {/* Mobile: hero full width on top, mini cards in 2x2 square grid below.
+                Desktop: 3-column grid — hero spans 1 col + 3 rows (left),
+                mini cards fill cols 2-3. */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {sectionTopics[0] && (
                 <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
@@ -1709,6 +1664,7 @@ function SectionedFeed({
                   />
                 </div>
               )}
+              {/* Mini cards: 2x2 square grid on mobile, fill columns on desktop */}
               {sectionTopics.slice(1, 7).map((t) => (
                 <TopicCard
                   key={t.topicId}

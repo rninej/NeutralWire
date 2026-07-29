@@ -562,8 +562,10 @@ export async function GET(req: NextRequest) {
 
     // Fetch stories from multiple categories. Use the production origin
     // so we get the same cached data the live site sees.
+    // Include 'mycountry' (GDELT) so UK users get UK-relevant stories,
+    // not just international news from RSS feeds.
     let allStories: TopicArticle[] = []
-    const categories = ['relevant', 'world', 'technology', 'business', 'science']
+    const categories = ['mycountry', 'relevant', 'world', 'technology', 'business', 'science']
 
     try {
       const results = await Promise.allSettled(
@@ -588,11 +590,32 @@ export async function GET(req: NextRequest) {
       // continue without
     }
 
-    // Deduplicate by topicId
+    // Deduplicate by topicId + filter out US domestic politics (not relevant
+    // to UK users). Stories like "Rand Paul makes moves to jail Fauci" are
+    // US Senate hearings — UK users don't care about these.
+    const usPoliticsPatterns = [
+      'rand paul', 'fauci', 'senate hearing', 'house hearing', 'congress hearing',
+      'senate committee', 'house committee', 'senator says', 'congressman says',
+      'gop rep', 'gop senator', 'democratic rep', 'democratic senator',
+      'us governor', 'us state law', 'us supreme court', 'scotus',
+      'us congress', 'us senate', 'us house',
+      'trump says', 'trump claims', 'trump attacks', 'trump threatens',
+      'trump praises', 'trump blasts', 'trump lashes', 'trump insists',
+      'trump calls', 'trump urges', 'trump defends', 'trump mocks',
+      'trump vows', 'trump promises', 'trump tweets', 'trump posts',
+      'trump campaign', 'trump re-election', 'trump 2028', 'trump 2024',
+      'biden says', 'biden claims', 'biden signs', 'biden vetoes',
+      'us poll', 'us approval rating', 'us election', 'us primary',
+    ]
     const seen = new Set<string>()
     const topStories = allStories.filter((s) => {
       if (seen.has(s.topicId)) return false
       seen.add(s.topicId)
+      // Filter out US domestic politics
+      const titleLower = s.title.toLowerCase()
+      for (const pattern of usPoliticsPatterns) {
+        if (titleLower.includes(pattern)) return false
+      }
       return true
     })
 

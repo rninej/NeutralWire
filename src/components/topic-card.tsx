@@ -115,7 +115,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
               {mounted ? formatTime(topic.latestSeen) : ''}
             </span>
           </div>
-          <h3 className="font-semibold text-xs leading-tight line-clamp-3">
+          <h3 className="font-bold text-sm leading-tight line-clamp-3">
             {topic.title}
           </h3>
           {/* Compact bias bar — every card shows the red/blue/grey spectrum */}
@@ -168,8 +168,8 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         </div>
         <h3
           className={cn(
-            'font-semibold leading-snug',
-            isHero ? 'text-lg sm:text-xl' : 'text-base',
+            'font-bold leading-snug',
+            isHero ? 'text-xl sm:text-2xl' : 'text-base',
             variant === 'compact' ? 'text-sm' : '',
           )}
         >
