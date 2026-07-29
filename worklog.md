@@ -780,3 +780,31 @@ Stage Summary:
 - /api/refresh?category=mycountry (GB, force=1): 10 topics, fresh:true — confirms GDELT path is now used on refresh (bug fixed).
 - Commit: 014e534. Push: success (main → main, 890c143..014e534). PAT cleaned from .git/config.
 - Files in commit (4): src/app/api/refresh/route.ts (+GDELT for mycountry on refresh), src/app/layout.tsx (+direct google-site-verification meta tag), src/app/sitemap.ts (NEW — dynamic sitemap with homepage + categories + cached topics + 500 archived topics), public/robots.txt (+Sitemap directive).
+
+---
+Task ID: 10
+Agent: sub-agent (general-purpose)
+Task: Lint, test, push 3 fixes (notification keyword-overlap dedup, sitemap in-memory cache, BBC-style sectioned layout for Relevant tab).
+
+Work Log:
+- Read worklog to get context on prior work (Tasks 1, 2, 3, FIX-1..4, 5, 6, 7, 8, 9). Main agent had just made three changes:
+  (1) src/app/api/push/trigger/route.ts — Added a KEYWORD OVERLAP dedup layer: extractTitleKeywords(), isDuplicateByKeywordOverlap() (3+ shared significant keywords = duplicate), loadSentKeywords() + recordSentKeywords() backed by Firebase `notification-sent-keywords/`. Also expanded FINGERPRINT_STOPWORDS. GET handler now filters candidates through topicId + fingerprint + keyword-overlap (3 layers).
+  (2) src/app/sitemap.ts — Added 1-hour in-memory cache (SITEMAP_CACHE + SITEMAP_CACHE_TTL_MS) so Firebase is read at most once per hour instead of on every Google crawl. Also set `revalidate = 3600` as a Next.js-level backup.
+  (3) src/components/topic-card.tsx + src/app/page-client.tsx — Added 'hero' (large image on top, big title) and 'mini' (compact horizontal thumbnail-left/title-right) variants to TopicCard. Created SectionedFeed component in page-client.tsx: splits Relevant tab into sections (Top Headlines with 1 hero + 2 default + 2 mini, then category sections World/Politics/Business/Tech/Science/Health/Sports/More). Sections matching user interests appear first with a 'Following' badge. Added detectSectorForFeed() + SECTOR_KEYWORDS_FEED for client-side sector detection. Sectioned layout only runs on the 'relevant' tab; other categories still use the uniform grid.
+- Verified code: trigger route.ts has loadSentKeywords() at line 437, isDuplicateByKeywordOverlap() at line 192, and the GET handler filters via the 3 layers at lines 632-640. sitemap.ts has the in-memory cache (SITEMAP_CACHE_TTL_MS). topic-card.tsx has 'hero' and 'mini' variants. page-client.tsx has SectionedFeed + detectSectorForFeed + SECTOR_KEYWORDS_FEED.
+- Lint: `bun run lint` → 0 errors, 0 warnings. No fixes needed in any of the 4 modified files.
+- Restarted dev server: pkill next dev + next-server, removed dev.log, ran .zscripts/dev.sh via setsid nohup. After 15s warmup: `curl http://localhost:3000/` → HTTP 200.
+- Tested `relevant` (GB): `GET /api/news?category=relevant&country=GB&limit=10&minCoverage=1` → 10 topics. RSS pipeline intact.
+- Tested push trigger dry-run: `GET /api/push/trigger?slot=morning&secret=neutralwire-trigger&dry=1` → full JSON response: `{slot: morning, dryRun: true, sent: 29, personalized: 17, fallback: 12, candidateCount: 15, globalHistoryFiltered: 1, fingerprintFiltered: 1, ...}`. The keyword-overlap layer is integrated into the candidate filter (line 638 in route.ts, inside the freshStories.filter() block alongside topicId + fingerprint checks). It does not emit a separate counter in the response, but executes on every candidate. Response code 200, no crash.
+- dev.log error check: `grep -iE "error|fatal" /home/z/my-project/dev.log | grep -v "AI failed|keyword fallback|502|render:|AI returned no|falling back|AI threw|gdelt.*429|gdelt.*timeout|gdelt.*fetch failed"` → 0 matching lines. dev.log shows only normal Next.js request logs, the "[trigger] AI failed, using keyword fallback" notice (excluded per task spec — sandbox can't reach z-ai for title selection), and "[title-rewrite]" notices. No crashes, no uncaught exceptions.
+- Committed (4 source files only — explicitly excluded .zscripts/dev.pid which is a dev-only artifact): commit 150512d on main.
+- Pushed to GitHub: `git push origin main` → `437bafd..150512d  main -> main` (success).
+- Cleaned PAT: reset remote URL to https://github.com/rninej/NeutralWire.git; verified `grep -c "ghp_" .git/config` → 0 (exit 1, no matches).
+
+Stage Summary:
+- Lint: PASS (0 errors, 0 warnings).
+- Dev server: started HTTP 200, no errors in dev.log.
+- /api/news?category=relevant (GB): 10 topics (RSS pipeline intact).
+- /api/push/trigger (dry=1): sent=29, candidateCount=15, globalHistoryFiltered=1, fingerprintFiltered=1. Keyword-overlap dedup wired into candidate filter (route.ts line 638) — executes alongside topicId + fingerprint checks. HTTP 200, no crash.
+- Commit: 150512d. Push: success (main → main, 437bafd..150512d). PAT cleaned from .git/config.
+- Files in commit (4): src/app/api/push/trigger/route.ts (+keyword-overlap dedup layer: extractTitleKeywords/isDuplicateByKeywordOverlap/loadSentKeywords/recordSentKeywords + expanded FINGERPRINT_STOPWORDS + 3-layer filtering in GET handler), src/app/sitemap.ts (+1-hour in-memory SITEMAP_CACHE + revalidate=3600), src/components/topic-card.tsx (+hero +mini variants), src/app/page-client.tsx (+SectionedFeed + detectSectorForFeed + SECTOR_KEYWORDS_FEED + sectioned layout for Relevant tab).
