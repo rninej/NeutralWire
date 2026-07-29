@@ -853,3 +853,29 @@ Stage Summary:
 - Dev server: started HTTP 200, no errors in dev.log.
 - Commit: a974f84. Push: success (main → main, bbd0b00..a974f84). PAT cleaned from .git/config.
 - Files in commit (2): src/components/topic-card.tsx (+BiasBar on mini + hero variants), src/app/page-client.tsx (4-col → 3-col grid: hero spans 2 cols + 2 rows, mini cards fill third column — fills full desktop width).
+
+---
+Task ID: 13
+Agent: sub-agent (general-purpose)
+Task: Lint, test, push layout fix 2 (blank sections in "More News" + desktop 2-column page layout with headlines + More News sidebar).
+
+Work Log:
+- Read worklog to get context on prior work (Tasks 1, 2, 3, FIX-1..4, 5, 6, 7, 8, 9, 10, 11, 12). Main agent had just made two changes:
+  (1) src/components/topic-card.tsx — Mini card variant: added `min-h-[96px]` to the card root and to the image container (was `h-24` fixed). When no image, the card is full-width text only (no empty placeholder) but still 96px tall — no empty gaps.
+  (2) src/app/page-client.tsx — Restructured SectionedFeed to a 2-column page layout on desktop (lg:grid-cols-3):
+      - LEFT (lg:col-span-2, 2/3 width): Top Headlines — hero card (spans 1 col + 3 rows) + 3 mini cards in a sm:grid-cols-2 inner grid
+      - RIGHT (1 col, 1/3 width): "More News" sidebar — flat list of 7 mini cards collected from all sectors (moreNewsTopics built from sortedSectors + sections)
+      - Below the fold: sector sections (Politics, World, Business, etc.) each with a FLAT lg:grid-cols-4 grid of up to 8 mini cards (removed the large first card that left blank space when short)
+- Verified diff: topic-card.tsx (+5/-3 lines, mini card min-h + image min-h). page-client.tsx (+68/-44 lines, 2-col layout + flat sector grid).
+- Lint: `bun run lint` → 0 errors, 0 warnings (exit 0). No fixes needed in either file.
+- Restarted dev server: pkill next dev + next-server, removed dev.log, ran .zscripts/dev.sh via setsid nohup. After 15s warmup: `curl http://localhost:3000/` → HTTP 200.
+- dev.log error check: `grep -iE "error|fatal" /home/z/my-project/dev.log | grep -v "AI failed|keyword fallback|502|render:|AI returned no|falling back|AI threw|gdelt.*429|gdelt.*timeout|gdelt.*fetch failed"` → 0 matching lines. No crashes, no uncaught exceptions.
+- Committed (2 source files only): commit 43b3a9a on main.
+- Pushed to GitHub: `git push origin main` → `a974f84..43b3a9a  main -> main` (success).
+- Cleaned PAT: reset remote URL to https://github.com/rninej/NeutralWire.git; verified `grep -c "ghp_" .git/config` → 0 (exit 1, no matches).
+
+Stage Summary:
+- Lint: PASS (0 errors, 0 warnings).
+- Dev server: started HTTP 200, no errors in dev.log.
+- Commit: 43b3a9a. Push: success (main → main, a974f84..43b3a9a). PAT cleaned from .git/config.
+- Files in commit (2): src/components/topic-card.tsx (+min-h-[96px] on mini card + image container — no empty gaps when no image), src/app/page-client.tsx (desktop 2-col page layout: Top Headlines left 2/3 + More News sidebar right 1/3; flat lg:grid-cols-4 sector grids below the fold with no large first card).
