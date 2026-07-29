@@ -28,9 +28,9 @@ export const metadata: Metadata = {
   keywords: ["news", "bias", "media bias", "neutralwire", "news aggregator", "left right center", "unbiased news", "compare news"],
   authors: [{ name: "NeutralWire" }],
   manifest: "/manifest.json",
-  // Google Search Console verification
+  // Google Search Console verification (updated for neutralwire.org domain)
   verification: {
-    google: "0i1WWZTYihBkJCw9G-oKv_H-C1uA-c0hGlOgZKyhlig",
+    google: "szdK3fkYGRu3DqBfWpi6i3JpPLhqFZUx8I22qqGSQJA",
   },
   icons: {
     icon: [
