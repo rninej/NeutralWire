@@ -13,5 +13,5 @@ Allow: /
 User-agent: *
 Allow: /
 
-# Sitemap location for search engines
-Sitemap: https://neutralwire.org/sitemap.xml
+# Sitemap temporarily disabled to reduce Firebase download usage.
+# Will re-enable with a cached version once usage is under control.

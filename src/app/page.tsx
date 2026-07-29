@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { firebaseRead } from '@/lib/firebase-server'
-import type { CategoryCachePayload, TopicArticle } from '@/lib/news-aggregator'
+import type { TopicArticle } from '@/lib/news-aggregator'
 import PageClient from './page-client'
 
 // Force dynamic rendering so metadata is generated per-request (needed for
@@ -38,35 +38,31 @@ export async function generateMetadata({
   if (!topicId) return defaultMeta
 
   try {
-    // Search all cached categories for the topic.
-    const all = await firebaseRead<Record<string, CategoryCachePayload>>('newsCache')
-    if (!all) return defaultMeta
-
-    for (const payload of Object.values(all)) {
-      if (!payload?.topics) continue
-      const topic = payload.topics.find(
-        (t: TopicArticle) => t.topicId === topicId,
-      )
-      if (topic) {
-        const ogImage = topic.imageUrl
-          ? `/api/img?url=${encodeURIComponent(topic.imageUrl)}`
-          : undefined
-        return {
-          title: `${topic.title} — NeutralWire`,
-          description: topic.summary?.slice(0, 200) || topic.title,
-          openGraph: {
-            title: topic.title,
-            description: topic.summary?.slice(0, 200) || 'Read this story on NeutralWire',
-            type: 'article',
-            images: ogImage ? [{ url: ogImage, width: 1200, height: 630 }] : [],
-          },
-          twitter: {
-            card: 'summary_large_image',
-            title: topic.title,
-            description: topic.summary?.slice(0, 200) || '',
-            images: ogImage ? [ogImage] : [],
-          },
-        }
+    // EMERGENCY: Instead of reading the ENTIRE newsCache (which downloads
+    // all categories at once = huge Firebase download), read just the
+    // specific topic from the archive (single small read).
+    const archived = await firebaseRead<TopicArticle & { archivedAt?: number }>(
+      `archive/${topicId}`,
+    )
+    if (archived) {
+      const ogImage = archived.imageUrl
+        ? `/api/img?url=${encodeURIComponent(archived.imageUrl)}`
+        : undefined
+      return {
+        title: `${archived.title} — NeutralWire`,
+        description: archived.summary?.slice(0, 200) || archived.title,
+        openGraph: {
+          title: archived.title,
+          description: archived.summary?.slice(0, 200) || 'Read this story on NeutralWire',
+          type: 'article',
+          images: ogImage ? [{ url: ogImage, width: 1200, height: 630 }] : [],
+        },
+        twitter: {
+          card: 'summary_large_image',
+          title: archived.title,
+          description: archived.summary?.slice(0, 200) || '',
+          images: ogImage ? [ogImage] : [],
+        },
       }
     }
   } catch {

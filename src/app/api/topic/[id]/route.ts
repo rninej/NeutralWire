@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead } from '@/lib/firebase-server'
-import type { CategoryCachePayload, TopicArticle } from '@/lib/news-aggregator'
+import type { TopicArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,14 +60,18 @@ export async function GET(
       })
     }
 
-    // 2. Check the live news cache.
-    const all = await firebaseRead<Record<string, CategoryCachePayload>>('newsCache')
-    if (all) {
-      for (const [catKey, payload] of Object.entries(all)) {
-        if (!payload || !Array.isArray(payload.topics)) continue
-        const found = payload.topics.find(
-          (t: TopicArticle) => t.topicId === topicId,
-        )
+    // 2. Check the live news cache — but read each category SEPARATELY
+    // instead of reading the entire newsCache node at once (which downloads
+    // all categories = huge Firebase download). We check the most common
+    // categories first.
+    const cacheCategories = [
+      'relevant', 'mycountry__GB', 'top', 'world', 'politics',
+      'business', 'technology', 'science', 'health', 'sports',
+    ]
+    for (const catKey of cacheCategories) {
+      const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${catKey}`)
+      if (payload && Array.isArray(payload.topics)) {
+        const found = payload.topics.find((t: TopicArticle) => t.topicId === topicId)
         if (found) {
           return NextResponse.json({
             topic: found,
