@@ -1630,13 +1630,66 @@ function SectionedFeed({
   interests: string[]
 }) {
   const allTopics = [...topics, ...olderTopics]
-  if (allTopics.length === 0) return null
+  const [categoryTopics, setCategoryTopics] = React.useState<Record<string, TopicArticle[]>>({})
+  const [loadingCategories, setLoadingCategories] = React.useState(true)
 
-  // ── Split into sections ──
-  // First 5 topics = "Top Headlines" (1 hero + rest mini)
-  // Guarantee the FIRST headline has an image (it's the hero card — looks
-  // bad without one). If the first topic has no image, swap it with the
-  // first topic that does.
+  // ── Fetch top news directly from each subtopic category ──
+  // Instead of using keyword detection on the relevant feed's own topics
+  // (which was unreliable and put unrelated news in wrong categories),
+  // we fetch the actual top stories from each category's API endpoint.
+  // This guarantees that the "World News" section shows actual world news,
+  // "Politics" shows actual politics, etc.
+  React.useEffect(() => {
+    let cancelled = false
+    const categoriesToFetch = [
+      { cat: 'world', label: 'world' },
+      { cat: 'politics', label: 'politics' },
+      { cat: 'business', label: 'business' },
+      { cat: 'technology', label: 'technology' },
+      { cat: 'science', label: 'science' },
+      { cat: 'health', label: 'health' },
+    ]
+
+    const countryCode = country?.code && country.code !== 'INT' ? country.code : ''
+
+    ;(async () => {
+      try {
+        const results = await Promise.allSettled(
+          categoriesToFetch.map(async ({ cat, label }) => {
+            const params = new URLSearchParams({
+              category: cat,
+              limit: '7',
+              minCoverage: '1',
+            })
+            const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
+            if (!res.ok) return { label, topics: [] }
+            const json = await res.json()
+            return { label, topics: json.topics || [] }
+          }),
+        )
+        if (cancelled) return
+        const fetched: Record<string, TopicArticle[]> = {}
+        for (let i = 0; i < results.length; i++) {
+          if (results[i].status === 'fulfilled') {
+            const { label, topics: t } = results[i].value
+            fetched[label] = t
+          }
+        }
+        setCategoryTopics(fetched)
+      } catch {
+        // silent
+      } finally {
+        if (!cancelled) setLoadingCategories(false)
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [country?.code])
+
+  if (allTopics.length === 0 && loadingCategories) return null
+
+  // ── Top Headlines: first 5 topics from the relevant feed ──
+  // Guarantee the FIRST headline has an image (hero card needs one).
   let headlines = allTopics.slice(0, 5)
   if (headlines.length > 0 && !headlines[0].imageUrl) {
     const firstWithImage = allTopics.find((t, i) => i >= 1 && t.imageUrl)
@@ -1644,29 +1697,10 @@ function SectionedFeed({
       headlines = [firstWithImage, ...headlines.filter((t) => t.topicId !== firstWithImage.topicId)]
     }
   }
-  const remaining = allTopics.filter((t) => !headlines.includes(t))
 
-  // Group remaining by sector
-  const sections: Record<string, TopicArticle[]> = {}
-  for (const topic of remaining) {
-    const sector = detectSectorForFeed(topic.title, topic.summary)
-    if (!sections[sector]) sections[sector] = []
-    sections[sector].push(topic)
-  }
-
-  // Sort sections: user interests first, then by topic count (most topics first)
+  // ── Build sections ──
+  // Top Headlines from the relevant feed, then each category's actual top news.
   const interestSet = new Set(interests)
-  const sortedSectors = Object.keys(sections).sort((a, b) => {
-    const aInterest = interestSet.has(a) ? 1 : 0
-    const bInterest = interestSet.has(b) ? 1 : 0
-    if (aInterest !== bInterest) return bInterest - aInterest
-    return sections[b].length - sections[a].length
-  })
-
-  // ── Build ALL sections in display order ──
-  // Every section uses the SAME format: 1 large (hero) card + rest mini cards.
-  // Sections: Top Headlines, then sector sections (sorted by interests + count),
-  // then "More News" (general/uncategorised topics).
   const allSections: Array<{
     key: string
     label: string
@@ -1674,23 +1708,45 @@ function SectionedFeed({
     isInterested: boolean
   }> = []
 
-  // Top Headlines (first 5 topics)
-  allSections.push({
-    key: 'headlines',
-    label: 'Top Headlines',
-    topics: headlines,
-    isInterested: false,
+  // Top Headlines
+  if (headlines.length > 0) {
+    allSections.push({
+      key: 'headlines',
+      label: 'Top Headlines',
+      topics: headlines,
+      isInterested: false,
+    })
+  }
+
+  // Category sections — sorted by user interests first, then default order
+  const categoryOrder = ['world', 'politics', 'business', 'technology', 'science', 'health']
+  const sortedCategories = [...categoryOrder].sort((a, b) => {
+    const aInterest = interestSet.has(a) ? 1 : 0
+    const bInterest = interestSet.has(b) ? 1 : 0
+    return bInterest - aInterest
   })
 
-  // Sector sections (sorted by interests + count)
-  for (const sector of sortedSectors) {
-    const sectionTopics = sections[sector]
-    if (sectionTopics.length === 0) continue
+  for (const cat of sortedCategories) {
+    const catTopics = categoryTopics[cat]
+    if (catTopics && catTopics.length > 0) {
+      allSections.push({
+        key: cat,
+        label: SECTOR_LABELS[cat] || cat,
+        topics: catTopics,
+        isInterested: interestSet.has(cat),
+      })
+    }
+  }
+
+  // Remaining relevant topics not in headlines (as "More News")
+  const usedTopicIds = new Set(headlines.map((t) => t.topicId))
+  const moreNews = allTopics.filter((t) => !usedTopicIds.has(t.topicId))
+  if (moreNews.length > 0) {
     allSections.push({
-      key: sector,
-      label: SECTOR_LABELS[sector] || sector,
-      topics: sectionTopics,
-      isInterested: interestSet.has(sector),
+      key: 'more',
+      label: 'More News',
+      topics: moreNews,
+      isInterested: false,
     })
   }
 
@@ -1783,9 +1839,11 @@ function MobileTopicLayout({
     <div className="space-y-8">
       {chunks.map((chunk, chunkIdx) => (
         <section key={chunkIdx}>
-          <h2 className="mb-3 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
-            {chunkIdx === 0 ? label : `${label} — Continued`}
-          </h2>
+          {chunkIdx === 0 && (
+            <h2 className="mb-3 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
+              {label}
+            </h2>
+          )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {chunk[0] && (
               <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
