@@ -1708,8 +1708,14 @@ function SectionedFeed({
     isInterested: boolean
   }> = []
 
+  // ── Track all topicIds already shown to prevent duplicates across sections ──
+  // If a story appears in Top Headlines, it won't appear again in World News,
+  // Politics, etc. Each story shows only once, in the first section it appears.
+  const shownTopicIds = new Set<string>()
+
   // Top Headlines
   if (headlines.length > 0) {
+    for (const t of headlines) shownTopicIds.add(t.topicId)
     allSections.push({
       key: 'headlines',
       label: 'Top Headlines',
@@ -1719,6 +1725,7 @@ function SectionedFeed({
   }
 
   // Category sections — sorted by user interests first, then default order
+  // Filter out any topics already shown in Top Headlines or earlier sections.
   const categoryOrder = ['world', 'politics', 'business', 'technology', 'science', 'health']
   const sortedCategories = [...categoryOrder].sort((a, b) => {
     const aInterest = interestSet.has(a) ? 1 : 0
@@ -1728,20 +1735,23 @@ function SectionedFeed({
 
   for (const cat of sortedCategories) {
     const catTopics = categoryTopics[cat]
-    if (catTopics && catTopics.length > 0) {
-      allSections.push({
-        key: cat,
-        label: SECTOR_LABELS[cat] || cat,
-        topics: catTopics,
-        isInterested: interestSet.has(cat),
-      })
-    }
+    if (!catTopics || catTopics.length === 0) continue
+    // Filter out topics already shown in earlier sections
+    const uniqueTopics = catTopics.filter((t) => !shownTopicIds.has(t.topicId))
+    if (uniqueTopics.length === 0) continue
+    for (const t of uniqueTopics) shownTopicIds.add(t.topicId)
+    allSections.push({
+      key: cat,
+      label: SECTOR_LABELS[cat] || cat,
+      topics: uniqueTopics,
+      isInterested: interestSet.has(cat),
+    })
   }
 
   // Remaining relevant topics not in headlines (as "More News")
-  const usedTopicIds = new Set(headlines.map((t) => t.topicId))
-  const moreNews = allTopics.filter((t) => !usedTopicIds.has(t.topicId))
+  const moreNews = allTopics.filter((t) => !shownTopicIds.has(t.topicId))
   if (moreNews.length > 0) {
+    for (const t of moreNews) shownTopicIds.add(t.topicId)
     allSections.push({
       key: 'more',
       label: 'More News',
