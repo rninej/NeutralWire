@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import type { Category } from '@/lib/news-sources'
-import { aggregateCategory, type TopicArticle } from '@/lib/news-aggregator'
+import { aggregateCategory, shortenLongTitles, type TopicArticle } from '@/lib/news-aggregator'
+import { aggregateMyCountryViaGdelt } from '@/lib/gdelt-aggregator'
 import {
   readCachedNews,
   refreshCategory,
@@ -69,14 +70,26 @@ export async function GET(req: NextRequest) {
 
   const t0 = Date.now()
   try {
-    const fresh = await refreshCategory(category, country, (c) =>
-      aggregateCategory(c, {
-        limit: 40,
+    // ── Use GDELT for mycountry, RSS for everything else ──
+    // This mirrors the /api/news route's aggregate() helper. Previously the
+    // refresh route always used RSS aggregateCategory even for mycountry,
+    // which produced horrid results and overwrote the good GDELT cache.
+    const cacheLimit = isVirtualCategory(category) ? 60 : 40
+    const isMyCountry = category === 'mycountry'
+
+    const fresh = await refreshCategory(category, country, async (c) => {
+      if (isMyCountry) {
+        const gdeltResult = await aggregateMyCountryViaGdelt(country, cacheLimit)
+        await shortenLongTitles(gdeltResult.topics)
+        return gdeltResult
+      }
+      return aggregateCategory(c, {
+        limit: cacheLimit,
         minCoverage: 1,
         countrySourceIds,
         countryCode: country,
-      }),
-    )
+      })
+    })
     if (!fresh) {
       return NextResponse.json(
         { error: 'Refresh failed', detail: 'aggregate returned null' },

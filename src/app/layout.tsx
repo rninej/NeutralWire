@@ -90,6 +90,12 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="NeutralWire" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        {/* Google Search Console verification — also set via metadata.verification
+            above, but duplicated here as a direct meta tag to guarantee it's
+            always present in the HTML (Next.js metadata API merging can
+            sometimes not include verification when generateMetadata in
+            page.tsx returns its own metadata object). */}
+        <meta name="google-site-verification" content="szdK3fkYGRu3DqBfWpi6i3JpPLhqFZUx8I22qqGSQJA" />
         {/* iOS PWA: allow standalone display + push notifications */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
