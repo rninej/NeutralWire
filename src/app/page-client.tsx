@@ -1362,15 +1362,28 @@ export default function Home() {
                 {/* Desktop: simple grid layout (clean, fills space properly) */}
                 {!debouncedSearch ? (
                   <>
-                    {/* Mobile: sectioned layout (1 large + rest mini per section) */}
+                    {/* Mobile: sectioned layout */}
                     <div className="lg:hidden">
-                      <SectionedFeed
-                        topics={filteredTopics}
-                        olderTopics={olderTopics}
-                        onOpenDetail={handleOpenDetail}
-                        country={country}
-                        interests={interests}
-                      />
+                      {category === 'relevant' ? (
+                        /* Relevant: sector-grouped sections (Top Headlines + World + Politics + etc.) */
+                        <SectionedFeed
+                          topics={filteredTopics}
+                          olderTopics={olderTopics}
+                          onOpenDetail={handleOpenDetail}
+                          country={country}
+                          interests={interests}
+                        />
+                      ) : (
+                        /* Other tabs: same 1-large + rest-mini LAYOUT but with their own
+                           topics only (no sector splitting — a Politics tab shows politics,
+                           a World tab shows world, etc.) */
+                        <MobileTopicLayout
+                          topics={filteredTopics}
+                          olderTopics={olderTopics}
+                          onOpenDetail={handleOpenDetail}
+                          label={CATEGORY_LABELS[category] || category}
+                        />
+                      )}
                     </div>
                     {/* Desktop: simple grid layout */}
                     <div className="hidden lg:grid gap-4 lg:grid-cols-3 xl:grid-cols-4">
@@ -1564,12 +1577,22 @@ const SECTOR_KEYWORDS_FEED: Record<string, string[]> = {
 
 function detectSectorForFeed(title: string, summary: string = ''): string {
   const text = `${title} ${summary}`.toLowerCase()
+  // Count how many keywords match for EACH sector, then pick the sector
+  // with the most matches. This prevents a business story from being
+  // classified as politics just because it mentions "government" once.
+  let bestSector = 'general'
+  let bestScore = 0
   for (const [sector, keywords] of Object.entries(SECTOR_KEYWORDS_FEED)) {
+    let matches = 0
     for (const kw of keywords) {
-      if (text.includes(kw)) return sector
+      if (text.includes(kw)) matches++
+    }
+    if (matches > bestScore) {
+      bestScore = matches
+      bestSector = sector
     }
   }
-  return 'general'
+  return bestSector
 }
 
 const SECTOR_LABELS: Record<string, string> = {
@@ -1715,6 +1738,76 @@ function SectionedFeed({
           </section>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * MobileTopicLayout — same 1-large + rest-mini format as SectionedFeed, but
+ * WITHOUT sector grouping. Used for non-Relevant tabs (World, Politics,
+ * Business, etc.) so each tab shows ONLY its own topics in the same visual
+ * layout. Topics are chunked into groups of 7 (1 hero + 6 mini) with a
+ * section header using the tab's category label.
+ */
+function MobileTopicLayout({
+  topics,
+  olderTopics,
+  onOpenDetail,
+  label,
+}: {
+  topics: TopicArticle[]
+  olderTopics: TopicArticle[]
+  onOpenDetail: (topic: TopicArticle) => void
+  label: string
+}) {
+  const allTopics = [...topics, ...olderTopics]
+  if (allTopics.length === 0) return null
+
+  // Guarantee the first topic has an image (hero card needs one)
+  let sorted = [...allTopics]
+  if (sorted.length > 0 && !sorted[0].imageUrl) {
+    const firstWithImage = sorted.findIndex((t, i) => i >= 1 && t.imageUrl)
+    if (firstWithImage >= 0) {
+      const [imgTopic] = sorted.splice(firstWithImage, 1)
+      sorted.unshift(imgTopic)
+    }
+  }
+
+  // Chunk into groups of 7 (1 hero + 6 mini per group)
+  const chunks: TopicArticle[][] = []
+  for (let i = 0; i < sorted.length; i += 7) {
+    chunks.push(sorted.slice(i, i + 7))
+  }
+
+  return (
+    <div className="space-y-8">
+      {chunks.map((chunk, chunkIdx) => (
+        <section key={chunkIdx}>
+          <h2 className="mb-3 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
+            {chunkIdx === 0 ? label : `${label} — Continued`}
+          </h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {chunk[0] && (
+              <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
+                <TopicCard
+                  key={chunk[0].topicId}
+                  topic={chunk[0]}
+                  variant="hero"
+                  onOpenDetail={onOpenDetail}
+                />
+              </div>
+            )}
+            {chunk.slice(1, 7).map((t) => (
+              <TopicCard
+                key={t.topicId}
+                topic={t}
+                variant="mini"
+                onOpenDetail={onOpenDetail}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   )
 }
