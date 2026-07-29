@@ -142,7 +142,7 @@ export async function GET(req: NextRequest) {
   const truncated = applyFilters(cached.topics, limit, minCoverage, offset)
 
   // 4. Background refresh if stale.
-  const stale = isStale(cached)
+  const stale = isStale(cached, category)
   if (stale && canRefresh(category, country)) {
     if (wait) {
       const fresh = await refreshCategory(category, country, async () => aggregate())

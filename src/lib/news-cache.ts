@@ -16,6 +16,15 @@
  * Each category is a single node so a page load = one read.
  * Writes are rate-limited per category to avoid hammering the DB
  * when multiple users land on the same category simultaneously.
+ *
+ * ── My Country cache stability ──
+ * The `mycountry` category uses a LONGER cache TTL (30 min vs 5 min) and
+ * MERGES old + new topics on refresh instead of replacing. This prevents
+ * good stories from disappearing when a GDELT refresh returns fewer/worse
+ * results (GDELT's results can vary between fetches). Old topics that are
+ * still within the 48h freshness window are kept; new topics are added;
+ * the combined set is re-ranked. The cache NEVER shrinks below its
+ * previous size on a refresh — it only grows or stays the same.
  */
 
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
@@ -23,8 +32,10 @@ import type { Category } from '@/lib/news-sources'
 import type { CategoryCachePayload, TopicArticle } from '@/lib/news-aggregator'
 
 const ROOT = 'newsCache'
-const STALE_MS = 5 * 60 * 1000 // 5 minutes — refresh more often to avoid stale news
+const STALE_MS = 5 * 60 * 1000 // 5 minutes — for RSS categories
+const MYCOUNTRY_STALE_MS = 30 * 60 * 1000 // 30 minutes — GDELT results are stable, no need to refresh often
 const MIN_REFRESH_GAP_MS = 3 * 60 * 1000 // allow refresh every 3 min
+const FRESHNESS_WINDOW_MS = 48 * 60 * 60 * 1000 // keep topics younger than 48h when merging
 
 // ---------- In-process refresh bookkeeping ----------
 const REFRESH_IN_FLIGHT = new Map<string, Promise<CategoryCachePayload | null>>()
@@ -83,12 +94,15 @@ export async function writeCachedNews(
 }
 
 /**
- * Decide whether a cached payload is stale (older than STALE_MS).
+ * Decide whether a cached payload is stale.
+ * My Country uses a longer TTL (30 min) because GDELT results are stable
+ * and frequent refreshes cause good stories to disappear.
  */
-export function isStale(payload: CategoryCachePayload | null): boolean {
+export function isStale(payload: CategoryCachePayload | null, category?: Category): boolean {
   if (!payload) return true
   if (typeof payload.updatedAt !== 'number') return true
-  return Date.now() - payload.updatedAt > STALE_MS
+  const ttl = category === 'mycountry' ? MYCOUNTRY_STALE_MS : STALE_MS
+  return Date.now() - payload.updatedAt > ttl
 }
 
 /**
@@ -102,10 +116,17 @@ export function canRefresh(category: Category, country: string = ''): boolean {
 }
 
 /**
- * Run a refresh (slow RSS aggregate + Firebase write) and return the new
- * payload. Deduplicates concurrent refreshes for the same category.
+ * Run a refresh (slow RSS/GDELT aggregate + Firebase write) and return the
+ * new payload. Deduplicates concurrent refreshes for the same category.
  *
  * `aggregateFn` is injected so this module stays pure / testable.
+ *
+ * ── My Country merge logic ──
+ * For `mycountry`, the refresh MERGES old + new topics instead of replacing.
+ * This prevents good stories from disappearing when a GDELT fetch returns
+ * fewer/worse results. Old topics still within the 48h freshness window are
+ * kept; new topics are added; the combined set is written to the cache.
+ * The cache NEVER shrinks below its previous size on a refresh.
  */
 export async function refreshCategory(
   category: Category,
@@ -125,6 +146,47 @@ export async function refreshCategory(
   const p = (async () => {
     try {
       const agg = await aggregateFn(category)
+
+      // ── For mycountry: merge old + new topics to prevent good stories
+      // from disappearing on refresh ──
+      if (category === 'mycountry') {
+        const oldCached = await readCachedNews(category, country)
+        if (oldCached && oldCached.topics && oldCached.topics.length > 0) {
+          const now = Date.now()
+          // Keep old topics that are still fresh (within 48h)
+          const freshOldTopics = oldCached.topics.filter(
+            (t) => now - t.latestSeen < FRESHNESS_WINDOW_MS,
+          )
+          // Merge: start with new topics, add old ones not already in the set
+          const newTopicIds = new Set(agg.topics.map((t) => t.topicId))
+          const preservedOldTopics = freshOldTopics.filter(
+            (t) => !newTopicIds.has(t.topicId),
+          )
+          const mergedTopics = [...agg.topics, ...preservedOldTopics]
+
+          // If the merged set is smaller than the old cache (shouldn't happen
+          // since we're preserving old topics, but just in case), keep the
+          // old cache's size by filling from old topics
+          const finalTopics = mergedTopics.length >= oldCached.topics.length
+            ? mergedTopics
+            : [...agg.topics, ...oldCached.topics.filter((t) => !newTopicIds.has(t.topicId))]
+
+          console.log(
+            `[news-cache] mycountry merge: ${agg.topics.length} new + ${preservedOldTopics.length} preserved old = ${finalTopics.length} total (was ${oldCached.topics.length})`,
+          )
+
+          await writeCachedNews(category, country, finalTopics, agg.articleCount, agg.sourceCount)
+          LAST_REFRESH_AT.set(key, Date.now())
+          return {
+            updatedAt: Date.now(),
+            sourceCount: agg.sourceCount,
+            articleCount: agg.articleCount,
+            topics: finalTopics,
+          } satisfies CategoryCachePayload
+        }
+      }
+
+      // Default: replace the cache entirely (RSS categories)
       await writeCachedNews(category, country, agg.topics, agg.articleCount, agg.sourceCount)
       LAST_REFRESH_AT.set(key, Date.now())
       return {
@@ -147,5 +209,6 @@ export async function refreshCategory(
 
 export const CACHE_CONSTANTS = {
   STALE_MS,
+  MYCOUNTRY_STALE_MS,
   MIN_REFRESH_GAP_MS,
 } as const
