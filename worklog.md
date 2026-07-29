@@ -879,3 +879,24 @@ Stage Summary:
 - Dev server: started HTTP 200, no errors in dev.log.
 - Commit: 43b3a9a. Push: success (main → main, a974f84..43b3a9a). PAT cleaned from .git/config.
 - Files in commit (2): src/components/topic-card.tsx (+min-h-[96px] on mini card + image container — no empty gaps when no image), src/app/page-client.tsx (desktop 2-col page layout: Top Headlines left 2/3 + More News sidebar right 1/3; flat lg:grid-cols-4 sector grids below the fold with no large first card).
+
+---
+Task ID: 14
+Agent: sub-agent (general-purpose)
+Task: Lint, test, push uniform layout (all sections use 1 large + rest mini format).
+
+Work Log:
+- Read worklog to get context on prior work (Tasks 1, 2, 3, FIX-1..4, 5, 6, 7, 8, 9, 10, 11, 12, 13). Main agent had just unified ALL sections (Top Headlines + sector sections + More News) to use the SAME layout format: 1 hero card (spans 1 col + 3 rows on desktop, full width on mobile) + 6 mini cards filling the remaining columns. Removed the previous 2-column "Top Headlines + More News sidebar" layout and the flat-grid sector sections. Built a single unified `allSections` array (Top Headlines first, then sectors sorted by user interests + topic count, then More News) rendered through one shared layout function.
+- Verified diff: only src/app/page-client.tsx modified (+50/-75 lines, 1 file). Removed ~75 lines of special-cased Top Headlines sidebar + flat-grid sector markup; replaced with one unified section renderer.
+- Lint: `bun run lint` → 0 errors, 0 warnings (exit 0). No fixes needed.
+- Restarted dev server: pkill next dev + next-server, removed dev.log, ran .zscripts/dev.sh via setsid nohup. After 15s warmup: `curl http://localhost:3000/` → HTTP 200.
+- dev.log error check: `grep -iE "error|fatal" /home/z/my-project/dev.log | grep -v "AI failed|keyword fallback|502|render:|AI returned no|falling back|AI threw|gdelt.*429|gdelt.*timeout|gdelt.*fetch failed"` → 0 matching lines. dev.log shows only normal Next.js request logs (GET / 200, GET /api/news?category=relevant... 200). No crashes, no uncaught exceptions.
+- Committed (1 source file only): commit d0da1d4 on main.
+- Pushed to GitHub: `git push origin main` → `43b3a9a..d0da1d4  main -> main` (success).
+- Cleaned PAT: reset remote URL to https://github.com/rninej/NeutralWire.git; verified `grep -c "ghp_" .git/config` → 0 (exit 1, no matches).
+
+Stage Summary:
+- Lint: PASS (0 errors, 0 warnings).
+- Dev server: started HTTP 200, no errors in dev.log.
+- Commit: d0da1d4. Push: success (main → main, 43b3a9a..d0da1d4). PAT cleaned from .git/config.
+- Files in commit (1): src/app/page-client.tsx (+50/-75 lines: removed 2-col Top Headlines + More News sidebar layout + flat-grid sector sections; replaced with unified `allSections` array (Top Headlines + sector sections + More News) all rendered through the same layout: 1 hero card spans 1 col + 3 rows on desktop (full width on mobile) + 6 mini cards filling remaining columns; sectors sorted by user interests + topic count, More News at end).
