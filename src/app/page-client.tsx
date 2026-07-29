@@ -1650,46 +1650,36 @@ function SectionedFeed({
   return (
     <div className="space-y-8">
       {/* ── Top Headlines section ── */}
+      {/* Desktop: hero spans 2 columns (left) + 3 mini cards stacked (right)
+          — all 4 visible without scrolling.
+          Mobile: hero on top (smaller) + 3 mini cards below in a 2-col grid. */}
       <section>
         <h2 className="mb-3 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
           Top Headlines
         </h2>
-        {/* Hero card (full width on mobile, first headline) */}
-        {headlines[0] && (
-          <div className="mb-4">
+        {/* Desktop: 4-column grid, hero spans cols 1-2, mini cards in cols 3-4 */}
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
+          {/* Hero card — spans 2 columns on desktop, 1 on mobile */}
+          {headlines[0] && (
+            <div className="lg:col-span-2 lg:row-span-2">
+              <TopicCard
+                key={headlines[0].topicId}
+                topic={headlines[0]}
+                variant="hero"
+                onOpenDetail={onOpenDetail}
+              />
+            </div>
+          )}
+          {/* 3 mini cards — visible immediately on desktop (right side of hero) */}
+          {headlines.slice(1, 4).map((t) => (
             <TopicCard
-              key={headlines[0].topicId}
-              topic={headlines[0]}
-              variant="hero"
+              key={t.topicId}
+              topic={t}
+              variant="mini"
               onOpenDetail={onOpenDetail}
             />
-          </div>
-        )}
-        {/* 2 default cards side-by-side on mobile+ */}
-        {headlines.length > 1 && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {headlines.slice(1, 3).map((t) => (
-              <TopicCard
-                key={t.topicId}
-                topic={t}
-                onOpenDetail={onOpenDetail}
-              />
-            ))}
-          </div>
-        )}
-        {/* Remaining headlines as mini cards (2 per row on mobile) */}
-        {headlines.length > 3 && (
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {headlines.slice(3).map((t) => (
-              <TopicCard
-                key={t.topicId}
-                topic={t}
-                variant="mini"
-                onOpenDetail={onOpenDetail}
-              />
-            ))}
-          </div>
-        )}
+          ))}
+        </div>
       </section>
 
       {/* ── Sector sections ── */}
@@ -1709,29 +1699,27 @@ function SectionedFeed({
                 </span>
               )}
             </h2>
-            {/* First topic in section: default card */}
-            {sectionTopics[0] && (
-              <div className="mb-4">
-                <TopicCard
-                  key={sectionTopics[0].topicId}
-                  topic={sectionTopics[0]}
-                  onOpenDetail={onOpenDetail}
-                />
-              </div>
-            )}
-            {/* Remaining topics: mini cards in a responsive grid */}
-            {sectionTopics.length > 1 && (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {sectionTopics.slice(1, 6).map((t) => (
+            {/* Desktop: 4-column grid, first topic spans 2 cols (larger),
+                rest are mini cards. All visible without scrolling. */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {sectionTopics[0] && (
+                <div className="sm:col-span-2 lg:col-span-2 lg:row-span-2">
                   <TopicCard
-                    key={t.topicId}
-                    topic={t}
-                    variant="mini"
+                    key={sectionTopics[0].topicId}
+                    topic={sectionTopics[0]}
                     onOpenDetail={onOpenDetail}
                   />
-                ))}
-              </div>
-            )}
+                </div>
+              )}
+              {sectionTopics.slice(1, 5).map((t) => (
+                <TopicCard
+                  key={t.topicId}
+                  topic={t}
+                  variant="mini"
+                  onOpenDetail={onOpenDetail}
+                />
+              ))}
+            </div>
           </section>
         )
       })}

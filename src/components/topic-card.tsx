@@ -133,9 +133,10 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
       )}
       onClick={handleCardClick}
     >
-      {/* Image (hero: on top, large; default: below header) */}
+      {/* Image (hero: on top, compact 16/10 so the card isn't too tall;
+          default: below header) */}
       {showImage && isHero && (
-        <div className="relative w-full overflow-hidden bg-muted aspect-[16/9]">
+        <div className="relative w-full overflow-hidden bg-muted aspect-[16/10] lg:aspect-[16/9]">
           <img
             src={proxyImage(imageUrl!)}
             alt=""
@@ -190,31 +191,31 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         </div>
       )}
 
-      {/* Description (below header, or below image if image exists) */}
-      {topic.summary && variant !== 'compact' && (
+      {/* Description (hidden for hero + compact to keep the card compact) */}
+      {topic.summary && variant !== 'compact' && !isHero && (
         <div className={cn('px-4', showImage && !isHero ? 'pt-3' : '')}>
-          <p className={cn('text-muted-foreground line-clamp-3', isHero ? 'text-sm' : 'text-sm')}>
-            {topic.summary}
-          </p>
+          <p className="text-sm text-muted-foreground line-clamp-3">{topic.summary}</p>
         </div>
       )}
 
-      {/* Bias bar + meta (always at the bottom) */}
-      <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
-        <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
+      {/* Bias bar + meta (hidden for hero to keep it compact — the bias bar
+          and sources button are shown on the detail page) */}
+      {!isHero && (
+        <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
+          <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
 
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-muted-foreground">
-            {total} {total === 1 ? 'article' : 'articles'} across the spectrum
-          </span>
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className="text-xs font-medium text-foreground underline-offset-2 hover:underline"
-          >
-            {open ? 'Hide' : 'View'} sources
-          </button>
-        </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted-foreground">
+              {total} {total === 1 ? 'article' : 'articles'} across the spectrum
+            </span>
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              className="text-xs font-medium text-foreground underline-offset-2 hover:underline"
+            >
+              {open ? 'Hide' : 'View'} sources
+            </button>
+          </div>
 
         {open && (
           <ul className="mt-1 divide-y divide-border rounded-md border">
@@ -254,7 +255,8 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             })}
           </ul>
         )}
-      </div>
+        </div>
+      )}
     </Card>
   )
 }
