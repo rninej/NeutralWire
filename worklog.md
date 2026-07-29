@@ -924,3 +924,33 @@ Stage Summary:
 - Dev server: started HTTP 200, no errors in dev.log (mycountry GB endpoint confirmed working — relevant for notification trigger fix).
 - Commit: 84c2c98. Push: success (main → main, d0da1d4..84c2c98). PAT cleaned from .git/config.
 - Files in commit (3): src/app/api/push/trigger/route.ts (+mycountry category + US politics filter 40+ patterns), src/app/page-client.tsx (mobile 2x2 grid + UI declutter: removed tabs/count/timestamp/dropdown/legend/search-bar + added showSearch state + search-icon bubble), src/components/topic-card.tsx (bolder + larger titles on mini + hero card variants).
+
+---
+Task ID: 16
+Agent: sub-agent (Lint+Test+Push)
+
+Task: Lint, test, push the mobile 2x2 grid fix + bias bar labels-inside-bar fix that the main agent just made.
+
+Work Log:
+- Read worklog to confirm context: previous Task 15 (commit 84c2c98) had already landed the mobile 2x2 grid + UI declutter + topic-card title changes. This task continues with two follow-up tweaks the main agent made on top.
+- Verified working tree had 2 modified files: src/app/page-client.tsx and src/components/bias-bar.tsx (71 insertions, 34 deletions across both).
+- Inspected the diff to confirm the changes match the task description:
+  - page-client.tsx: SectionedFeed grid changed from `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3` → `grid-cols-2 lg:grid-cols-3`; hero wrapper changed from `sm:col-span-2 ...` → `col-span-2 lg:col-span-1 lg:row-span-3`. Now mini cards form a 2x2 square grid on mobile, hero spans full width on mobile.
+  - bias-bar.tsx: Refactored to conditional render. When showLabels=true (default), bar is h-5 rounded-md with L{n}/C{n}/R{n} labels overlaid INSIDE each colored segment (white, bold, text-[9px], leading-none). Labels only render when segment >8% wide. When showLabels=false, preserves the old h-2 rounded-full thin bar with no labels. Both branches keep role="img" + aria-label + per-segment title attributes for accessibility.
+- Ran `bun run lint` → PASS (0 errors, 0 warnings, eslint . exited 0).
+- Restarted dev server via .zscripts/dev.sh. curl http://localhost:3000/ → HTTP 200.
+- Filtered dev.log for errors (excluding the known AI/gdelt/502 fallback noise) → no errors found.
+- Committed both files:
+    git add src/app/page-client.tsx src/components/bias-bar.tsx
+    git commit -m "Mobile 2x2 grid + bias bar labels inside the bar ..."
+  → commit dfef0c016df47e25c03f73a7ff6ab5974afc2d4b (short: dfef0c0).
+- Pushed to origin main: 84c2c98..dfef0c0 main -> main. Push succeeded (the trailing exit_code=1 was from `grep -c "ghp_"` returning 0 matches — which is the desired post-condition, not a push failure).
+- Verified PAT cleaned: `grep -c "ghp_" .git/config` returns 0, and `git remote get-url origin` returns https://github.com/rninej/NeutralWire.git (no embedded credentials).
+
+Stage Summary:
+- Lint: PASS (0 errors, 0 warnings).
+- Dev server: HTTP 200 on http://localhost:3000/, no errors in dev.log.
+- Commit: dfef0c0 (dfef0c016df47e25c03f73a7ff6ab5974afc2d4b).
+- Push: success (main → main, 84c2c98..dfef0c0).
+- PAT cleaned from .git/config (grep -c returns 0; remote URL is the bare https://github.com/rninej/NeutralWire.git).
+- Files in commit (2): src/app/page-client.tsx (mobile 2x2 grid from the start, not just sm+), src/components/bias-bar.tsx (labels overlaid inside the bar segments, h-5 taller bar, >8% width gate).
