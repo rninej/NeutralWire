@@ -722,3 +722,28 @@ Stage Summary:
 - OG description: confirmed compelling — "Is your news feeding you the full picture? Compare how left, right, and center outlets cover the SAME story — side by side. See the bias, spot the spin, decide for yourself." with title "NeutralWire — See How Every Outlet Spins the Same Story".
 - Commit: 1b5ccbf. Push: success (main → main, 22a8ad6..1b5ccbf). PAT cleaned from .git/config.
 - Files in commit (5): src/lib/user-interests.ts (+getCountryNewsCount/bumpCountryNewsCount), src/app/page-client.tsx (+myCountryTopics state, +intersperse logic in filteredTopics memo, +bumpCountryNewsCount on GDELT topic open), src/components/topic-detail.tsx (+bumpCountryNewsCount -1 on GDELT dislike), src/app/layout.tsx (+Twitter card, updated title/description/OG), src/app/page.tsx (+compelling defaultMeta title/description/OG).
+
+---
+Task ID: 8
+Agent: sub-agent (general-purpose)
+Task: Lint, test, push cache stability fix for My Country stories disappearing on refresh (built by main agent in prior turn).
+
+Work Log:
+- Read worklog to get context on prior work (Tasks 1, 2, 3, FIX-1..4, 5, 6, 7). Main agent had just fixed the "good stories disappear on refresh" bug in My Country via 3 changes in src/lib/news-cache.ts + src/app/api/news/route.ts: (1) added MYCOUNTRY_STALE_MS = 30 min TTL (vs 5 min for RSS) since GDELT results are stable, (2) refreshCategory() now MERGES old + new topics for mycountry (keeps old topics within 48h freshness window, adds new topics, dedupes by topicId; cache never shrinks below previous size), (3) isStale() now accepts optional category param and uses the longer TTL for mycountry. Also exported MYCOUNTRY_STALE_MS via CACHE_CONSTANTS.
+- Verified code: news-cache.ts has the merge logic (lines 152-187), the conditional TTL in isStale (line 104), and MYCOUNTRY_STALE_MS in CACHE_CONSTANTS. route.ts passes `category` to isStale at line 145.
+- Lint: `bun run lint` → 0 errors, 0 warnings. No fixes needed in src/lib/news-cache.ts or src/app/api/news/route.ts.
+- Restarted dev server: pkill next dev + next-server, removed dev.log, ran .zscripts/dev.sh via setsid nohup. After 15s warmup: `curl http://localhost:3000/` → HTTP 200.
+- Tested `mycountry` (GB): `GET /api/news?category=mycountry&country=GB&limit=10&minCoverage=1` → 10 topics, cached:true. Top 10 UK topics served from Firebase cache (Burnham social care, UEFA/FIFA, Iran strikes, Japan earthquake, Burnham commute, M1 traffic, Real Madrid/Vinicius, Leicester church fire, Lineker/FIFA, Kalvin Phillips). Endpoint returns valid JSON.
+- Tested `relevant` (GB): `GET /api/news?category=relevant&country=GB&limit=5&minCoverage=1` → 5 topics. RSS pipeline unaffected.
+- dev.log error check: `grep -iE "error|fatal" dev.log | grep -v "AI failed|keyword fallback|502|render:|AI returned no|falling back|AI threw|gdelt.*429|gdelt.*timeout|gdelt.*fetch failed"` → 0 matching lines. No crashes, no uncaught exceptions.
+- Committed (2 source files only — explicitly excluded .zscripts/dev.pid which is a dev-only artifact): commit 1ffdb8a on main.
+- Pushed to GitHub: `git push origin main` → `1b5ccbf..1ffdb8a  main -> main` (success).
+- Cleaned PAT: reset remote URL to https://github.com/rninej/NeutralWire.git; verified `grep -c "ghp_" .git/config` → 0 (exit 1, no matches).
+
+Stage Summary:
+- Lint: PASS (0 errors, 0 warnings).
+- Dev server: started HTTP 200, no errors in dev.log.
+- /api/news?category=mycountry (GB): 10 topics served from Firebase cache (cached:true). No crash.
+- /api/news?category=relevant (GB): 5 topics (RSS pipeline intact).
+- Commit: 1ffdb8a. Push: success (main → main, 1b5ccbf..1ffdb8a). PAT cleaned from .git/config.
+- Files in commit (2): src/lib/news-cache.ts (+70/-2: +MYCOUNTRY_STALE_MS, +FRESHNESS_WINDOW_MS, +category param on isStale, +merge logic in refreshCategory for mycountry, +MYCOUNTRY_STALE_MS in CACHE_CONSTANTS), src/app/api/news/route.ts (+1/-1: pass category to isStale).
