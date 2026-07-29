@@ -828,3 +828,28 @@ Stage Summary:
 - Dev server: started HTTP 200, no errors in dev.log.
 - Commit: bbd0b00. Push: success (main → main, 150512d..bbd0b00). PAT cleaned from .git/config.
 - Files in commit (2): src/app/page-client.tsx (+/- 94 lines: Top Headlines + sector sections now use 4-column grid, hero spans 2 cols + 2 rows, 3 mini cards fill the right side), src/components/topic-card.tsx (+/- 48 lines: hero variant made compact — shorter image aspect ratio on mobile, hidden description + bias bar + sources button shown on detail page instead).
+
+---
+Task ID: 12
+Agent: sub-agent (general-purpose)
+Task: Lint, test, push layout+bias fix.
+
+Work Log:
+- Read worklog to get context on prior work (Tasks 1, 2, 3, FIX-1..4, 5, 6, 7, 8, 9, 10, 11). Main agent had just made two changes:
+  (1) src/app/page-client.tsx — Changed the SectionedFeed grid from 4-column to 3-column. The hero card spans 2 cols + 2 rows, and the mini cards fill the third column. This properly fills the full desktop width instead of leaving gaps. Applied to both Top Headlines and sector sections.
+  (2) src/components/topic-card.tsx — Added BiasBar (red/blue/grey spectrum) to ALL card variants:
+      - Mini cards: compact bias bar at the bottom of the card (after the title).
+      - Hero cards: compact bias bar at the bottom (no sources button — keeps it clean).
+      - Default cards: already had the bias bar (unchanged).
+- Lint: `bun run lint` → 0 errors, 0 warnings (exit 0). No fixes needed in either src/components/topic-card.tsx or src/app/page-client.tsx.
+- Restarted dev server: pkill next dev + next-server, removed dev.log, ran .zscripts/dev.sh via setsid nohup. After 15s warmup: `curl http://localhost:3000/` → HTTP 200.
+- dev.log error check: `grep -iE "error|fatal" /home/z/my-project/dev.log | grep -v "AI failed|keyword fallback|502|render:|AI returned no|falling back|AI threw|gdelt.*429|gdelt.*timeout|gdelt.*fetch failed"` → 0 matching lines. No crashes, no uncaught exceptions.
+- Committed (2 source files only): commit a974f84 on main.
+- Pushed to GitHub: `git push origin main` → `bbd0b00..a974f84  main -> main` (success).
+- Cleaned PAT: reset remote URL to https://github.com/rninej/NeutralWire.git; verified `grep -c "ghp_" .git/config` → 0 (exit 1, no matches).
+
+Stage Summary:
+- Lint: PASS (0 errors, 0 warnings).
+- Dev server: started HTTP 200, no errors in dev.log.
+- Commit: a974f84. Push: success (main → main, bbd0b00..a974f84). PAT cleaned from .git/config.
+- Files in commit (2): src/components/topic-card.tsx (+BiasBar on mini + hero variants), src/app/page-client.tsx (4-col → 3-col grid: hero spans 2 cols + 2 rows, mini cards fill third column — fills full desktop width).
