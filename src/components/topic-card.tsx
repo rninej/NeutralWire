@@ -85,17 +85,18 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   // ── MINI variant: compact horizontal card (thumbnail left, title right) ──
   // Used in dense lists where 4+ stories should be visible at once on mobile.
   // Includes a compact bias bar so every card shows the red/blue/grey spectrum.
+  // When no image: full-width text card (no empty placeholder).
   if (variant === 'mini') {
     return (
       <Card
         className={cn(
-          'overflow-hidden p-0 gap-0 flex flex-row items-stretch',
+          'overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
           onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
         )}
         onClick={handleCardClick}
       >
         {showImage && (
-          <div className="relative w-24 h-24 shrink-0 overflow-hidden bg-muted">
+          <div className="relative w-24 min-h-[96px] shrink-0 overflow-hidden bg-muted">
             <img
               src={proxyImage(imageUrl!)}
               alt=""

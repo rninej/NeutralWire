@@ -1649,40 +1649,73 @@ function SectionedFeed({
 
   return (
     <div className="space-y-8">
-      {/* ── Top Headlines section ── */}
-      {/* Desktop: hero spans 2 columns (left) + 3 default cards (right)
-          — all 4 visible without scrolling, fills full width.
-          Mobile: hero on top + 3 mini cards below in a 2-col grid. */}
-      <section>
-        <h2 className="mb-3 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
-          Top Headlines
-        </h2>
-        {/* Desktop: 3-column grid — hero spans 2 cols + 2 rows, 3 cards fill col 3 */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {/* Hero card — spans 2 columns + 2 rows on desktop, full width on mobile */}
-          {headlines[0] && (
-            <div className="sm:col-span-2 lg:row-span-2">
+      {/* ── Top Headlines + More News sidebar (desktop 2-column page layout) ── */}
+      {/* Desktop: Top Headlines on the left (2/3 width), More News sidebar on
+          the right (1/3 width). Fills the full page — no empty space.
+          Mobile: stacked vertically (headlines first, then More News). */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* ── LEFT: Top Headlines (spans 2 columns on desktop) ── */}
+        <div className="lg:col-span-2 space-y-3">
+          <h2 className="text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
+            Top Headlines
+          </h2>
+          {/* Hero spans 2 cols + 2 rows, 3 mini cards fill the right column */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {headlines[0] && (
+              <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
+                <TopicCard
+                  key={headlines[0].topicId}
+                  topic={headlines[0]}
+                  variant="hero"
+                  onOpenDetail={onOpenDetail}
+                />
+              </div>
+            )}
+            {headlines.slice(1, 4).map((t) => (
               <TopicCard
-                key={headlines[0].topicId}
-                topic={headlines[0]}
-                variant="hero"
+                key={t.topicId}
+                topic={t}
+                variant="mini"
                 onOpenDetail={onOpenDetail}
               />
-            </div>
-          )}
-          {/* 3 cards — visible immediately on desktop (right column of hero) */}
-          {headlines.slice(1, 4).map((t) => (
-            <TopicCard
-              key={t.topicId}
-              topic={t}
-              variant="mini"
-              onOpenDetail={onOpenDetail}
-            />
-          ))}
+            ))}
+          </div>
         </div>
-      </section>
 
-      {/* ── Sector sections ── */}
+        {/* ── RIGHT: More News sidebar (1 column on desktop, full width on mobile) ── */}
+        {(() => {
+          // Collect topics from all sectors into a flat "More News" list
+          const moreNewsTopics: TopicArticle[] = []
+          for (const sector of sortedSectors) {
+            for (const t of sections[sector]) {
+              moreNewsTopics.push(t)
+            }
+          }
+          if (moreNewsTopics.length === 0) return null
+          return (
+            <div className="space-y-3">
+              <h2 className="text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
+                More News
+              </h2>
+              <div className="flex flex-col gap-3">
+                {moreNewsTopics.slice(0, 7).map((t) => (
+                  <TopicCard
+                    key={t.topicId}
+                    topic={t}
+                    variant="mini"
+                    onOpenDetail={onOpenDetail}
+                  />
+                ))}
+              </div>
+            </div>
+          )
+        })()}
+      </div>
+
+      {/* ── Sector sections (below the fold) ── */}
+      {/* Each sector gets its own section with a header + flat grid of mini
+          cards. No large first card (avoids blank space when the card is
+          short). Sections matching user interests appear first. */}
       {sortedSectors.map((sector) => {
         const sectionTopics = sections[sector]
         if (sectionTopics.length === 0) return null
@@ -1699,19 +1732,9 @@ function SectionedFeed({
                 </span>
               )}
             </h2>
-            {/* Desktop: 3-column grid — first topic spans 2 cols + 2 rows,
-                4 mini cards fill the third column. Fills full width. */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {sectionTopics[0] && (
-                <div className="sm:col-span-2 lg:row-span-2">
-                  <TopicCard
-                    key={sectionTopics[0].topicId}
-                    topic={sectionTopics[0]}
-                    onOpenDetail={onOpenDetail}
-                  />
-                </div>
-              )}
-              {sectionTopics.slice(1, 5).map((t) => (
+            {/* Flat grid of mini cards — no large first card (avoids blank space) */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {sectionTopics.slice(0, 8).map((t) => (
                 <TopicCard
                   key={t.topicId}
                   topic={t}
