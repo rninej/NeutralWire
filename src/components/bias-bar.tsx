@@ -18,11 +18,10 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
 
   return (
     <div className={cn('w-full', className)}>
-      {/* Labels + bar combined in one row to save vertical space.
-          Labels are overlaid INSIDE the bar segments. */}
+      {/* Labels overlaid INSIDE the thin bar to save vertical space. */}
       {showLabels ? (
         <div
-          className="flex h-5 w-full overflow-hidden rounded-md bg-muted"
+          className="flex h-3.5 w-full overflow-hidden rounded-full bg-muted"
           role="img"
           aria-label={`Coverage: ${left} left, ${center} center, ${right} right`}
         >
@@ -32,8 +31,8 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               style={{ width: `${lPct}%` }}
               title={`Left: ${left}`}
             >
-              {lPct > 8 && (
-                <span className="text-[9px] font-bold text-white leading-none">L{left}</span>
+              {lPct > 10 && (
+                <span className="text-[8px] font-bold text-white leading-none">L{left}</span>
               )}
             </div>
           )}
@@ -43,8 +42,8 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               style={{ width: `${cPct}%` }}
               title={`Center: ${center}`}
             >
-              {cPct > 8 && (
-                <span className="text-[9px] font-bold text-white leading-none">C{center}</span>
+              {cPct > 10 && (
+                <span className="text-[8px] font-bold text-white leading-none">C{center}</span>
               )}
             </div>
           )}
@@ -54,8 +53,8 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               style={{ width: `${rPct}%` }}
               title={`Right: ${right}`}
             >
-              {rPct > 8 && (
-                <span className="text-[9px] font-bold text-white leading-none">R{right}</span>
+              {rPct > 10 && (
+                <span className="text-[8px] font-bold text-white leading-none">R{right}</span>
               )}
             </div>
           )}

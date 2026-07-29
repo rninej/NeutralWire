@@ -1357,17 +1357,46 @@ export default function Home() {
               <BiasColumns topics={filteredTopics} />
             ) : (
               <>
-                {/* ── Sectioned BBC-style layout for Relevant tab ── */}
-                {/* Mobile: mixed sizes with category section headers.
-                    Desktop: grid with hero + sections. */}
+                {/* ── Mobile: sectioned layout for Relevant tab ── */}
+                {/* Desktop: simple grid layout (clean, fills space properly) */}
                 {category === 'relevant' && !debouncedSearch ? (
-                  <SectionedFeed
-                    topics={filteredTopics}
-                    olderTopics={olderTopics}
-                    onOpenDetail={handleOpenDetail}
-                    country={country}
-                    interests={interests}
-                  />
+                  <>
+                    {/* Mobile: sectioned layout (1 large + rest mini per section) */}
+                    <div className="lg:hidden">
+                      <SectionedFeed
+                        topics={filteredTopics}
+                        olderTopics={olderTopics}
+                        onOpenDetail={handleOpenDetail}
+                        country={country}
+                        interests={interests}
+                      />
+                    </div>
+                    {/* Desktop: simple grid layout */}
+                    <div className="hidden lg:grid gap-4 lg:grid-cols-3 xl:grid-cols-4">
+                      {featured && (
+                        <TopicCard
+                          key={featured.topicId + (featured.imageUrl || '')}
+                          topic={featured}
+                          variant="featured"
+                          onOpenDetail={handleOpenDetail}
+                        />
+                      )}
+                      {rest.map((t) => (
+                        <TopicCard
+                          key={t.topicId + (t.imageUrl || '')}
+                          topic={t}
+                          onOpenDetail={handleOpenDetail}
+                        />
+                      ))}
+                      {olderTopics.map((t) => (
+                        <TopicCard
+                          key={t.topicId + (t.imageUrl || '')}
+                          topic={t}
+                          onOpenDetail={handleOpenDetail}
+                        />
+                      ))}
+                    </div>
+                  </>
                 ) : (
                   /* Default grid for other categories / search */
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
