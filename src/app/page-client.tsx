@@ -1650,18 +1650,18 @@ function SectionedFeed({
   return (
     <div className="space-y-8">
       {/* ── Top Headlines section ── */}
-      {/* Desktop: hero spans 2 columns (left) + 3 mini cards stacked (right)
-          — all 4 visible without scrolling.
-          Mobile: hero on top (smaller) + 3 mini cards below in a 2-col grid. */}
+      {/* Desktop: hero spans 2 columns (left) + 3 default cards (right)
+          — all 4 visible without scrolling, fills full width.
+          Mobile: hero on top + 3 mini cards below in a 2-col grid. */}
       <section>
         <h2 className="mb-3 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
           Top Headlines
         </h2>
-        {/* Desktop: 4-column grid, hero spans cols 1-2, mini cards in cols 3-4 */}
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
-          {/* Hero card — spans 2 columns on desktop, 1 on mobile */}
+        {/* Desktop: 3-column grid — hero spans 2 cols + 2 rows, 3 cards fill col 3 */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {/* Hero card — spans 2 columns + 2 rows on desktop, full width on mobile */}
           {headlines[0] && (
-            <div className="lg:col-span-2 lg:row-span-2">
+            <div className="sm:col-span-2 lg:row-span-2">
               <TopicCard
                 key={headlines[0].topicId}
                 topic={headlines[0]}
@@ -1670,7 +1670,7 @@ function SectionedFeed({
               />
             </div>
           )}
-          {/* 3 mini cards — visible immediately on desktop (right side of hero) */}
+          {/* 3 cards — visible immediately on desktop (right column of hero) */}
           {headlines.slice(1, 4).map((t) => (
             <TopicCard
               key={t.topicId}
@@ -1699,11 +1699,11 @@ function SectionedFeed({
                 </span>
               )}
             </h2>
-            {/* Desktop: 4-column grid, first topic spans 2 cols (larger),
-                rest are mini cards. All visible without scrolling. */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {/* Desktop: 3-column grid — first topic spans 2 cols + 2 rows,
+                4 mini cards fill the third column. Fills full width. */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {sectionTopics[0] && (
-                <div className="sm:col-span-2 lg:col-span-2 lg:row-span-2">
+                <div className="sm:col-span-2 lg:row-span-2">
                   <TopicCard
                     key={sectionTopics[0].topicId}
                     topic={sectionTopics[0]}

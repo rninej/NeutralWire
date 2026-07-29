@@ -84,6 +84,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
 
   // ── MINI variant: compact horizontal card (thumbnail left, title right) ──
   // Used in dense lists where 4+ stories should be visible at once on mobile.
+  // Includes a compact bias bar so every card shows the red/blue/grey spectrum.
   if (variant === 'mini') {
     return (
       <Card
@@ -116,6 +117,10 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
           <h3 className="font-semibold text-xs leading-tight line-clamp-3">
             {topic.title}
           </h3>
+          {/* Compact bias bar — every card shows the red/blue/grey spectrum */}
+          <div className="mt-auto pt-1">
+            <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
+          </div>
         </div>
       </Card>
     )
@@ -198,8 +203,14 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         </div>
       )}
 
-      {/* Bias bar + meta (hidden for hero to keep it compact — the bias bar
-          and sources button are shown on the detail page) */}
+      {/* ── HERO: compact bias bar at the bottom (no sources button — keep it clean) ── */}
+      {isHero && (
+        <div className="mt-auto px-4 pb-3 pt-2">
+          <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
+        </div>
+      )}
+
+      {/* ── DEFAULT + COMPACT: full bias bar + sources button ── */}
       {!isHero && (
         <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
           <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
