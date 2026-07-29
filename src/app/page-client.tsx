@@ -1653,9 +1653,9 @@ function SectionedFeed({
             {/* Mobile: hero full width on top, mini cards in 2x2 square grid below.
                 Desktop: 3-column grid — hero spans 1 col + 3 rows (left),
                 mini cards fill cols 2-3. */}
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {sectionTopics[0] && (
-                <div className="col-span-2 lg:col-span-1 lg:row-span-3">
+                <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
                   <TopicCard
                     key={sectionTopics[0].topicId}
                     topic={sectionTopics[0]}
