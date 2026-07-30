@@ -61,6 +61,49 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   const [askAiOpen, setAskAiOpen] = React.useState(false)
   // Like/dislike state: null = no vote, 'liked' = thumbs up, 'disliked' = thumbs down
   const [likeState, setLikeState] = React.useState<'liked' | 'disliked' | null>(null)
+
+  // ── Like/dislike persistence ──
+  // Load saved vote from localStorage on mount (instant, no Firebase read needed).
+  // Also save to Firebase so it syncs across devices.
+  React.useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`neutralwire:vote:${topic.topicId}`)
+      if (saved === 'liked' || saved === 'disliked') {
+        setLikeState(saved)
+      } else {
+        setLikeState(null)
+      }
+    } catch {
+      // silent
+    }
+  }, [topic.topicId])
+
+  const saveVote = (vote: 'liked' | 'disliked' | null) => {
+    // Save to localStorage (instant, survives reload)
+    try {
+      if (vote === null) {
+        localStorage.removeItem(`neutralwire:vote:${topic.topicId}`)
+      } else {
+        localStorage.setItem(`neutralwire:vote:${topic.topicId}`, vote)
+      }
+    } catch {
+      // silent
+    }
+    // Also save to Firebase (syncs across devices) — fire and forget
+    const deviceId = getDeviceId()
+    if (deviceId) {
+      fetch('/api/engagement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'topicVote',
+          deviceId,
+          topicId: topic.topicId,
+          vote,
+        }),
+      }).catch(() => {})
+    }
+  }
   // Only render time after mount — formatTime() is timezone-dependent and
   // would cause hydration mismatch (server uses UTC, client uses local TZ).
   const [mounted, setMounted] = React.useState(false)
@@ -188,9 +231,9 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   }
 
   const handleLike = () => {
-    // Toggle: if already liked, unlike (revert to neutral). If disliked, switch to liked.
     const newVote = likeState === 'liked' ? null : 'liked'
     setLikeState(newVote)
+    saveVote(newVote)
     const deviceId = getDeviceId()
     if (deviceId && newVote === 'liked') {
       bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'like').catch(() => {})
@@ -201,9 +244,9 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   }
 
   const handleDislike = () => {
-    // Toggle: if already disliked, revert to neutral. If liked, switch to disliked.
     const newVote = likeState === 'disliked' ? null : 'disliked'
     setLikeState(newVote)
+    saveVote(newVote)
     const deviceId = getDeviceId()
     if (deviceId && newVote === 'disliked') {
       bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'dislike').catch(() => {})

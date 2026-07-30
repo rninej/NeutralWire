@@ -307,31 +307,35 @@ function generateExtractiveSummary(body: SummaryRequest): string {
     )
   }
 
-  // Assemble the summary.
-  const paragraphs: string[] = []
-
-  // P1: Core facts
-  paragraphs.push(coreFacts)
-
-  // P2: Additional context (if different from core)
-  if (context && context !== coreFacts) {
-    paragraphs.push(context)
-  }
-
-  // P3: Perspectives
-  if (perspectives.length > 0) {
-    paragraphs.push(perspectives.join(' '))
-  }
-
-  // P4: Coverage summary
+  // Assemble the summary with the same 4-section format as the AI summary:
+  // **The Big Picture**, **Why It Matters**, **How Different Outlets Are Covering It**, **What Happens Next**
   const leftCount = articles.filter((a) => a.leaning === 'left').length
   const centerCount = articles.filter((a) => a.leaning === 'center').length
   const rightCount = articles.filter((a) => a.leaning === 'right').length
-  paragraphs.push(
-    `This story is being covered by ${articles.length} sources across the political spectrum: ${leftCount} left-leaning, ${centerCount} center, and ${rightCount} right-leaning outlets. The breadth of coverage suggests this is a significant developing story.`,
-  )
 
-  return paragraphs.filter(Boolean).join('\n\n')
+  const sections: string[] = []
+
+  // Section 1: The Big Picture
+  sections.push(`**The Big Picture**\n\n${coreFacts}`)
+
+  // Section 2: Why It Matters (additional context)
+  if (context && context !== coreFacts) {
+    sections.push(`**Why It Matters**\n\n${context}`)
+  } else {
+    sections.push(`**Why It Matters**\n\nThis story is being covered by ${articles.length} sources across the political spectrum, indicating significant public interest.`)
+  }
+
+  // Section 3: How Different Outlets Are Covering It
+  if (perspectives.length > 0) {
+    sections.push(`**How Different Outlets Are Covering It**\n\n${perspectives.join(' ')}`)
+  } else {
+    sections.push(`**How Different Outlets Are Covering It**\n\n${leftCount} left-leaning, ${centerCount} center, and ${rightCount} right-leaning outlets are covering this story.`)
+  }
+
+  // Section 4: What Happens Next
+  sections.push(`**What Happens Next**\n\nThis story is being covered by ${articles.length} sources across the political spectrum: ${leftCount} left-leaning, ${centerCount} center, and ${rightCount} right-leaning outlets. The breadth of coverage suggests this is a significant developing story.`)
+
+  return sections.join('\n\n')
 }
 
 /**

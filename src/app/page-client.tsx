@@ -1650,7 +1650,11 @@ function SectionedFeed({
       { cat: 'health', label: 'health' },
     ]
 
+    // Also fetch My Country stories for the "My Country" section in Relevant
     const countryCode = country?.code && country.code !== 'INT' ? country.code : ''
+    if (countryCode) {
+      categoriesToFetch.push({ cat: 'mycountry', label: 'mycountry' })
+    }
 
     ;(async () => {
       try {
@@ -1746,6 +1750,22 @@ function SectionedFeed({
       topics: uniqueTopics,
       isInterested: interestSet.has(cat),
     })
+  }
+
+  // My Country section — placed naturally (not boosted)
+  const myCountryCatTopics = categoryTopics['mycountry']
+  if (myCountryCatTopics && myCountryCatTopics.length > 0) {
+    const uniqueMc = myCountryCatTopics.filter((t) => !shownTopicIds.has(t.topicId))
+    if (uniqueMc.length > 0) {
+      for (const t of uniqueMc) shownTopicIds.add(t.topicId)
+      const countryDisplay = country?.code === 'GB' ? 'UK' : (country?.code || 'My Country')
+      allSections.push({
+        key: 'mycountry',
+        label: `${countryDisplay} News`,
+        topics: uniqueMc,
+        isInterested: false,
+      })
+    }
   }
 
   // Remaining relevant topics not in headlines (as "More News")

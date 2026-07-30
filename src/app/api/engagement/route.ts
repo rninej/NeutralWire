@@ -49,6 +49,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true })
     }
 
+    // ── Topic vote (like/dislike) persistence ──
+    if (body.type === 'topicVote') {
+      const { topicId, vote } = body
+      if (!topicId) {
+        return NextResponse.json({ error: 'Missing topicId' }, { status: 400 })
+      }
+      await firebasePatch(`devices/${body.deviceId}/topicVotes`, {
+        [topicId]: vote,
+      })
+      return NextResponse.json({ ok: true })
+    }
+
     return NextResponse.json({ error: 'Unknown type' }, { status: 400 })
   } catch (err) {
     return NextResponse.json(
