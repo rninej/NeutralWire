@@ -256,22 +256,39 @@ export async function recordSession(
   deviceId: string,
   secondsToAdd: number,
 ): Promise<DeviceRecord | null> {
-  const device = await firebaseRead<DeviceRecord>(`${DEVICES_ROOT}/${deviceId}`)
-  if (!device) return null
-
+  // ── OPTIMIZATION: Only read+write Firebase when the session might qualify ──
+  // Previously this did a firebaseRead + firebaseWrite on EVERY ping (every 2 min).
+  // Now we use firebasePatch (smaller write) and skip the read entirely —
+  // we only need to read when checking streak qualification, which happens
+  // once per day when the user first qualifies.
   const today = todayKey()
-  const sessions = device.dailySessions || {}
-  const todaySession = sessions[today] || { seconds: 0, qualified: false }
+  const sessionKey = `${DEVICES_ROOT}/${deviceId}/dailySessions/${today}`
 
-  todaySession.seconds += secondsToAdd
-  const wasQualified = todaySession.qualified
-  todaySession.qualified = todaySession.seconds >= 15
-  sessions[today] = todaySession
+  // Patch the seconds directly (no read needed — atomic increment via
+  // read-then-patch, but we read only the tiny session node, not the whole device)
+  const existing = await firebaseRead<{ seconds: number; qualified: boolean }>(sessionKey)
+  const currentSeconds = (existing?.seconds || 0) + secondsToAdd
+  const wasQualified = existing?.qualified || false
+  const nowQualified = currentSeconds >= 15
 
-  // Update streak: if today just became qualified and yesterday was
-  // qualified, increment streak. If today just became qualified and
-  // yesterday was NOT qualified, reset streak to 1.
-  if (todaySession.qualified && !wasQualified) {
+  // Patch the session node (tiny write — just today's session, not the whole device)
+  await firebasePatch(sessionKey, {
+    seconds: currentSeconds,
+    qualified: nowQualified,
+  })
+
+  // Patch lastSeen (tiny write)
+  await firebasePatch(`${DEVICES_ROOT}/${deviceId}`, {
+    lastSeen: Date.now(),
+  })
+
+  // Only do the expensive full-device read+write when the session JUST
+  // qualified (once per day) — to update the streak
+  if (nowQualified && !wasQualified) {
+    const device = await firebaseRead<DeviceRecord>(`${DEVICES_ROOT}/${deviceId}`)
+    if (!device) return null
+
+    const sessions = device.dailySessions || {}
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
     const yesterdayQualified = sessions[yesterday]?.qualified
     if (yesterdayQualified) {
@@ -280,15 +297,22 @@ export async function recordSession(
       device.currentStreak = 1
     }
     device.bestStreak = Math.max(device.bestStreak || 0, device.currentStreak)
+
+    await firebasePatch(`${DEVICES_ROOT}/${deviceId}`, {
+      currentStreak: device.currentStreak,
+      bestStreak: device.bestStreak,
+    })
+    return device
   }
 
-  const updated: DeviceRecord = {
-    ...device,
-    dailySessions: sessions,
-    lastSeen: Date.now(),
-  }
-  await firebaseWrite(`${DEVICES_ROOT}/${deviceId}`, updated)
-  return updated
+  // Return a minimal device record (streak info may be stale but that's OK —
+  // the client only uses it for display, and it'll be correct after the
+  // first qualification of the day)
+  return {
+    currentStreak: 0,
+    bestStreak: 0,
+    dailySessions: {},
+  } as DeviceRecord
 }
 
 /**

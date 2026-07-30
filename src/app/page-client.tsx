@@ -431,8 +431,9 @@ export default function Home() {
     load()
     window.addEventListener('neutralwire:interests-changed', load)
     window.addEventListener('neutralwire:engagement-changed', load)
-    // Refresh engagement every 30s so the boost stays fresh while reading
-    const interval = setInterval(load, 30000)
+    // Refresh engagement every 2 minutes (was 30s — was causing excessive
+    // localStorage reads + unnecessary re-renders)
+    const interval = setInterval(load, 120000)
     return () => {
       window.removeEventListener('neutralwire:interests-changed', load)
       window.removeEventListener('neutralwire:engagement-changed', load)
@@ -609,16 +610,17 @@ export default function Home() {
       body: JSON.stringify({ deviceId, referralCode: refCode }),
     }).catch(() => {})
 
-    // Track session activity every 15 seconds.
+    // Track session activity every 2 MINUTES (was 15 seconds — was causing
+    // excessive Firebase reads/writes. 2 minutes is enough for streak tracking).
     let sessionInterval: ReturnType<typeof setInterval>
     const startSessionTracking = () => {
       sessionInterval = setInterval(() => {
         fetch('/api/session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deviceId, seconds: 15, referralCode: refCode }),
+          body: JSON.stringify({ deviceId, seconds: 120, referralCode: refCode }),
         }).catch(() => {})
-      }, 15000)
+      }, 120000) // 2 minutes (was 15000 = 15 seconds)
     }
     startSessionTracking()
 
@@ -1641,13 +1643,15 @@ function SectionedFeed({
   // "Politics" shows actual politics, etc.
   React.useEffect(() => {
     let cancelled = false
+    // ── REDUCED Firebase reads: only fetch 4 categories (was 6) ──
+    // Each fetch = 1 Firebase read. 4 categories × 1 read = 4 reads per
+    // Relevant tab load (was 6+). Combined with the main feed read, that's
+    // 5 total reads per page load.
     const categoriesToFetch = [
       { cat: 'world', label: 'world' },
       { cat: 'politics', label: 'politics' },
       { cat: 'business', label: 'business' },
       { cat: 'technology', label: 'technology' },
-      { cat: 'science', label: 'science' },
-      { cat: 'health', label: 'health' },
     ]
 
     // Also fetch My Country stories for the "My Country" section in Relevant
@@ -1662,7 +1666,7 @@ function SectionedFeed({
           categoriesToFetch.map(async ({ cat, label }) => {
             const params = new URLSearchParams({
               category: cat,
-              limit: '4',
+              limit: '3',
               minCoverage: '1',
             })
             const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })

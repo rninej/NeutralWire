@@ -32,7 +32,7 @@ import type { Category } from '@/lib/news-sources'
 import type { CategoryCachePayload, TopicArticle } from '@/lib/news-aggregator'
 
 const ROOT = 'newsCache'
-const STALE_MS = 5 * 60 * 1000 // 5 minutes — for RSS categories
+const STALE_MS = 10 * 60 * 1000 // 10 minutes — for RSS categories (was 5 min)
 const MYCOUNTRY_STALE_MS = 30 * 60 * 1000 // 30 minutes — GDELT results are stable, no need to refresh often
 const MIN_REFRESH_GAP_MS = 3 * 60 * 1000 // allow refresh every 3 min
 const FRESHNESS_WINDOW_MS = 48 * 60 * 60 * 1000 // keep topics younger than 48h when merging
