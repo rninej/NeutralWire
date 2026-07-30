@@ -58,6 +58,21 @@ export async function POST(req: NextRequest) {
         }
         await firebasePatch(key, stats)
       }
+
+      // ── Track sector-level dislikes ──
+      // When a user clicks "Not Interested", detect which sector (politics,
+      // world, sports, etc.) the story belongs to and increment a counter.
+      // The trigger reads these to avoid sending stories from disliked sectors.
+      if (body.action === 'dislike') {
+        const sector = detectSectorFromTitle(body.title)
+        if (sector) {
+          const sectorKey = `notification-sector-dislikes/${sector}`
+          const sectorStats = await firebaseReadStats(sectorKey)
+          sectorStats.dislikes = (sectorStats.dislikes || 0) + 1
+          sectorStats.lastDislike = Date.now()
+          await firebasePatch(sectorKey, sectorStats)
+        }
+      }
     }
 
     return NextResponse.json({ ok: true, action: body.action })
@@ -117,4 +132,28 @@ function extractKeywords(title: string): string[] {
     .split(/\s+/)
     .filter((w) => w.length > 4 && !stopWords.has(w))
     .slice(0, 5)
+}
+
+/**
+ * Detect which sector a title belongs to (for dislike tracking).
+ * Returns a sector ID or null if no match.
+ */
+function detectSectorFromTitle(title: string): string | null {
+  const text = title.toLowerCase()
+  const sectorKeywords: Record<string, string[]> = {
+    politics: ['trump', 'biden', 'parliament', 'congress', 'senate', 'election', 'labour', 'conservative', 'government', 'minister', 'prime minister', 'president', 'policy'],
+    world: ['ukraine', 'russia', 'china', 'israel', 'gaza', 'iran', 'middle east', 'europe', 'nato', 'war', 'conflict'],
+    business: ['stock', 'market', 'economy', 'inflation', 'interest rate', 'gdp', 'recession', 'tariff', 'merger', 'earnings', 'profit'],
+    technology: ['ai ', 'artificial intelligence', 'google', 'apple', 'microsoft', 'tesla', 'nvidia', 'chip', 'cyber', 'hack', 'crypto'],
+    science: ['nasa', 'spacex', 'rocket', 'space', 'climate', 'carbon', 'earthquake', 'discovery', 'scientists'],
+    health: ['covid', 'vaccine', 'hospital', 'nhs', 'cancer', 'disease', 'virus', 'health'],
+    sports: ['premier league', 'champions league', 'arsenal', 'chelsea', 'liverpool', 'cricket', 'rugby', 'golf', 'f1', 'boxing', 'olympics', 'football', 'tennis'],
+    entertainment: ['movie', 'film', 'oscar', 'netflix', 'celebrity', 'actor', 'music', 'concert', 'gaming'],
+  }
+  for (const [sector, keywords] of Object.entries(sectorKeywords)) {
+    for (const kw of keywords) {
+      if (text.includes(kw)) return sector
+    }
+  }
+  return null
 }

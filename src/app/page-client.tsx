@@ -1072,6 +1072,7 @@ export default function Home() {
               category: 'mycountry',
               limit: '5',
               minCoverage: '1',
+              slim: '1',
               country: country.code,
             })
             const mcRes = await fetch(`/api/news?${mcParams.toString()}`, { cache: 'no-store' })
@@ -1658,8 +1659,9 @@ function SectionedFeed({
           categoriesToFetch.map(async ({ cat, label }) => {
             const params = new URLSearchParams({
               category: cat,
-              limit: '7',
+              limit: '4',
               minCoverage: '1',
+              slim: '1',
             })
             const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
             if (!res.ok) return { label, topics: [] }

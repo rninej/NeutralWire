@@ -110,6 +110,30 @@ function detectSectors(title: string, summary: string = ''): string[] {
   return Array.from(matched)
 }
 
+/**
+ * Detect which sector a story belongs to (for dislike-aware ranking).
+ * Mirrors the sector detection in the feedback route.
+ */
+function detectTriggerSector(title: string): string {
+  const text = title.toLowerCase()
+  const sectorKeywords: Record<string, string[]> = {
+    politics: ['trump', 'biden', 'parliament', 'congress', 'senate', 'election', 'labour', 'conservative', 'government', 'minister', 'prime minister', 'president', 'policy'],
+    world: ['ukraine', 'russia', 'china', 'israel', 'gaza', 'iran', 'middle east', 'europe', 'nato', 'war', 'conflict'],
+    business: ['stock', 'market', 'economy', 'inflation', 'interest rate', 'gdp', 'recession', 'tariff', 'merger', 'earnings', 'profit'],
+    technology: ['ai ', 'artificial intelligence', 'google', 'apple', 'microsoft', 'tesla', 'nvidia', 'chip', 'cyber', 'hack', 'crypto'],
+    science: ['nasa', 'spacex', 'rocket', 'space', 'climate', 'carbon', 'earthquake', 'discovery', 'scientists'],
+    health: ['covid', 'vaccine', 'hospital', 'nhs', 'cancer', 'disease', 'virus', 'health'],
+    sports: ['premier league', 'champions league', 'arsenal', 'chelsea', 'liverpool', 'cricket', 'rugby', 'golf', 'f1', 'boxing', 'olympics', 'football', 'tennis'],
+    entertainment: ['movie', 'film', 'oscar', 'netflix', 'celebrity', 'actor', 'music', 'concert', 'gaming'],
+  }
+  for (const [sector, keywords] of Object.entries(sectorKeywords)) {
+    for (const kw of keywords) {
+      if (text.includes(kw)) return sector
+    }
+  }
+  return 'general'
+}
+
 // ── Story fingerprinting + keyword-overlap dedup ──
 // PROBLEM: The same news event gets different titles across cache refreshes
 // (different outlets, different wording). The old exact-set fingerprint
@@ -662,11 +686,38 @@ export async function GET(req: NextRequest) {
       return true
     })
 
-    // CRITICAL: If ALL stories were already sent, do NOT fall back to the
-    // unfiltered list (that was the old bug — it re-sent duplicates).
-    // Instead, skip this slot entirely. No notification is better than a
-    // duplicate notification.
-    const candidates = freshStories
+    // ── Sector dislike tracking ──
+    // Read aggregate sector-level dislikes. Stories from sectors users have
+    // been disliking (via "Not Interested") get demoted. We don't filter
+    // them out entirely (one user's dislike shouldn't block all users), but
+    // we push them to the bottom of the candidate list.
+    let sectorDislikes: Record<string, number> = {}
+    try {
+      const sd = await firebaseRead<Record<string, { dislikes?: number }>>(
+        'notification-sector-dislikes',
+      )
+      if (sd) {
+        for (const [sector, data] of Object.entries(sd)) {
+          if (data?.dislikes) sectorDislikes[sector] = data.dislikes
+        }
+      }
+    } catch {
+      // silent
+    }
+
+    // Sort candidates: stories from non-disliked sectors first, then by coverage
+    const candidates = [...freshStories].sort((a, b) => {
+      const sectorA = detectTriggerSector(a.title)
+      const sectorB = detectTriggerSector(b.title)
+      const dislikeA = sectorDislikes[sectorA] || 0
+      const dislikeB = sectorDislikes[sectorB] || 0
+      // If one story is from a disliked sector and the other isn't, prefer
+      // the non-disliked one
+      if (dislikeA > 3 && dislikeB <= 3) return 1
+      if (dislikeB > 3 && dislikeA <= 3) return -1
+      // Otherwise sort by coverage (highest first)
+      return b.coverage - a.coverage
+    })
 
     if (candidates.length === 0) {
       console.log('[trigger] All candidate stories already sent — skipping slot', slot)

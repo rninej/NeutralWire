@@ -44,6 +44,7 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(40, Math.max(5, Number(sp.get('limit') || '24')))
   const minCoverage = Math.max(1, Math.min(8, Number(sp.get('minCoverage') || '1')))
   const wait = sp.get('wait') === '1'
+  const slim = sp.get('slim') === '1' // strips articles array → ~80% smaller response
   const countryOverride = sp.get('country') || ''
   // Offset for infinite scroll — skip the first N topics and return the next N.
   // Default 0 (first page). The cache stores 40 topics; offset > 0 returns
@@ -122,7 +123,7 @@ export async function GET(req: NextRequest) {
         category,
         country,
         countryName,
-        topics: applyFilters(payload.topics, limit, minCoverage, offset),
+        topics: applyFilters(payload.topics, limit, minCoverage, offset, slim),
         cached: false,
         fresh: true,
         sourceCount: payload.sourceCount,
@@ -139,7 +140,7 @@ export async function GET(req: NextRequest) {
   }
 
   // 3. Cache exists.
-  const truncated = applyFilters(cached.topics, limit, minCoverage, offset)
+  const truncated = applyFilters(cached.topics, limit, minCoverage, offset, slim)
 
   // 4. Background refresh if stale.
   const stale = isStale(cached, category)
@@ -151,7 +152,7 @@ export async function GET(req: NextRequest) {
           category,
           country,
           countryName,
-          topics: applyFilters(fresh.topics, limit, minCoverage, offset),
+          topics: applyFilters(fresh.topics, limit, minCoverage, offset, slim),
           cached: false,
           fresh: true,
           sourceCount: fresh.sourceCount,
@@ -192,11 +193,21 @@ function applyFilters(
   limit: number,
   minCoverage: number,
   offset: number = 0,
+  slim: boolean = false,
 ): TopicArticle[] {
   // NOTE: Do NOT re-sort here. The topics are already sorted by the
   // aggregator (with local-boost for the `relevant` category). Re-sorting
   // by coverage would destroy the local-news prioritisation.
-  return topics
+  const result = topics
     .filter((t) => t.coverage >= minCoverage)
     .slice(offset, offset + limit)
+  // When slim=true, strip the articles array from each topic. This reduces
+  // the response size by ~80% (articles contain titles, links, descriptions
+  // for every source). Articles are only needed when the user clicks
+  // "View sources" or opens the detail view — fetched separately via
+  // /api/topic/[id].
+  if (slim) {
+    return result.map((t) => ({ ...t, articles: [] }))
+  }
+  return result
 }

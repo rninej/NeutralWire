@@ -364,7 +364,8 @@ export function personalizationBoost(
   engagement: EngagementStats,
 ): number {
   const sectors = detectSectors(topic.title, topic.summary)
-  let boost = topic.coverage * 2
+  // Lower base coverage weight so interests dominate more
+  let boost = topic.coverage * 1.5
 
   let interestMatch = 0
   let engScore = 0
@@ -379,9 +380,16 @@ export function personalizationBoost(
     }
   }
 
-  boost += interestMatch * 12
-  boost += engScore * 0.3
-  boost -= negEngScore * 0.5 // strong demote for disliked sectors
+  // ── AGGRESSIVE personalization ──
+  // Interest matches are the STRONGEST signal (user explicitly picked these
+  // sectors in the onboarding popup). +25 per match (was +12).
+  boost += interestMatch * 25
+  // Multi-interest bonus: if 2+ interests match, extra +20
+  if (interestMatch >= 2) boost += 20
+  // Positive engagement (clicks/likes/shares) — +0.5 per point (was +0.3)
+  boost += engScore * 0.5
+  // Negative engagement (dislikes) — STRONG demotion: -1.0 per point (was -0.5)
+  boost -= negEngScore * 1.0
 
   // Boring pattern filter — Trump minutiae, US polls, etc.
   // These get a heavy penalty so they don't show in Relevant unless extremely high coverage.
@@ -399,7 +407,7 @@ export function personalizationBoost(
   ]
   for (const pattern of boringPatterns) {
     if (titleLower.includes(pattern)) {
-      boost -= 25
+      boost -= 30
       break
     }
   }
