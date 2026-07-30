@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing question or topic' }, { status: 400 })
     }
 
-    const articleContext = body.topicArticles
+    const articleContext = (body.topicArticles || [])
       .slice(0, 8)
       .map((a) => `- ${a.title} (${a.source}, ${a.leaning})`)
       .join('\n')
@@ -66,9 +66,7 @@ IMPORTANT - WEB SEARCH INDICATOR:
 Story context:
 Title: ${body.topicTitle}
 Summary: ${body.topicSummary}
-
-Articles covering this story:
-${articleContext}`
+${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
 
     // ── Call AI (parallel, NO search) ──
     let answer = await callAI({ systemPrompt, userPrompt: body.question })
