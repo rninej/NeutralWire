@@ -305,6 +305,79 @@ Rank these stories by national importance for ${countryDisplay} readers. Return 
   })
 }
 
+// ---------- Country relevance filter ----------
+// GDELT's sourcecountry filter returns articles from OUTLETS in that country,
+// but those outlets also cover international news. This filter keeps only
+// stories that are actually ABOUT the country (mention UK places, people,
+// institutions, or use UK-specific terms).
+//
+// For the UK (GB): requires at least one UK keyword in the title.
+// For other countries: uses their own keyword lists.
+// Stories with NO country keyword are excluded (they're international news
+// that a UK outlet happened to cover).
+
+const COUNTRY_KEYWORDS_GDELT: Record<string, string[]> = {
+  GB: [
+    // UK places
+    'uk', 'britain', 'british', 'england', 'english', 'london', 'scotland',
+    'scottish', 'wales', 'welsh', 'northern ireland', 'belfast', 'edinburgh',
+    'cardiff', 'manchester', 'birmingham', 'leeds', 'liverpool', 'bristol',
+    'sheffield', 'newcastle', 'york', 'brighton', 'oxford', 'cambridge',
+    'glasgow', 'aberdeen', 'dublin',
+    // UK government/institutions
+    'parliament', 'westminster', 'downing street', 'whitehall', 'number 10',
+    'no 10', 'commons', 'lords', 'mps', 'mp ', 'tories', 'tory', 'labour',
+    'conservative', 'lib dem', 'snp', 'reform uk', 'prime minister',
+    'chancellor', 'home secretary', 'foreign secretary',
+    // UK public services
+    'nhs', 'ofsted', 'bbc', 'met office', 'hmrc', 'dvla', 'dwp',
+    'council tax', 'income tax', 'vat', 'state pension',
+    // UK legal
+    'supreme court', 'high court', 'crown court', 'met police',
+    'scotland yard', 'cps',
+    // UK people (current)
+    'starmer', 'burnham', 'sunak', 'farage', 'streeting', 'reeves',
+    'badenoch', 'davey', 'khan', 'sadiq',
+    // UK-specific terms
+    'king charles', 'queen', 'prince william', 'princess', 'royal family',
+    'windsor', 'buckingham', 'commonwealth', 'the crown',
+    // UK transport
+    'heathrow', 'gatwick', 'stansted', 'network rail', 'national rail',
+    'hs2', 'transport for london', 'tfl',
+    // UK companies/institutions
+    'barclays', 'lloyds', 'hsbc', 'rbs', 'natwest', 'tesco', 'sainsbury',
+    'marks and spencer', 'm&s', 'bt group', 'rolls-royce',
+    // UK events/culture
+    'premier league', 'fa cup', 'wimbledon', 'ashes', 'glastonbury',
+    'commonwealth games', 'boat race', 'proms', 'bafta',
+  ],
+  US: [
+    'us', 'america', 'american', 'united states', 'washington', 'white house',
+    'capitol', 'congress', 'senate', 'house of representatives', 'pentagon',
+    'supreme court', 'fbi', 'cia', 'doj', 'trump', 'biden', 'harris',
+    'new york', 'los angeles', 'chicago', 'houston', 'phoenix',
+  ],
+}
+
+function isAboutCountry(title: string, countryCode: string): boolean {
+  const cc = countryCode.toUpperCase()
+  const keywords = COUNTRY_KEYWORDS_GDELT[cc] || COUNTRY_KEYWORDS_GDELT[cc === 'UK' ? 'GB' : '']
+  if (!keywords) return true // unknown country — don't filter
+
+  const titleLower = ` ${title.toLowerCase()} `
+  for (const kw of keywords) {
+    // Word-boundary match for short keywords (uk, mp, us)
+    if (kw.length <= 3) {
+      const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const re = new RegExp(`(?:^|[^a-z])${escaped}(?:[^a-z]|$)`, 'i')
+      if (re.test(titleLower)) return true
+    } else {
+      if (titleLower.includes(kw)) return true
+    }
+  }
+  return false
+}
+
 interface GdeltArticle {
   url: string
   url_mobile?: string
@@ -712,6 +785,11 @@ export async function aggregateMyCountryViaGdelt(
     if (isSportsTitle(title)) continue
     // Skip non-news
     if (isNonNews(title)) continue
+    // Skip international stories that aren't about the country itself.
+    // GDELT's sourcecountry filter returns articles from UK OUTLETS, but those
+    // outlets also cover international news (Japan earthquake, US elections,
+    // etc.). We only want stories that are ABOUT the UK.
+    if (!isAboutCountry(title, cc)) continue
 
     const domain = a.domain || new URL(a.url).hostname
     const iso = parseGdeltDate(a.seendate)
