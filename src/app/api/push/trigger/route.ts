@@ -486,7 +486,7 @@ async function pruneGlobalHistory(
   for (const id of stale) {
     try {
       await fetch(
-        `https://neutralwire-2f24e-default-rtdb.europe-west1.firebasedatabase.app/notification-sent-history/${id}.json`,
+        `https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app/notification-sent-history/${id}.json`,
         { method: 'DELETE' },
       )
     } catch {

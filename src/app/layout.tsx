@@ -101,8 +101,8 @@ export default function RootLayout({
         <meta name="mobile-web-app-capable" content="yes" />
         {/* ── Performance: preconnect to key external domains ── */}
         {/* Firebase RTDB — used for news cache, summaries, device data */}
-        <link rel="preconnect" href="https://neutralwire-2f24e-default-rtdb.europe-west1.firebasedatabase.app" />
-        <link rel="dns-prefetch" href="https://neutralwire-2f24e-default-rtdb.europe-west1.firebasedatabase.app" />
+        <link rel="preconnect" href="https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app" />
+        <link rel="dns-prefetch" href="https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app" />
         {/* Major image CDNs — preconnect so image proxy fetches are faster */}
         <link rel="dns-prefetch" href="https://ichef.bbci.co.uk" />
         <link rel="dns-prefetch" href="https://static01.nyt.com" />

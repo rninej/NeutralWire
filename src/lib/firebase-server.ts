@@ -16,7 +16,7 @@
  */
 
 const DB_URL =
-  'https://neutralwire-2f24e-default-rtdb.europe-west1.firebasedatabase.app'
+  'https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app'
 
 const FETCH_TIMEOUT_MS = 8000
 
