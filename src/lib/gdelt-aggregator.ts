@@ -662,7 +662,6 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
     let bestTitle = articles[clusterIdx[0]].title
     let bestSummary = articles[clusterIdx[0]].description
     let bestImage = articles[clusterIdx[0]].imageUrl
-    let bestKwSize = kwSets[clusterIdx[0]].size
     let firstSeen = articles[clusterIdx[0]].iso
     let latestSeen = articles[clusterIdx[0]].iso
     let leanLeft = 0, leanCenter = 0, leanRight = 0
@@ -677,11 +676,6 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
         else leanRight++
       }
       clusterArticles.push(a)
-      if (kwSets[idx].size > bestKwSize) {
-        bestKwSize = kwSets[idx].size
-        bestTitle = a.title
-        bestSummary = a.description
-      }
       if (a.imageUrl) {
         const upgraded = upgradeToHighRes(a.imageUrl)
         if (!bestImage || scoreImageUrl(upgraded) > scoreImageUrl(bestImage)) {
@@ -690,6 +684,38 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
       }
       if (a.iso < firstSeen) firstSeen = a.iso
       if (a.iso > latestSeen) latestSeen = a.iso
+    }
+
+    // ── Title selection: prefer BBC → center → shortest >10 chars ──
+    {
+      // Step 1: BBC
+      const bbcArticle = clusterArticles.find((a) => a.sourceId === 'bbc' || a.sourceName === 'BBC')
+      if (bbcArticle && bbcArticle.title.length > 10) {
+        bestTitle = bbcArticle.title
+        bestSummary = bbcArticle.description
+      } else {
+        // Step 2: shortest center title >10 chars
+        const centerTitles = clusterArticles.filter(
+          (a) => a.leaning === 'center' && a.title.length > 10,
+        )
+        if (centerTitles.length > 0) {
+          const shortest = centerTitles.reduce((a, b) =>
+            a.title.length <= b.title.length ? a : b,
+          )
+          bestTitle = shortest.title
+          bestSummary = shortest.description
+        } else {
+          // Step 3: shortest any title >10 chars
+          const anyTitles = clusterArticles.filter((a) => a.title.length > 10)
+          if (anyTitles.length > 0) {
+            const shortest = anyTitles.reduce((a, b) =>
+              a.title.length <= b.title.length ? a : b,
+            )
+            bestTitle = shortest.title
+            bestSummary = shortest.description
+          }
+        }
+      }
     }
 
     topics.push({

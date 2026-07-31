@@ -1931,7 +1931,6 @@ function clusterTopics(
     let bestTitle = articles[clusterIdx[0]].title
     let bestSummary = articles[clusterIdx[0]].description
     let bestImage = articles[clusterIdx[0]].imageUrl
-    let bestKwSize = kwSets[clusterIdx[0]].size
     let firstSeen = articles[clusterIdx[0]].iso
     let latestSeen = articles[clusterIdx[0]].iso
 
@@ -1950,8 +1949,6 @@ function clusterTopics(
         if (a.leaning === 'left') leanLeft++
         else if (a.leaning === 'center') leanCenter++
         else leanRight++
-        // Don't double-count local coverage for duplicate articles
-        // from the same source — only count unique local sources.
         continue
       }
       seenSourceIds.add(a.sourceId)
@@ -1964,22 +1961,12 @@ function clusterTopics(
         localCoverage++
       }
 
-      if (kwSets[idx].size > bestKwSize) {
-        bestKwSize = kwSets[idx].size
-        bestTitle = a.title
-        bestSummary = a.description
-      }
       // Pick the HIGHEST-QUALITY image across all articles in the cluster
-      // (was: first non-null image). We score each candidate by likely
-      // resolution and keep the best. This means even before the
-      // findImageForTopic() OG-fetch pass, the topic already has the
-      // best RSS-provided image rather than just the first one.
       if (a.imageUrl) {
         const upgraded = upgradeToHighRes(a.imageUrl)
         if (!bestImage) {
           bestImage = upgraded
         } else {
-          // Replace if this candidate scores higher than current best
           if (scoreImageUrl(upgraded) > scoreImageUrl(bestImage)) {
             bestImage = upgraded
           }
@@ -1987,6 +1974,44 @@ function clusterTopics(
       }
       if (a.iso < firstSeen) firstSeen = a.iso
       if (a.iso > latestSeen) latestSeen = a.iso
+    }
+
+    // ── Title selection: prefer BBC → center → shortest >10 chars ──
+    // 1. If BBC has an article in this cluster, use BBC's title
+    // 2. Otherwise, pick the shortest title from CENTER-leaning outlets (>10 chars)
+    // 3. If no center titles, pick the shortest title from ANY outlet (>10 chars)
+    // 4. Fallback: use the first article's title
+    {
+      const clusterArtcls = clusterArticles
+      // Step 1: BBC
+      const bbcArticle = clusterArtcls.find((a) => a.sourceId === 'bbc')
+      if (bbcArticle && bbcArticle.title.length > 10) {
+        bestTitle = bbcArticle.title
+        bestSummary = bbcArticle.description
+      } else {
+        // Step 2: shortest center title >10 chars
+        const centerTitles = clusterArtcls.filter(
+          (a) => a.leaning === 'center' && a.title.length > 10,
+        )
+        if (centerTitles.length > 0) {
+          const shortest = centerTitles.reduce((a, b) =>
+            a.title.length <= b.title.length ? a : b,
+          )
+          bestTitle = shortest.title
+          bestSummary = shortest.description
+        } else {
+          // Step 3: shortest any title >10 chars
+          const anyTitles = clusterArtcls.filter((a) => a.title.length > 10)
+          if (anyTitles.length > 0) {
+            const shortest = anyTitles.reduce((a, b) =>
+              a.title.length <= b.title.length ? a : b,
+            )
+            bestTitle = shortest.title
+            bestSummary = shortest.description
+          }
+          // Step 4: fallback — bestTitle already set to first article's title
+        }
+      }
     }
 
     const coverage = clusterArticles.length
