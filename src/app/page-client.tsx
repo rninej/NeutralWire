@@ -1375,6 +1375,7 @@ export default function Home() {
                           onOpenDetail={handleOpenDetail}
                           country={country}
                           interests={interests}
+                          engagement={engagement}
                           onSearchClick={() => setShowSearch(true)}
                         />
                       ) : (
@@ -1624,6 +1625,7 @@ function SectionedFeed({
   onOpenDetail,
   country,
   interests,
+  engagement,
   onSearchClick,
 }: {
   topics: TopicArticle[]
@@ -1631,6 +1633,7 @@ function SectionedFeed({
   onOpenDetail: (topic: TopicArticle) => void
   country?: CountryInfo | null
   interests: string[]
+  engagement: EngagementStats
   onSearchClick: () => void
 }) {
   const allTopics = [...topics, ...olderTopics]
@@ -1698,11 +1701,25 @@ function SectionedFeed({
 
   if (allTopics.length === 0 && loadingCategories) return null
 
-  // ── Top Headlines: first 5 topics from the relevant feed ──
-  // Guarantee the FIRST headline has an image (hero card needs one).
-  let headlines = allTopics.slice(0, 5)
+  // ── Top Headlines: personalized per device ──
+  // For PWA users with interests: pick top 5 topics ranked by personalizationBoost
+  // so different devices see different headlines based on their interests.
+  // For new visitors (no interests): use the natural feed order (coverage-ranked).
+  const hasPersonalization = interests.length > 0 || Object.keys(engagement || {}).length > 0
+  let headlines: TopicArticle[]
+  if (hasPersonalization) {
+    // Score all topics by personalization boost and pick top 5
+    const scored = allTopics
+      .map((t) => ({ topic: t, score: personalizationBoost(t, interests, engagement || {}) }))
+      .sort((a, b) => b.score - a.score)
+    headlines = scored.slice(0, 5).map((s) => s.topic)
+  } else {
+    // New visitor — use natural feed order
+    headlines = allTopics.slice(0, 5)
+  }
+  // Guarantee the FIRST headline has an image (hero card needs one)
   if (headlines.length > 0 && !headlines[0].imageUrl) {
-    const firstWithImage = allTopics.find((t, i) => i >= 1 && t.imageUrl)
+    const firstWithImage = headlines.find((t, i) => i >= 1 && t.imageUrl)
     if (firstWithImage) {
       headlines = [firstWithImage, ...headlines.filter((t) => t.topicId !== firstWithImage.topicId)]
     }
