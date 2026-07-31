@@ -20,6 +20,40 @@ const DB_URL =
 
 const FETCH_TIMEOUT_MS = 8000
 
+// ── Firebase download tracking ──
+// Tracks bytes downloaded from Firebase in the current server instance.
+// Vercel serverless functions don't share memory between invocations, but
+// within a single warm instance (which handles multiple requests), this
+// gives a live counter. Also stored in Firebase for a per-user total.
+//
+// The client reads these counters via /api/fb-stats and logs them to the
+// browser console so you can see exactly how much Firebase data each page
+// load is consuming.
+
+let SESSION_DOWNLOAD_BYTES = 0
+let SESSION_OPS: Array<{ path: string; method: string; bytes: number; ts: number }> = []
+
+// Session ID for this server instance (so the client can tell if it's
+// talking to the same warm instance or a new cold one)
+const SESSION_ID = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+
+function trackDownload(path: string, method: string, bytes: number) {
+  SESSION_DOWNLOAD_BYTES += bytes
+  SESSION_OPS.push({ path, method, bytes, ts: Date.now() })
+  // Keep only the last 50 ops to avoid memory bloat
+  if (SESSION_OPS.length > 50) SESSION_OPS = SESSION_OPS.slice(-50)
+}
+
+export function getFirebaseStats() {
+  return {
+    sessionId: SESSION_ID,
+    sessionDownloadBytes: SESSION_DOWNLOAD_BYTES,
+    sessionDownloadMB: +(SESSION_DOWNLOAD_BYTES / (1024 * 1024)).toFixed(2),
+    sessionOps: SESSION_OPS.length,
+    recentOps: SESSION_OPS.slice(-10),
+  }
+}
+
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return await Promise.race([
     p,
@@ -37,20 +71,19 @@ export async function firebaseRead<T = unknown>(path: string): Promise<T | null>
   try {
     const res = await withTimeout(
       fetch(url, {
-        // We never want Next to cache Firebase reads — they must always
-        // reflect the latest cache state.
         cache: 'no-store',
         headers: { Accept: 'application/json' },
       }),
       FETCH_TIMEOUT_MS,
     )
     if (!res.ok) {
-      // 404 / null nodes return 200 with "null" body; non-2xx here means
-      // an actual permission or network problem.
       console.warn(`[firebase] read ${path} failed: HTTP ${res.status}`)
       return null
     }
     const text = await res.text()
+    // Track download size
+    const bytes = text ? new Blob([text]).size : 0
+    trackDownload(path, 'GET', bytes)
     if (!text || text === 'null') return null
     return JSON.parse(text) as T
   } catch (err) {

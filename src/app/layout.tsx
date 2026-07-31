@@ -171,6 +171,100 @@ export default function RootLayout({
             `,
           }}
         />
+        {/* ── Firebase download tracker ──
+            Polls /api/fb-stats every 5s and logs to the browser console:
+            - Session total (this browser session, accumulated across API calls)
+            - Instance total (this Vercel serverless instance)
+            - Last 5 Firebase reads with paths + sizes
+            This helps identify which API routes are consuming the most
+            Firebase download bandwidth. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                var sessionTotal = 0;
+                var lastSessionId = null;
+                var lastInstanceBytes = 0;
+
+                function formatBytes(bytes) {
+                  if (bytes < 1024) return bytes + ' B';
+                  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+                  return (bytes / 1048576).toFixed(2) + ' MB';
+                }
+
+                function poll() {
+                  fetch('/api/fb-stats', { cache: 'no-store' })
+                    .then(function(res) { return res.ok ? res.json() : null; })
+                    .then(function(data) {
+                      if (!data) return;
+
+                      // If the server instance changed (cold start), reset
+                      if (data.sessionId !== lastSessionId) {
+                        if (lastSessionId !== null) {
+                          // Log the final total of the previous instance
+                          console.log(
+                            '%c[Firebase] Previous instance total: ' + formatBytes(lastInstanceBytes),
+                            'color: #ff6b6b; font-weight: bold;'
+                          );
+                        }
+                        lastSessionId = data.sessionId;
+                        lastInstanceBytes = data.sessionDownloadBytes;
+                        sessionTotal += data.sessionDownloadBytes;
+                      } else {
+                        // Same instance — add the delta
+                        var delta = data.sessionDownloadBytes - lastInstanceBytes;
+                        if (delta > 0) {
+                          sessionTotal += delta;
+                          lastInstanceBytes = data.sessionDownloadBytes;
+                        }
+                      }
+
+                      // Log the current state
+                      console.log(
+                        '%c[Firebase] Session: ' + formatBytes(sessionTotal) +
+                        ' | Instance: ' + formatBytes(data.sessionDownloadBytes) +
+                        ' (' + data.sessionOps + ' ops)',
+                        'color: #4ecdc4; font-weight: bold;'
+                      );
+
+                      // Log recent ops if there are new ones
+                      if (data.recentOps && data.recentOps.length > 0) {
+                        var recent = data.recentOps.slice(-5);
+                        var newOps = recent.filter(function(op) {
+                          return op.ts > (window.__lastFbLogTs || 0);
+                        });
+                        if (newOps.length > 0) {
+                          console.groupCollapsed(
+                            '%c[Firebase] Last ' + newOps.length + ' reads:',
+                            'color: #95e1d3;'
+                          );
+                          newOps.forEach(function(op) {
+                            console.log(
+                              op.method + ' ' + op.path + ' → ' + formatBytes(op.bytes)
+                            );
+                          });
+                          console.groupEnd();
+                          window.__lastFbLogTs = newOps[newOps.length - 1].ts;
+                        }
+                      }
+                    })
+                    .catch(function() {});
+                }
+
+                // Initial log
+                console.log(
+                  '%c[Firebase Tracker] Monitoring Firebase downloads. Polling every 5s.',
+                  'color: #c44569; font-weight: bold; font-size: 14px;'
+                );
+
+                // Poll every 5 seconds
+                setInterval(poll, 5000);
+                // Also poll immediately
+                setTimeout(poll, 2000);
+              })();
+            `,
+          }}
+        />
         {/* Vercel Analytics — page view tracking */}
         <Analytics />
       </body>
