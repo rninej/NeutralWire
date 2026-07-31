@@ -49,76 +49,92 @@ export async function GET(req: NextRequest) {
     } satisfies SearchResponse)
   }
 
-  // Read the entire newsCache/ root in a single request. Firebase RTDB
-  // returns the whole subtree as one JSON object — one round-trip.
-  // For 7 categories × 40 topics × ~6 articles ≈ 1700 articles, this is
-  // ~120KB which is fast enough on Firebase free tier.
-  const all = await firebaseRead<Record<string, CategoryCachePayload>>(ROOT)
-  if (!all) {
-    return NextResponse.json({
-      query: q,
-      hits: [],
-      total: 0,
-      categoriesSearched: 0,
-      ms: Date.now() - t0,
-    } satisfies SearchResponse)
-  }
+  // ── EMERGENCY: Read each category SEPARATELY instead of the entire newsCache root ──
+  // Reading the entire newsCache node downloads ALL categories at once —
+  // with 60 topics × 10+ categories × full article arrays, this was 17MB!
+  // Now we read each category individually and only search the most common ones.
+  // This reduces the download from ~17MB to ~2MB (10 categories × ~200KB each).
+  const searchCategories = [
+    'relevant__GB', 'relevant__US', 'relevant__INT',
+    'mycountry__GB', 'top', 'world', 'politics',
+    'business', 'technology', 'science', 'health', 'sports',
+  ]
 
   const hits: SearchHit[] = []
   const seenArticleIds = new Set<string>()
   let categoriesSearched = 0
 
-  for (const [catKey, payload] of Object.entries(all)) {
+  for (const catKey of searchCategories) {
+    let payload: CategoryCachePayload | null
+    try {
+      payload = await firebaseRead<CategoryCachePayload>(`newsCache/${catKey}`)
+    } catch {
+      continue
+    }
     if (!payload || !Array.isArray(payload.topics)) continue
+
     categoriesSearched++
 
     for (const topic of payload.topics) {
-      // Check topic title first — if it matches, include all the topic's
-      // articles as hits (since they're all about the same story).
+      if (!topic) continue
+      // Check topic title + summary
       const titleMatch = topic.title.toLowerCase().includes(q)
-      const summaryMatch = topic.summary?.toLowerCase().includes(q)
-
+      const summaryMatch = (topic.summary || '').toLowerCase().includes(q)
       if (titleMatch || summaryMatch) {
-        for (const article of topic.articles) {
-          if (seenArticleIds.has(article.id)) continue
-          seenArticleIds.add(article.id)
-          hits.push({
-            topic,
-            article,
-            matchedField: titleMatch ? 'title' : 'summary',
-            snippet: titleMatch
-              ? topic.title
-              : makeSnippet(topic.summary || article.description, q),
-          })
-          if (hits.length >= maxHits) break
-        }
-      } else {
-        // Search through individual articles in the topic.
-        for (const article of topic.articles) {
-          if (seenArticleIds.has(article.id)) continue
-          const inTitle = article.title.toLowerCase().includes(q)
-          const inDesc = article.description?.toLowerCase().includes(q)
-          const inSource = article.sourceName.toLowerCase().includes(q)
+        hits.push({
+          topic: { ...topic, articles: [] },
+          article: {
+            id: topic.topicId,
+            title: topic.title,
+            link: '',
+            description: topic.summary || '',
+            pubDate: null,
+            iso: topic.latestSeen || 0,
+            imageUrl: topic.imageUrl,
+            sourceId: '',
+            sourceName: '',
+            sourceHomepage: '',
+            leaning: 'center',
+            country: '',
+            category: catKey,
+          },
+          matchedField: titleMatch ? 'title' : 'summary',
+          snippet: titleMatch
+            ? topic.title
+            : (topic.summary || '').slice(0, 200),
+        })
+        if (hits.length >= maxHits) break
+      }
 
-          if (inTitle || inDesc || inSource) {
+      // Also search articles within the topic
+      if (topic.articles) {
+        for (const article of topic.articles) {
+          if (seenArticleIds.has(article.id)) continue
+          const artTitleMatch = article.title.toLowerCase().includes(q)
+          const artDescMatch = (article.description || '').toLowerCase().includes(q)
+          const sourceMatch = (article.sourceName || '').toLowerCase().includes(q)
+          if (artTitleMatch || artDescMatch || sourceMatch) {
             seenArticleIds.add(article.id)
             hits.push({
-              topic,
+              topic: { ...topic, articles: [] },
               article,
-              matchedField: inTitle ? 'title' : inDesc ? 'summary' : 'source',
-              snippet: inTitle
+              matchedField: artTitleMatch ? 'title' : sourceMatch ? 'source' : 'summary',
+              snippet: artTitleMatch
                 ? article.title
-                : makeSnippet(article.description || topic.summary, q),
+                : sourceMatch
+                  ? article.sourceName
+                  : (article.description || '').slice(0, 200),
             })
             if (hits.length >= maxHits) break
           }
         }
       }
-
       if (hits.length >= maxHits) break
     }
     if (hits.length >= maxHits) break
   }
+
+  // (old per-category loop removed — replaced by the per-category reads above)
 
   // Sort: title matches first, then by recency.
   hits.sort((a, b) => {
