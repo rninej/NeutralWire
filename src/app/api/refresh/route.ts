@@ -101,33 +101,31 @@ export async function GET(req: NextRequest) {
     // Every topic from the refresh is archived to Firebase so that when a
     // user opens an old shared link (/?topic=xxx), /api/topic/[id] can
     // always find it — even weeks later when the live cache has rotated.
-    // We only archive topics that aren't already in the archive (one read
-    // to check, then batch patch the new ones).
+    //
+    // EMERGENCY FIX: Previously read the ENTIRE archive node to check which
+    // topicIds already exist. With hundreds of archived topics (each with
+    // full article arrays), this was downloading 17MB+ per refresh.
+    // Now we just write each topic directly (PATCH is idempotent — writing
+    // an existing topicId just overwrites it with the same data). No read
+    // needed at all.
     after(async () => {
       try {
-        const existingArchive = await firebaseRead<Record<string, unknown>>('archive')
-        const existingIds = new Set(existingArchive ? Object.keys(existingArchive) : [])
-        const toArchive = fresh.topics.filter((t) => !existingIds.has(t.topicId))
+        const toArchive = fresh.topics
 
-        if (toArchive.length === 0) {
-          console.log(`[refresh] All ${fresh.topics.length} topics already archived`)
-        } else {
-          console.log(`[refresh] Archiving ${toArchive.length} new topics...`)
-          // Batch write — one PATCH per topic (parallel, max 8 at a time)
-          const batchSize = 8
-          for (let i = 0; i < toArchive.length; i += batchSize) {
-            const batch = toArchive.slice(i, i + batchSize)
-            await Promise.allSettled(
-              batch.map((topic) =>
-                firebaseWrite(`archive/${topic.topicId}`, {
-                  ...topic,
-                  archivedAt: Date.now(),
-                }),
-              ),
-            )
-          }
-          console.log(`[refresh] Archived ${toArchive.length} new topics`)
+        console.log(`[refresh] Archiving ${toArchive.length} topics...`)
+        const batchSize = 8
+        for (let i = 0; i < toArchive.length; i += batchSize) {
+          const batch = toArchive.slice(i, i + batchSize)
+          await Promise.allSettled(
+            batch.map((topic) =>
+              firebaseWrite(`archive/${topic.topicId}`, {
+                ...topic,
+                archivedAt: Date.now(),
+              }),
+            ),
+          )
         }
+        console.log(`[refresh] Archived ${toArchive.length} topics`)
       } catch (err) {
         console.warn('[refresh] Background archiving failed:', err)
       }
@@ -146,15 +144,16 @@ export async function GET(req: NextRequest) {
     after(async () => {
       const origin = req.nextUrl.origin
       try {
-        // Check which topics already have summaries (one Firebase read).
-        const summariesRoot = await firebaseRead<Record<string, unknown>>('summaries')
-        const existingSummaries = new Set(
-          summariesRoot ? Object.keys(summariesRoot) : [],
-        )
-
-        const toGenerate: TopicArticle[] = topTopics.filter(
-          (t) => !existingSummaries.has(t.topicId),
-        )
+        // EMERGENCY FIX: Previously read the ENTIRE summaries node to check
+        // which topicIds already have summaries. Now we check each topic
+        // individually (tiny reads: summaries/<topicId> = ~1KB each).
+        // This avoids downloading the entire summaries root (which could be
+        // hundreds of KB with all the AI-generated text).
+        const toGenerate: TopicArticle[] = []
+        for (const topic of topTopics) {
+          const existing = await firebaseRead<unknown>(`summaries/${topic.topicId}`)
+          if (!existing) toGenerate.push(topic)
+        }
 
         if (toGenerate.length === 0) {
           console.log(`[refresh] All ${topTopics.length} top topics already have summaries`)
