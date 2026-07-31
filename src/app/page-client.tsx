@@ -354,6 +354,7 @@ export default function Home() {
       const params = new URLSearchParams({
         category,
         limit: '24',
+          slim: '1',
         minCoverage: String(minCoverage),
         offset: String(offset),
       })
@@ -1006,6 +1007,7 @@ export default function Home() {
         const params = new URLSearchParams({
           category: cat,
           limit: '24',
+          slim: '1',
           minCoverage: String(mc),
         })
         if (country && isVirtual) {
@@ -1074,6 +1076,7 @@ export default function Home() {
               category: 'mycountry',
               limit: '5',
               minCoverage: '1',
+              slim: '1',
               country: country.code,
             })
             const mcRes = await fetch(`/api/news?${mcParams.toString()}`, { cache: 'no-store' })
@@ -1117,6 +1120,7 @@ export default function Home() {
         const params = new URLSearchParams({
           category: cat,
           limit: '24',
+          slim: '1',
           minCoverage: String(mc),
         })
         if (country && (cat === 'relevant' || cat === 'mycountry')) {
@@ -1148,6 +1152,7 @@ export default function Home() {
           const params = new URLSearchParams({
             category,
             limit: '24',
+          slim: '1',
             minCoverage: String(minCoverage),
           })
           if (country && (category === 'relevant' || category === 'mycountry')) {
@@ -1648,15 +1653,13 @@ function SectionedFeed({
   // "Politics" shows actual politics, etc.
   React.useEffect(() => {
     let cancelled = false
-    // ── REDUCED Firebase reads: only fetch 4 categories (was 6) ──
-    // Each fetch = 1 Firebase read. 4 categories × 1 read = 4 reads per
-    // Relevant tab load (was 6+). Combined with the main feed read, that's
-    // 5 total reads per page load.
+    // ── MINIMAL Firebase reads: only fetch 2 categories (was 4-6) ──
+    // Each fetch = 1 Firebase read. 2 categories + mycountry = 3 reads.
+    // Combined with the main feed read, that's 4 total reads per page load.
+    // With slim=1, each read is ~20KB (was ~200KB with full articles).
     const categoriesToFetch = [
       { cat: 'world', label: 'world' },
       { cat: 'politics', label: 'politics' },
-      { cat: 'business', label: 'business' },
-      { cat: 'technology', label: 'technology' },
     ]
 
     // Also fetch My Country stories for the "My Country" section in Relevant
@@ -1673,6 +1676,7 @@ function SectionedFeed({
               category: cat,
               limit: '3',
               minCoverage: '1',
+              slim: '1',
             })
             const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
             if (!res.ok) return { label, topics: [] }

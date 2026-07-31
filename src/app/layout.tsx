@@ -253,14 +253,15 @@ export default function RootLayout({
 
                 // Initial log
                 console.log(
-                  '%c[Firebase Tracker] Monitoring Firebase downloads. Polling every 5s.',
+                  '%c[Firebase Tracker] Monitoring Firebase downloads. Polling every 30s.',
                   'color: #c44569; font-weight: bold; font-size: 14px;'
                 );
 
-                // Poll every 5 seconds
-                setInterval(poll, 5000);
+                // Poll every 30 seconds (was 5s — was causing excessive
+                // serverless invocations that each count as a Firebase read)
+                setInterval(poll, 30000);
                 // Also poll immediately
-                setTimeout(poll, 2000);
+                setTimeout(poll, 3000);
               })();
             `,
           }}
