@@ -1269,11 +1269,12 @@ export default function Home() {
               />
             ))}
 
-            {/* Search button — opens the search bar */}
+            {/* Search button — hidden on mobile (moved to section headers).
+                Visible on desktop (lg+) next to Sports. */}
             <button
               type="button"
               onClick={() => setShowSearch(true)}
-              className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-[11px] font-medium sm:text-xs"
+              className="hidden lg:inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-xs font-medium"
               aria-label="Search"
               title="Search news"
             >
@@ -1374,16 +1375,15 @@ export default function Home() {
                           onOpenDetail={handleOpenDetail}
                           country={country}
                           interests={interests}
+                          onSearchClick={() => setShowSearch(true)}
                         />
                       ) : (
-                        /* Other tabs: same 1-large + rest-mini LAYOUT but with their own
-                           topics only (no sector splitting — a Politics tab shows politics,
-                           a World tab shows world, etc.) */
                         <MobileTopicLayout
                           topics={filteredTopics}
                           olderTopics={olderTopics}
                           onOpenDetail={handleOpenDetail}
                           label={CATEGORY_LABELS[category] || category}
+                          onSearchClick={() => setShowSearch(true)}
                         />
                       )}
                     </div>
@@ -1624,12 +1624,14 @@ function SectionedFeed({
   onOpenDetail,
   country,
   interests,
+  onSearchClick,
 }: {
   topics: TopicArticle[]
   olderTopics: TopicArticle[]
   onOpenDetail: (topic: TopicArticle) => void
   country?: CountryInfo | null
   interests: string[]
+  onSearchClick: () => void
 }) {
   const allTopics = [...topics, ...olderTopics]
   const [categoryTopics, setCategoryTopics] = React.useState<Record<string, TopicArticle[]>>({})
@@ -1792,14 +1794,27 @@ function SectionedFeed({
 
         return (
           <section key={key}>
-            <h2 className="mb-3 flex items-center gap-2 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
-              {label}
-              {isInterested && (
-                <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                  Following
-                </span>
-              )}
-            </h2>
+            <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
+              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight">
+                {label}
+                {isInterested && (
+                  <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                    Following
+                  </span>
+                )}
+              </h2>
+              {/* Search button on the right of each section header (mobile only) */}
+              <button
+                type="button"
+                onClick={onSearchClick}
+                className="lg:hidden inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-[11px] font-medium"
+                aria-label="Search"
+                title="Search news"
+              >
+                <Search className="h-3.5 w-3.5" />
+                <span>Search</span>
+              </button>
+            </div>
             {/* ── Same format for ALL sections: 1 large (hero) + rest mini ── */}
             {/* Mobile: hero full width on top, mini cards in 2x2 square grid below.
                 Desktop: 3-column grid — hero spans 1 col + 3 rows (left),
@@ -1844,11 +1859,13 @@ function MobileTopicLayout({
   olderTopics,
   onOpenDetail,
   label,
+  onSearchClick,
 }: {
   topics: TopicArticle[]
   olderTopics: TopicArticle[]
   onOpenDetail: (topic: TopicArticle) => void
   label: string
+  onSearchClick: () => void
 }) {
   const allTopics = [...topics, ...olderTopics]
   if (allTopics.length === 0) return null
@@ -1874,9 +1891,22 @@ function MobileTopicLayout({
       {chunks.map((chunk, chunkIdx) => (
         <section key={chunkIdx}>
           {chunkIdx === 0 && (
-            <h2 className="mb-3 text-lg font-bold tracking-tight border-b-2 border-foreground/10 pb-2">
-              {label}
-            </h2>
+            <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
+              <h2 className="text-lg font-bold tracking-tight">
+                {label}
+              </h2>
+              {/* Search button on the right of the section header (mobile only) */}
+              <button
+                type="button"
+                onClick={onSearchClick}
+                className="lg:hidden inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-[11px] font-medium"
+                aria-label="Search"
+                title="Search news"
+              >
+                <Search className="h-3.5 w-3.5" />
+                <span>Search</span>
+              </button>
+            </div>
           )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {chunk[0] && (
