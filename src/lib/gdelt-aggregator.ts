@@ -853,14 +853,49 @@ export async function aggregateMyCountryViaGdelt(
       cache: 'no-store',
     })
     if (!res.ok) {
-      console.warn(`[gdelt] API returned ${res.status} for ${cc}`)
-      return { topics: [], articleCount: 0, sourceCount: 0 }
+      console.warn(`[gdelt] API returned ${res.status} for ${cc} — falling back to RSS aggregator`)
+      // GDELT failed (429 rate limit, 500, etc.) — fall back to the RSS
+      // aggregator which fetches from curated UK sources (BBC, Guardian, etc.)
+      // This ensures My Country always has news, even when GDELT is unavailable.
+      try {
+        const { aggregateCategory } = await import('@/lib/news-aggregator')
+        const { sourcesForCountry } = await import('@/lib/country-detect')
+        const countrySourceIds = sourcesForCountry(countryCode)
+        const rssResult = await aggregateCategory('mycountry', {
+          limit: 40,
+          minCoverage: 1,
+          countrySourceIds,
+          countryCode: countryCode,
+        })
+        console.log(`[gdelt] RSS fallback for ${cc}: ${rssResult.topics.length} topics from ${rssResult.sourceCount} sources`)
+        // Still apply the AI country filter to the RSS results
+        return rssResult
+      } catch (fallbackErr) {
+        console.warn(`[gdelt] RSS fallback also failed for ${cc}:`, fallbackErr)
+        return { topics: [], articleCount: 0, sourceCount: 0 }
+      }
     }
     const data = (await res.json()) as { articles?: GdeltArticle[] }
     raw = data.articles || []
   } catch (err) {
-    console.warn(`[gdelt] fetch failed for ${cc}:`, err)
-    return { topics: [], articleCount: 0, sourceCount: 0 }
+    console.warn(`[gdelt] fetch failed for ${cc} — falling back to RSS aggregator:`, err)
+    // Network error / timeout — also try RSS fallback
+    try {
+      const { aggregateCategory } = await import('@/lib/news-aggregator')
+      const { sourcesForCountry } = await import('@/lib/country-detect')
+      const countrySourceIds = sourcesForCountry(countryCode)
+      const rssResult = await aggregateCategory('mycountry', {
+        limit: 40,
+        minCoverage: 1,
+        countrySourceIds,
+        countryCode: countryCode,
+      })
+      console.log(`[gdelt] RSS fallback (from catch) for ${cc}: ${rssResult.topics.length} topics`)
+      return rssResult
+    } catch (fallbackErr) {
+      console.warn(`[gdelt] RSS fallback (from catch) also failed for ${cc}:`, fallbackErr)
+      return { topics: [], articleCount: 0, sourceCount: 0 }
+    }
   }
 
   if (raw.length === 0) {
