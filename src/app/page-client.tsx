@@ -1705,21 +1705,81 @@ function SectionedFeed({
 
   if (allTopics.length === 0 && loadingCategories) return null
 
-  // ── Top Headlines: personalized per device ──
-  // For PWA users with interests: pick top 5 topics ranked by personalizationBoost
-  // so different devices see different headlines based on their interests.
-  // For new visitors (no interests): use the natural feed order (coverage-ranked).
+  // ── Top Headlines: heavily personalized ──
+  // Prioritizes: user interests > my country > world news > demotes US news
+  // For PWA users with interests: pick top 5 topics ranked by a STRONG
+  // personalization score that demotes US domestic politics.
+  // For new visitors (no interests): use the natural feed order but still
+  // demote US politics so it doesn't dominate.
   const hasPersonalization = interests.length > 0 || Object.keys(engagement || {}).length > 0
+
+  // US politics keywords — demoted in Top Headlines
+  const usPoliticsKw = [
+    'trump says', 'trump claims', 'trump attacks', 'trump threatens',
+    'trump praises', 'trump blasts', 'trump lashes', 'trump insists',
+    'trump calls', 'trump urges', 'trump defends', 'trump mocks',
+    'trump vows', 'trump promises', 'trump tweets', 'trump posts',
+    'trump campaign', 'trump re-election', 'trump 2028',
+    'gop rep', 'gop senator', 'senator says', 'congressman says',
+    'us congress', 'us senate', 'us house', 'us supreme court', 'scotus',
+    'us poll', 'us approval', 'us election', 'us primary',
+    'biden says', 'biden claims', 'biden signs',
+    'rand paul', 'fauci', 'senate hearing', 'house hearing',
+  ]
+
+  function headlineScore(topic: TopicArticle): number {
+    let score = personalizationBoost(topic, interests, engagement || {})
+
+    // Demote US domestic politics heavily
+    const titleLower = topic.title.toLowerCase()
+    for (const kw of usPoliticsKw) {
+      if (titleLower.includes(kw)) {
+        score -= 50
+        break
+      }
+    }
+
+    // Boost world news (international affairs that affect everyone)
+    const worldKw = ['ukraine', 'russia', 'putin', 'china', 'israel', 'gaza',
+      'hamas', 'iran', 'middle east', 'nato', 'united nations', 'europe',
+      'war', 'ceasefire', 'nuclear', 'un security', 'climate summit',
+      'cop ', 'g20', 'g7', 'un general assembly']
+    for (const kw of worldKw) {
+      if (titleLower.includes(kw)) {
+        score += 15
+        break
+      }
+    }
+
+    // Boost UK-specific news (if user is in UK)
+    if (country?.code === 'GB' || country?.code === 'UK') {
+      const ukKw = ['uk ', 'britain', 'british', 'england', 'london', 'scotland',
+        'wales', 'parliament', 'westminster', 'downing street', 'nhs',
+        'starmer', 'burnham', 'labour', 'conservative', 'tories',
+        'council tax', 'met police', 'heathrow', 'gatwick', 'bbc']
+      for (const kw of ukKw) {
+        if (titleLower.includes(kw)) {
+          score += 20
+          break
+        }
+      }
+    }
+
+    return score
+  }
+
   let headlines: TopicArticle[]
   if (hasPersonalization) {
-    // Score all topics by personalization boost and pick top 5
     const scored = allTopics
-      .map((t) => ({ topic: t, score: personalizationBoost(t, interests, engagement || {}) }))
+      .map((t) => ({ topic: t, score: headlineScore(t) }))
       .sort((a, b) => b.score - a.score)
     headlines = scored.slice(0, 5).map((s) => s.topic)
   } else {
-    // New visitor — use natural feed order
-    headlines = allTopics.slice(0, 5)
+    // New visitor — still demote US politics, boost world + UK
+    const scored = allTopics
+      .map((t) => ({ topic: t, score: headlineScore(t) }))
+      .sort((a, b) => b.score - a.score)
+    headlines = scored.slice(0, 5).map((s) => s.topic)
   }
   // Guarantee the FIRST headline has an image (hero card needs one)
   if (headlines.length > 0 && !headlines[0].imageUrl) {
