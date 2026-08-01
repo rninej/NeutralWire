@@ -359,48 +359,101 @@ const COUNTRY_KEYWORDS_GDELT: Record<string, string[]> = {
   ],
 }
 
+/**
+ * RELAXED country filter — the AI fallback.
+ *
+ * Strategy: KEEP everything UNLESS it's CLEARLY about another country.
+ * This prevents accidentally removing UK local news that doesn't mention
+ * "UK" in the title (e.g. "Leicester church fire", "Heathrow fares").
+ *
+ * A story is removed ONLY if it matches a STRONG foreign indicator:
+ *   1. A foreign country name/capital/adjective in the title
+ *   2. AND no UK keyword in the title (if it mentions both UK and a foreign
+ *      country, it's likely a UK angle on an international story — keep it)
+ *
+ * This is deliberately conservative: better to keep a few non-UK stories
+ * than to accidentally remove UK news.
+ */
 function isAboutCountry(title: string, countryCode: string): boolean {
   const cc = countryCode.toUpperCase()
   const keywords = COUNTRY_KEYWORDS_GDELT[cc] || COUNTRY_KEYWORDS_GDELT[cc === 'UK' ? 'GB' : '']
   if (!keywords) return true // unknown country — don't filter
 
   const titleLower = ` ${title.toLowerCase()} `
+
+  // Step 1: Check if the title contains a UK keyword
+  let hasCountryKeyword = false
   for (const kw of keywords) {
-    // Word-boundary match for short keywords (uk, mp, us)
     if (kw.length <= 3) {
       const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const re = new RegExp(`(?:^|[^a-z])${escaped}(?:[^a-z]|$)`, 'i')
-      if (re.test(titleLower)) return true
+      if (re.test(titleLower)) { hasCountryKeyword = true; break }
     } else {
-      if (titleLower.includes(kw)) return true
+      if (titleLower.includes(kw)) { hasCountryKeyword = true; break }
     }
   }
-  // ── RELAXED: If no UK keyword found, still keep the story IF it's from a
-  // UK domain (GDELT already filtered by sourcecountry:United Kingdom, so the
-  // outlet IS British). Many UK local stories (e.g. "Leicester church fire",
-  // "Boy critical after Mersea Beach incident") don't mention "UK" or
-  // "Britain" in the title but are clearly UK news.
-  // We only filter out stories that are CLEARLY about another country.
-  const foreignCountryKw = [
-    'japan', 'japanese', 'tokyo', 'china', 'chinese', 'beijing',
-    'russia', 'russian', 'moscow', 'iran', 'iranian', 'tehran',
-    'north korea', 'south korea', 'india', 'indian', 'mumbai', 'delhi',
-    'australia', 'australian', 'canberra', 'sydney', 'melbourne',
-    'canada', 'canadian', 'ottawa', 'toronto',
+  // If it has a UK keyword → definitely keep (even if it also mentions
+  // a foreign country — e.g. "UK responds to Japan earthquake" is UK news)
+  if (hasCountryKeyword) return true
+
+  // Step 2: No UK keyword found. Check if it's CLEARLY about another country.
+  // Comprehensive list of foreign country indicators (name, capital, adjective, demonym)
+  const foreignIndicators = [
+    // Asia
+    'japan', 'japanese', 'tokyo', 'china', 'chinese', 'beijing', 'shanghai',
+    'india', 'indian', 'mumbai', 'delhi', 'new delhi',
+    'south korea', 'korean', 'seoul', 'north korea',
+    'thailand', 'thai', 'bangkok', 'vietnam', 'vietnamese', 'hanoi',
+    'indonesia', 'indonesian', 'jakarta', 'philippines', 'filipino', 'manila',
+    'pakistan', 'pakistani', 'islamabad', 'karachi', 'lahore',
+    'bangladesh', 'bangladeshi', 'dhaka', 'myanmar', 'burma',
+    'taiwan', 'taiwanese', 'hong kong', 'singapore', 'malaysia', 'malay',
+    // Middle East
+    'iran', 'iranian', 'tehran', 'iraq', 'iraqi', 'baghdad',
+    'israel', 'israeli', 'palestinian', 'gaza', 'west bank',
+    'saudi arabia', 'saudi', 'uae', 'emirates', 'dubai', 'abu dhabi',
+    'turkey', 'turkish', 'istanbul', 'ankara', 'syria', 'syrian', 'damascus',
+    'lebanon', 'lebanese', 'beirut', 'jordan', 'jordanian', 'amman',
+    'yemen', 'yemeni', 'qatar', 'doha', 'kuwait', 'bahrain', 'oman',
+    'egypt', 'egyptian', 'cairo',
+    // Europe (non-UK)
     'germany', 'german', 'berlin', 'france', 'french', 'paris',
-    'spain', 'spanish', 'madrid', 'italy', 'italian', 'rome',
+    'spain', 'spanish', 'madrid', 'italy', 'italian', 'rome', 'milan',
+    'portugal', 'portuguese', 'lisbon', 'netherlands', 'dutch', 'amsterdam',
+    'belgium', 'belgian', 'brussels', 'switzerland', 'swiss', 'bern',
+    'austria', 'austrian', 'vienna', 'sweden', 'swedish', 'stockholm',
+    'norway', 'norwegian', 'oslo', 'denmark', 'danish', 'copenhagen',
+    'finland', 'finnish', 'helsinki', 'poland', 'polish', 'warsaw',
+    'greece', 'greek', 'athens', 'croatia', 'serbia', 'serbian',
+    'ukraine', 'ukrainian', 'kyiv', 'kiev', 'russia', 'russian', 'moscow',
+    'belarus', 'czech', 'romania', 'bulgaria', 'hungary', 'hungarian',
+    'ireland', 'irish', 'dublin',
+    // Americas (non-UK)
+    'us ', 'u.s.', 'united states', 'america', 'american', 'washington',
+    'white house', 'capitol', 'congress', 'senate', 'pentagon',
+    'trump', 'biden', 'harris', 'obama', 'us congress', 'us senate',
+    'us supreme court', 'scotus', 'fbi', 'cia',
+    'canada', 'canadian', 'ottawa', 'toronto',
     'brazil', 'brazilian', 'argentina', 'argentine', 'mexico', 'mexican',
-    'saudi arabia', 'uae', 'dubai', 'turkey', 'turkish', 'istanbul',
-    'israel', 'israeli', 'palestinian', 'gaza', 'lebanon', 'lebanese',
-    'egypt', 'egyptian', 'nigeria', 'nigerian', 'kenya', 'kenyan',
-    'south africa', 'thailand', 'thai', 'vietnam', 'vietnamese',
-    'indonesia', 'indonesian', 'pakistan', 'pakistani',
+    'chile', 'chilean', 'colombia', 'colombian', 'peru', 'venezuela',
+    'cuba', 'cuban', 'jamaica', 'haiti',
+    // Africa
+    'nigeria', 'nigerian', 'kenya', 'kenyan', 'ethiopia', 'sudan',
+    'somalia', 'somali', 'zimbabwe', 'ghana', 'morocco', 'moroccan',
+    'south africa', 'libya', 'tunisia', 'algeria',
+    // Oceania
+    'australia', 'australian', 'canberra', 'sydney', 'melbourne',
+    'new zealand', 'wellington',
   ]
-  for (const kw of foreignCountryKw) {
+
+  for (const kw of foreignIndicators) {
     if (titleLower.includes(kw)) return false // clearly about another country
   }
-  // No UK keyword AND no foreign country keyword → keep it (it's from a UK
-  // outlet and not clearly about another country, so it's likely UK news)
+
+  // Step 3: No UK keyword AND no foreign indicator → KEEP
+  // It's from a UK outlet and doesn't clearly mention another country.
+  // This catches UK local news like "Leicester church fire", "Heathrow fares",
+  // "Boy critical after Mersea Beach incident" etc.
   return true
 }
 
