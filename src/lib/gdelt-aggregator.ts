@@ -837,11 +837,9 @@ export async function aggregateMyCountryViaGdelt(
     if (isSportsTitle(title)) continue
     // Skip non-news
     if (isNonNews(title)) continue
-    // Skip international stories that aren't about the country itself.
-    // GDELT's sourcecountry filter returns articles from UK OUTLETS, but those
-    // outlets also cover international news (Japan earthquake, US elections,
-    // etc.). We only want stories that are ABOUT the UK.
-    if (!isAboutCountry(title, cc)) continue
+    // NOTE: Country relevance filtering is now done by the AI filter below
+    // (more accurate than keyword matching). The old isAboutCountry() filter
+    // was too strict (rejected UK local stories that don't mention "UK").
 
     const domain = a.domain || new URL(a.url).hostname
     const iso = parseGdeltDate(a.seendate)
@@ -862,6 +860,88 @@ export async function aggregateMyCountryViaGdelt(
       country: cc,
       category: 'mycountry',
     })
+  }
+
+  // ── AI country-relevance filter ──
+  // Send all article titles to the AI and ask it to return ONLY the ones
+  // that are actually about the visitor's country (not international news
+  // that a UK outlet happened to cover). This is much more accurate than
+  // keyword matching — the AI understands context (e.g. "Heathrow fares"
+  // is UK news even though it doesn't say "UK").
+  //
+  // Fallback: if the AI fails, use the relaxed isAboutCountry() filter
+  // (keeps stories unless they clearly mention a foreign country).
+  if (articles.length > 0) {
+    const countryDisplay = COUNTRY_DISPLAY[cc] || COUNTRY_TO_GDELT[cc] || cc
+    const titleList = articles
+      .map((a, i) => `${i + 1}. ${a.title}`)
+      .join('\n')
+
+    const aiSystemPrompt = `You are a news editor for a ${countryDisplay} news app. You are given a list of news headlines from ${countryDisplay} news outlets. Your job is to identify which stories are ACTUALLY ABOUT ${countryDisplay} (or directly affect ${countryDisplay} people), and which are international stories that ${countryDisplay} outlets happened to cover.
+
+Rules for KEEPING a story:
+- The story is about events happening IN ${countryDisplay}
+- The story is about ${countryDisplay} government, politics, or public services
+- The story directly affects ${countryDisplay} people (e.g. ${countryDisplay} citizens abroad, ${countryDisplay} companies, ${countryDisplay} laws)
+- The story is about ${countryDisplay} local news (cities, towns, incidents)
+
+Rules for REMOVING a story:
+- The story is about another country's domestic affairs (US politics, Japan earthquake, etc.)
+- The story is about international events with no ${countryDisplay} angle
+- The story is about a foreign country's elections, laws, or internal politics
+
+Respond with ONLY the numbers of the stories to KEEP, comma-separated. Example: 1,3,5,7,10
+No explanation, no other text.`
+
+    const aiUserPrompt = `Country: ${countryDisplay}
+News headlines from ${countryDisplay} outlets:
+
+${titleList}
+
+Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the numbers, comma-separated.`
+
+    try {
+      console.log(`[gdelt-ai-filter] ${cc}: Sending ${articles.length} titles to AI for country filtering...`)
+      const aiResponse = await callAI({ systemPrompt: aiSystemPrompt, userPrompt: aiUserPrompt, maxTokens: 200 })
+
+      if (aiResponse) {
+        // Parse the comma-separated list of numbers
+        const keepNumbers = aiResponse
+          .replace(/[^0-9,\s]/g, ' ')
+          .split(/[,\s]+/)
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+          .map((s) => parseInt(s, 10))
+          .filter((n) => !isNaN(n) && n >= 1 && n <= articles.length)
+
+        if (keepNumbers.length > 0) {
+          const keepSet = new Set(keepNumbers)
+          const filtered = articles.filter((_, i) => keepSet.has(i + 1))
+          console.log(`[gdelt-ai-filter] ${cc}: AI kept ${filtered.length}/${articles.length} stories (removed ${articles.length - filtered.length} non-${cc} stories)`)
+          articles.length = 0
+          articles.push(...filtered)
+        } else {
+          console.warn(`[gdelt-ai-filter] ${cc}: AI returned no valid numbers, using keyword fallback`)
+          // Fallback: relaxed keyword filter
+          const filtered = articles.filter((a) => isAboutCountry(a.title, cc))
+          console.log(`[gdelt-ai-filter] ${cc}: Keyword fallback kept ${filtered.length}/${articles.length} stories`)
+          articles.length = 0
+          articles.push(...filtered)
+        }
+      } else {
+        console.warn(`[gdelt-ai-filter] ${cc}: AI returned null, using keyword fallback`)
+        const filtered = articles.filter((a) => isAboutCountry(a.title, cc))
+        console.log(`[gdelt-ai-filter] ${cc}: Keyword fallback kept ${filtered.length}/${articles.length} stories`)
+        articles.length = 0
+        articles.push(...filtered)
+      }
+    } catch (err) {
+      console.warn(`[gdelt-ai-filter] ${cc}: AI filter failed, using keyword fallback:`, err)
+      const filtered = articles.filter((a) => isAboutCountry(a.title, cc))
+      console.log(`[gdelt-ai-filter] ${cc}: Keyword fallback kept ${filtered.length}/${articles.length} stories`)
+      articles.length = 0
+      articles.push(...filtered)
+    }
   }
 
   if (articles.length === 0) {
