@@ -868,7 +868,75 @@ export async function aggregateMyCountryViaGdelt(
           countryCode: countryCode,
         })
         console.log(`[gdelt] RSS fallback for ${cc}: ${rssResult.topics.length} topics from ${rssResult.sourceCount} sources`)
-        // Still apply the AI country filter to the RSS results
+
+        // ── Apply the AI country filter to RSS results too ──
+        // RSS sources are UK-based but cover international news. We need to
+        // filter out non-UK stories just like we do for GDELT.
+        if (rssResult.topics.length > 0) {
+          const countryDisplay = COUNTRY_DISPLAY[cc] || COUNTRY_TO_GDELT[cc] || cc
+          const titleList = rssResult.topics
+            .map((t, i) => `${i + 1}. ${t.title}`)
+            .join('\n')
+
+          const aiSystemPrompt = `You are a news editor for a ${countryDisplay} news app. You are given a list of news headlines from ${countryDisplay} news outlets. Your job is to identify which stories are ACTUALLY ABOUT ${countryDisplay} (or directly affect ${countryDisplay} people), and which are international stories that ${countryDisplay} outlets happened to cover.
+
+Rules for KEEPING a story:
+- The story is about events happening IN ${countryDisplay}
+- The story is about ${countryDisplay} government, politics, or public services
+- The story directly affects ${countryDisplay} people (e.g. ${countryDisplay} citizens abroad, ${countryDisplay} companies, ${countryDisplay} laws)
+- The story is about ${countryDisplay} local news (cities, towns, incidents)
+
+Rules for REMOVING a story:
+- The story is about another country's domestic affairs (US politics, Japan earthquake, etc.)
+- The story is about international events with no ${countryDisplay} angle
+- The story is about a foreign country's elections, laws, or internal politics
+- The story is about Trump, US politics, US elections, US Congress, etc.
+
+Respond with ONLY the numbers of the stories to KEEP, comma-separated. Example: 1,3,5,7,10
+No explanation, no other text.`
+
+          const aiUserPrompt = `Country: ${countryDisplay}
+News headlines from ${countryDisplay} outlets:
+
+${titleList}
+
+Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the numbers, comma-separated.`
+
+          try {
+            console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Sending ${rssResult.topics.length} titles to AI for country filtering...`)
+            const aiResponse = await callAI({ systemPrompt: aiSystemPrompt, userPrompt: aiUserPrompt, maxTokens: 200 })
+
+            if (aiResponse) {
+              const keepNumbers = aiResponse
+                .replace(/[^0-9,\s]/g, ' ')
+                .split(/[,\s]+/)
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0)
+                .map((s) => parseInt(s, 10))
+                .filter((n) => !isNaN(n) && n >= 1 && n <= rssResult.topics.length)
+
+              if (keepNumbers.length > 0) {
+                const keepSet = new Set(keepNumbers)
+                const filtered = rssResult.topics.filter((_, i) => keepSet.has(i + 1))
+                console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): AI kept ${filtered.length}/${rssResult.topics.length} stories`)
+                rssResult.topics = filtered
+              } else {
+                console.warn(`[gdelt-ai-filter] ${cc} (RSS fallback): AI returned no valid numbers, using keyword fallback`)
+                rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
+                console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Keyword fallback kept ${rssResult.topics.length} stories`)
+              }
+            } else {
+              console.warn(`[gdelt-ai-filter] ${cc} (RSS fallback): AI returned null, using keyword fallback`)
+              rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
+              console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Keyword fallback kept ${rssResult.topics.length} stories`)
+            }
+          } catch (aiErr) {
+            console.warn(`[gdelt-ai-filter] ${cc} (RSS fallback): AI filter failed, using keyword fallback:`, aiErr)
+            rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
+            console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Keyword fallback kept ${rssResult.topics.length} stories`)
+          }
+        }
+
         return rssResult
       } catch (fallbackErr) {
         console.warn(`[gdelt] RSS fallback also failed for ${cc}:`, fallbackErr)
