@@ -153,23 +153,20 @@ export async function refreshCategory(
         const oldCached = await readCachedNews(category, country)
         if (oldCached && oldCached.topics && oldCached.topics.length > 0) {
           const now = Date.now()
-          // Keep old topics that are still fresh (within 48h)
+          // Keep old topics that are still fresh (within 24h — was 48h.
+          // 48h was keeping stale stories too long, making the feed feel old)
           const freshOldTopics = oldCached.topics.filter(
-            (t) => now - t.latestSeen < FRESHNESS_WINDOW_MS,
+            (t) => now - t.latestSeen < 24 * 60 * 60 * 1000,
           )
-          // Merge: start with new topics, add old ones not already in the set
+          // Merge: NEW topics first (fresh from GDELT), then old ones not
+          // already in the new set. This ensures the freshest stories appear
+          // at the top, not 4-day-old cached stories.
           const newTopicIds = new Set(agg.topics.map((t) => t.topicId))
           const preservedOldTopics = freshOldTopics.filter(
             (t) => !newTopicIds.has(t.topicId),
           )
-          const mergedTopics = [...agg.topics, ...preservedOldTopics]
-
-          // If the merged set is smaller than the old cache (shouldn't happen
-          // since we're preserving old topics, but just in case), keep the
-          // old cache's size by filling from old topics
-          const finalTopics = mergedTopics.length >= oldCached.topics.length
-            ? mergedTopics
-            : [...agg.topics, ...oldCached.topics.filter((t) => !newTopicIds.has(t.topicId))]
+          // Cap total at 40 to avoid the cache growing forever
+          const finalTopics = [...agg.topics, ...preservedOldTopics].slice(0, 40)
 
           console.log(
             `[news-cache] mycountry merge: ${agg.topics.length} new + ${preservedOldTopics.length} preserved old = ${finalTopics.length} total (was ${oldCached.topics.length})`,

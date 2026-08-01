@@ -375,7 +375,33 @@ function isAboutCountry(title: string, countryCode: string): boolean {
       if (titleLower.includes(kw)) return true
     }
   }
-  return false
+  // ── RELAXED: If no UK keyword found, still keep the story IF it's from a
+  // UK domain (GDELT already filtered by sourcecountry:United Kingdom, so the
+  // outlet IS British). Many UK local stories (e.g. "Leicester church fire",
+  // "Boy critical after Mersea Beach incident") don't mention "UK" or
+  // "Britain" in the title but are clearly UK news.
+  // We only filter out stories that are CLEARLY about another country.
+  const foreignCountryKw = [
+    'japan', 'japanese', 'tokyo', 'china', 'chinese', 'beijing',
+    'russia', 'russian', 'moscow', 'iran', 'iranian', 'tehran',
+    'north korea', 'south korea', 'india', 'indian', 'mumbai', 'delhi',
+    'australia', 'australian', 'canberra', 'sydney', 'melbourne',
+    'canada', 'canadian', 'ottawa', 'toronto',
+    'germany', 'german', 'berlin', 'france', 'french', 'paris',
+    'spain', 'spanish', 'madrid', 'italy', 'italian', 'rome',
+    'brazil', 'brazilian', 'argentina', 'argentine', 'mexico', 'mexican',
+    'saudi arabia', 'uae', 'dubai', 'turkey', 'turkish', 'istanbul',
+    'israel', 'israeli', 'palestinian', 'gaza', 'lebanon', 'lebanese',
+    'egypt', 'egyptian', 'nigeria', 'nigerian', 'kenya', 'kenyan',
+    'south africa', 'thailand', 'thai', 'vietnam', 'vietnamese',
+    'indonesia', 'indonesian', 'pakistan', 'pakistani',
+  ]
+  for (const kw of foreignCountryKw) {
+    if (titleLower.includes(kw)) return false // clearly about another country
+  }
+  // No UK keyword AND no foreign country keyword → keep it (it's from a UK
+  // outlet and not clearly about another country, so it's likely UK news)
+  return true
 }
 
 interface GdeltArticle {
