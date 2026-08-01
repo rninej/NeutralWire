@@ -404,12 +404,30 @@ export function personalizationBoost(
     'trump campaign', 'trump re-election', 'trump 2028',
     'gop primary', 'democratic primary',
     'trump vows to', 'trump promises',
+    'trump-iran', 'trump iran', 'trump saudi', 'trump netanyahu',
+    'trump putin', 'trump xi', 'trump kim', 'trump macron',
+    'trump warns', 'trump orders', 'trump signs', 'trump nominates',
+    'trump appoints', 'trump vetoes', 'trump tariffs',
+    'trump administration', 'trump official', 'trump adviser',
+    'trump lawyer', 'trump attorney', 'trump judge', 'trump trial',
+    'trump indictment', 'trump charges', 'trump verdict',
+    'trump rally', 'trump speech', 'trump address',
+    'trump executive', 'trump signs', 'trump vetoes',
   ]
   for (const pattern of boringPatterns) {
     if (titleLower.includes(pattern)) {
       boost -= 30
       break
     }
+  }
+
+  // ── Blanket Trump demotion ──
+  // ANY title containing the word "trump" gets a -40 penalty. This pushes
+  // Trump-related stories way down in the Relevant feed so they don't
+  // appear at the top for UK users. The boringPatterns above catch specific
+  // patterns (-30), but this catches ANY remaining trump mention.
+  if (titleLower.includes('trump')) {
+    boost -= 40
   }
 
   return boost

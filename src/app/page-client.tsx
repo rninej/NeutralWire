@@ -1725,6 +1725,8 @@ function SectionedFeed({
     'us poll', 'us approval', 'us election', 'us primary',
     'biden says', 'biden claims', 'biden signs',
     'rand paul', 'fauci', 'senate hearing', 'house hearing',
+    'trump-iran', 'trump iran', 'trump saudi', 'trump netanyahu',
+    'trump putin', 'trump xi', 'trump warns', 'trump orders',
   ]
 
   function headlineScore(topic: TopicArticle): number {
@@ -1737,6 +1739,11 @@ function SectionedFeed({
         score -= 50
         break
       }
+    }
+
+    // Blanket Trump demotion — ANY title with "trump" gets -60
+    if (titleLower.includes('trump')) {
+      score -= 60
     }
 
     // Boost world news (international affairs that affect everyone)
