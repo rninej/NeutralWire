@@ -49,8 +49,90 @@ import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
 const GDELT_API_URL = 'https://api.gdeltproject.org/api/v2/doc/doc'
 
-// ISO country code → GDELT sourcecountry filter value.
-// GDELT uses full country names (not ISO codes) for the sourcecountry filter.
+// ── Country config (per the spec) ──
+// Each country has: name, UI code, GDELT sourcecountry candidates,
+// strong terms (+3), weak terms (+2), and false-positive blocklist (-2).
+interface CountryConfig {
+  name: string
+  code: string
+  gdeltSourceCountries: string[]
+  strongTerms: string[]
+  weakTerms: string[]
+  blocklist: string[]
+}
+
+const COUNTRY_CONFIG: Record<string, CountryConfig> = {
+  GB: {
+    name: 'United Kingdom',
+    code: 'GB',
+    gdeltSourceCountries: ['UK', 'GB'],
+    strongTerms: ['united kingdom', 'great britain', 'britain', 'england', 'scotland', 'wales', 'northern ireland'],
+    weakTerms: ['uk', 'u.k.', 'london', 'manchester', 'birmingham', 'edinburgh', 'cardiff', 'belfast',
+      'glasgow', 'leeds', 'liverpool', 'bristol', 'sheffield', 'newcastle', 'oxford', 'cambridge',
+      'parliament', 'westminster', 'downing street', 'nhs', 'starmer', 'burnham', 'labour', 'conservative',
+      'tories', 'met police', 'heathrow', 'gatwick', 'council tax', 'bbc'],
+    blocklist: ['london ontario', 'university of kentucky', 'uk football', 'new london', 'london ohio'],
+  },
+  US: {
+    name: 'United States',
+    code: 'US',
+    gdeltSourceCountries: ['US'],
+    strongTerms: ['united states', 'america', 'american'],
+    weakTerms: ['us', 'u.s.', 'washington', 'white house', 'capitol', 'congress', 'senate', 'pentagon',
+      'new york', 'los angeles', 'chicago', 'houston', 'phoenix', 'trump', 'biden', 'fbi', 'cia'],
+    blocklist: ['us weekly', 'us news'],
+  },
+  FR: {
+    name: 'France',
+    code: 'FR',
+    gdeltSourceCountries: ['FR'],
+    strongTerms: ['france', 'french'],
+    weakTerms: ['paris', 'lyon', 'marseille', 'macron', 'elysee', 'national assembly'],
+    blocklist: ['paris texas', 'paris hilton'],
+  },
+  DE: {
+    name: 'Germany',
+    code: 'DE',
+    gdeltSourceCountries: ['DE'],
+    strongTerms: ['germany', 'german'],
+    weakTerms: ['berlin', 'munich', 'hamburg', 'merz', 'bundestag', 'frankfurt'],
+    blocklist: ['german shepherd', 'german measles'],
+  },
+  JP: {
+    name: 'Japan',
+    code: 'JP',
+    gdeltSourceCountries: ['JP'],
+    strongTerms: ['japan', 'japanese'],
+    weakTerms: ['tokyo', 'osaka', 'kyoto', 'diet', 'prime minister kishida', 'abe'],
+    blocklist: ['japan airlines', 'japan cup'],
+  },
+  AU: {
+    name: 'Australia',
+    code: 'AU',
+    gdeltSourceCountries: ['AU'],
+    strongTerms: ['australia', 'australian'],
+    weakTerms: ['canberra', 'sydney', 'melbourne', 'brisbane', 'perth', 'parliament house'],
+    blocklist: ['australian shepherd', 'australian open'],
+  },
+  CA: {
+    name: 'Canada',
+    code: 'CA',
+    gdeltSourceCountries: ['CA'],
+    strongTerms: ['canada', 'canadian'],
+    weakTerms: ['ottawa', 'toronto', 'vancouver', 'montreal', 'parliament hill', 'trudeau'],
+    blocklist: ['canada goose', 'canada dry'],
+  },
+  IE: {
+    name: 'Ireland',
+    code: 'IE',
+    gdeltSourceCountries: ['IE'],
+    strongTerms: ['ireland', 'irish'],
+    weakTerms: ['dublin', 'cork', 'galway', 'dail', 'taoiseach', 'leo varadkar'],
+    blocklist: ['irish setter', 'irish coffee'],
+  },
+}
+
+// ISO country code → GDELT sourcecountry filter value (for backward compat)
 const COUNTRY_TO_GDELT: Record<string, string> = {
   US: 'United States',
   GB: 'United Kingdom',
@@ -570,12 +652,21 @@ const STOPWORDS = new Set([
   'that','these','those','it','its','they','them','their','there','here','we',
   'us','our','you','your','he','she','his','her','my','me','not','no','yes',
   'do','does','did','have','has','had','will','would','can','could','should',
-  'may','might','must','about','after','before','between','during','through',
-  'over','under','up','down','out','off','again','more','most','some','such',
-  'only','own','same','so','than','too','very','just','also','new','one','two',
-  'three','said','says','say','news','report','reports','amid','while','because',
-  'since','until','without','within','against','above','below','into','onto',
-  'upon','who','what','when','where','why','how','which','whom','whose','via',
+])
+
+// Stopwords for title fingerprinting (dedup)
+const STOPWORDS_FP = new Set([
+  'a','an','the','and','or','but','if','then','for','of','to','in','on','at',
+  'by','with','from','as','is','are','was','were','be','been','being','this',
+  'that','these','those','it','its','they','them','their','there','here','we',
+  'us','our','you','your','he','she','his','her','my','me','not','no','yes',
+  'do','does','did','have','has','had','will','would','can','could','should',
+  'after','before','into','through','over','under','up','down','out','off',
+  'says','said','say','new','one','two','amid','news','report','reports',
+  'may','might','must','about','between','during','again','more','most','some','such',
+  'only','own','same','so','than','too','very','just','also',
+  'three','while','because','since','until','without','within','against','above','below',
+  'onto','upon','who','what','when','where','why','how','which','whom','whose','via',
 ])
 
 function titleKeywords(t: string): Set<string> {
@@ -828,17 +919,22 @@ export async function aggregateMyCountryViaGdelt(
   limit: number = 40,
 ): Promise<{ topics: TopicArticle[]; articleCount: number; sourceCount: number }> {
   const cc = countryCode.toUpperCase()
+  const config = COUNTRY_CONFIG[cc] || COUNTRY_CONFIG[cc === 'UK' ? 'GB' : '']
   const gdeltCountry = COUNTRY_TO_GDELT[cc] || COUNTRY_TO_GDELT[cc === 'UK' ? 'GB' : ''] || null
-  if (!gdeltCountry) {
-    console.warn(`[gdelt] No GDELT country mapping for ${cc}, returning empty`)
+  if (!gdeltCountry || !config) {
+    console.warn(`[gdelt] No country config for ${cc}, returning empty`)
     return { topics: [], articleCount: 0, sourceCount: 0 }
   }
 
-  // Fetch up to 250 articles from GDELT (max allowed by the API).
-  // sourcelang:english ensures English-language articles only.
-  // sort:DateDesc gives the newest first.
-  const query = `sourcecountry:"${gdeltCountry}" sourcelang:english`
-  const url = `${GDELT_API_URL}?query=${encodeURIComponent(query)}&mode=ArtList&maxrecords=250&format=json&sort=DateDesc&timewindow=72h`
+  // ── GDELT query: search for articles ABOUT the country ──
+  // Per the spec: use the country's strong terms as the query (not just
+  // sourcecountry). This finds articles from ANY outlet that mention the UK,
+  // not just UK-based outlets. sourcecountry is used as a scoring boost.
+  const strongQuery = config.strongTerms
+    .map((t) => `"${t}"`)
+    .join(' OR ')
+  const query = `(${strongQuery}) sourcelang:english`
+  const url = `${GDELT_API_URL}?query=${encodeURIComponent(query)}&mode=ArtList&maxrecords=250&format=json&sort=DateDesc&timewindow=1d`
 
   let raw: GdeltArticle[] = []
   try {
@@ -971,15 +1067,14 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
     return { topics: [], articleCount: 0, sourceCount: 0 }
   }
 
-  // ── Convert GDELT articles to FeedArticle + filter ──
+  // ── Convert GDELT articles to FeedArticle + score + filter + dedup ──
   const seenLinks = new Set<string>()
-  const articles: FeedArticle[] = []
+  const seenFingerprints = new Set<string>()
+  const domainCounts: Record<string, number> = {}
+  const scored: Array<{ article: FeedArticle; score: number; reason: string }> = []
+
   for (const a of raw) {
     if (!a.url || !a.title) continue
-    // Dedup by URL (strip query string for syndication dedup)
-    const linkKey = a.url.split('?')[0].toLowerCase()
-    if (seenLinks.has(linkKey)) continue
-    seenLinks.add(linkKey)
 
     // Decode HTML entities + strip any HTML in the title
     let title = a.title
@@ -993,19 +1088,91 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
     if (isSportsTitle(title)) continue
     // Skip non-news
     if (isNonNews(title)) continue
-    // NOTE: Country relevance filtering is now done by the AI filter below
-    // (more accurate than keyword matching). The old isAboutCountry() filter
-    // was too strict (rejected UK local stories that don't mention "UK").
 
     const domain = a.domain || new URL(a.url).hostname
+    const titleLower = title.toLowerCase()
+
+    // ── Dedup by URL (normalized) ──
+    const linkKey = a.url.split('?')[0].toLowerCase().replace(/\/$/, '')
+    if (seenLinks.has(linkKey)) continue
+
+    // ── Dedup by title fingerprint ──
+    const fingerprint = titleLower
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .filter((w) => w.length > 2 && !STOPWORDS_FP.has(w))
+      .sort()
+      .join('|')
+    if (seenFingerprints.has(fingerprint)) continue
+
+    // ── Scoring (per the spec) ──
+    let score = 0
+    const reasons: string[] = []
+
+    // +3 if title contains a strong country term
+    for (const term of config.strongTerms) {
+      if (titleLower.includes(term)) {
+        score += 3
+        reasons.push(`headline mentions ${term}`)
+        break
+      }
+    }
+
+    // +2 if title contains a weak city/region term
+    for (const term of config.weakTerms) {
+      if (titleLower.includes(term)) {
+        score += 2
+        reasons.push(`headline mentions ${term}`)
+        break
+      }
+    }
+
+    // +1 if sourcecountry matches one of the country's candidates
+    const articleSourceCountry = (a.sourcecountry || '').toLowerCase()
+    for (const candidate of config.gdeltSourceCountries) {
+      if (articleSourceCountry === candidate.toLowerCase()) {
+        score += 1
+        reasons.push('source is domestic')
+        break
+      }
+    }
+
+    // -2 if title contains a false-positive term
+    for (const term of config.blocklist) {
+      if (titleLower.includes(term)) {
+        score -= 2
+        reasons.push(`blocked: ${term}`)
+        break
+      }
+    }
+
+    // Keep only articles with score >= 3
+    if (score < 3) {
+      console.log(`[gdelt-score] ${cc}: REJECTED "${title.slice(0, 50)}" (score: ${score})`)
+      continue
+    }
+
+    // ── Source diversity: max 2 articles per domain ──
+    if ((domainCounts[domain] || 0) >= 2) {
+      console.log(`[gdelt-diversity] ${cc}: SKIPPED "${title.slice(0, 50)}" (domain ${domain} already has 2)`)
+      continue
+    }
+    domainCounts[domain] = (domainCounts[domain] || 0) + 1
+
+    seenLinks.add(linkKey)
+    seenFingerprints.add(fingerprint)
+
     const iso = parseGdeltDate(a.seendate)
     const imageUrl = a.socialimage ? upgradeToHighRes(a.socialimage) : null
+    const reason = `Shown because ${reasons.join(' and ')}`
 
-    articles.push({
+    const article: FeedArticle = {
       id: hashId(a.url),
       title,
       link: a.url,
-      description: '', // GDELT doesn't return descriptions
+      description: reason, // Store the "Why am I seeing this?" reason in description
       pubDate: a.seendate,
       iso,
       imageUrl,
@@ -1015,8 +1182,24 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
       leaning: leaningForDomain(domain),
       country: cc,
       category: 'mycountry',
-    })
+    }
+
+    scored.push({ article, score, reason })
+    console.log(`[gdelt-score] ${cc}: KEPT "${title.slice(0, 50)}" (score: ${score}, reason: ${reason})`)
   }
+
+  // Sort by relevance score first, then recency
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score
+    return b.article.iso - a.article.iso
+  })
+
+  const articles = scored.map((s) => s.article)
+  console.log(`[gdelt] ${cc}: fetched ${raw.length} → scored ${scored.length} (score >= 3) → ${articles.length} kept`)
+
+  // Skip AI filter — the scoring system above is the primary filter.
+  // The AI filter was unreliable (GDELT 429 → RSS fallback → AI also fails).
+  // The scoring system is deterministic and always works.
 
   // ── AI country-relevance filter ──
   // Send all article titles to the AI and ask it to return ONLY the ones
