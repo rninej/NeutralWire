@@ -61,6 +61,10 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   const [askAiOpen, setAskAiOpen] = React.useState(false)
   // Like/dislike state: null = no vote, 'liked' = thumbs up, 'disliked' = thumbs down
   const [likeState, setLikeState] = React.useState<'liked' | 'disliked' | null>(null)
+  // Full topic fetched from /api/topic/[id] — used when the slim feed
+  // response (slim=1) strips the articles array. This guarantees the
+  // "All Sources" section always has articles to show.
+  const [displayTopic, setDisplayTopic] = React.useState<TopicArticle | null>(null)
 
   // ── Like/dislike persistence ──
   // Load saved vote from localStorage on mount (instant, no Firebase read needed).
@@ -155,6 +159,46 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   React.useEffect(() => {
     setImgError(false)
   }, [topic.topicId, topic.imageUrl])
+
+  // ── Fetch the FULL topic (with articles) from /api/topic/[id] ──
+  // The slim feed response (slim=1) strips the articles array to save
+  // bandwidth. Without this fetch, the "All Sources" section would be
+  // empty even though topic.coverage says there are sources — which was
+  // the "sources not showing" bug.
+  //
+  // We fetch when:
+  //  - articles is missing/empty (slim response), OR
+  //  - articles length doesn't match coverage (partial/stale data)
+  // Otherwise the topic already has its articles (e.g. opened from
+  // archive or a non-slim fetch) and we skip the extra request.
+  React.useEffect(() => {
+    let cancelled = false
+    const articleCount = Array.isArray(topic.articles) ? topic.articles.length : 0
+    const needsFetch = articleCount === 0 || (topic.coverage > 0 && articleCount < topic.coverage)
+    if (!needsFetch) {
+      // Already have full articles — use them directly.
+      setDisplayTopic(null)
+      return
+    }
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/topic/${encodeURIComponent(topic.topicId)}`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled || !data.topic) return
+        // Only update if the fetched topic actually has articles —
+        // otherwise we gain nothing and might overwrite good data.
+        if (Array.isArray(data.topic.articles) && data.topic.articles.length > 0) {
+          setDisplayTopic(data.topic as TopicArticle)
+        }
+      } catch {
+        // silent — fall back to topic.articles
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [topic.topicId, topic.articles, topic.coverage])
 
   // Fetch neutral summary from LLM.
   React.useEffect(() => {
@@ -270,12 +314,11 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
   const showImage = topic.imageUrl && !imgError
 
-  // Guard: topic.articles might be undefined if the topic was loaded from
-  // the Firebase archive (Firebase RTDB drops empty arrays, so `articles: []`
   // Use displayTopic's articles (fetched from /api/topic/[id] if the slim
   // feed response didn't include them). This prevents the "sources not
   // showing" bug where the slim response stripped the articles array.
-  const articles = displayTopic.articles || topic.articles || []
+  // displayTopic may be null if the fetch hasn't completed or wasn't needed.
+  const articles = displayTopic?.articles || topic.articles || []
 
   // Group articles by leaning for display.
   const leftArticles = articles.filter((a) => a.leaning === 'left')
