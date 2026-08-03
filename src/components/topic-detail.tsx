@@ -272,8 +272,10 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
 
   // Guard: topic.articles might be undefined if the topic was loaded from
   // the Firebase archive (Firebase RTDB drops empty arrays, so `articles: []`
-  // becomes nothing on read-back). Default to [] to prevent crashes.
-  const articles = topic.articles || []
+  // Use displayTopic's articles (fetched from /api/topic/[id] if the slim
+  // feed response didn't include them). This prevents the "sources not
+  // showing" bug where the slim response stripped the articles array.
+  const articles = displayTopic.articles || topic.articles || []
 
   // Group articles by leaning for display.
   const leftArticles = articles.filter((a) => a.leaning === 'left')
@@ -356,6 +358,19 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
               {topic.localCoverage} local
             </Badge>
           )}
+          {/* View sources button — on the right of the date/time */}
+          <button
+            type="button"
+            onClick={() => {
+              const sourcesEl = document.getElementById('all-sources')
+              if (sourcesEl) {
+                sourcesEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }
+            }}
+            className="ml-auto text-xs font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            View sources
+          </button>
         </div>
 
         <h1 className="mb-4 text-2xl font-bold leading-tight md:text-3xl">
@@ -505,7 +520,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
         </Card>
 
         {/* Sources grouped by leaning */}
-        <div className="space-y-4">
+        <div id="all-sources" className="space-y-4 scroll-mt-20">
           <h2 className="text-sm font-semibold">All Sources</h2>
 
           {leftArticles.length > 0 && (

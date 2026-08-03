@@ -1,18 +1,14 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-// Bumped to v14: force SW update to take effect immediately. The v13 change
-// (removed "Interested" button) wasn't reaching existing PWA installs because
-// the old SW stayed in 'waiting' state (default browser behavior waits until
-// all tabs close). v14 adds SKIP_WAITING message handling + the page now
-// passes updateViaCache:'none' and auto-reloads on controllerchange.
-// v13: removed "Interested" button. v12: SWR caching. v11: fire-and-forget
-// tracking. v10: fixed notificationclick.
-const CACHE_NAME = 'neutralwire-v14'
-// Don't cache '/' (the HTML page) — it changes on every deploy and serving
-// stale HTML causes hydration mismatches when the JS bundle is updated.
-// Only cache truly static assets.
-const STATIC_ASSETS = ['/manifest.json', '/favicon-32.png', '/icon-192.png', '/icon-512.png']
+// Bumped to v15: offline PWA support — caches the HTML page so the app
+// loads from cache when offline. /api/news already cached via SWR.
+// v14: force SW update. v13: removed Interested button. v12: SWR.
+// v11: fire-and-forget tracking. v10: fixed notificationclick.
+const CACHE_NAME = 'neutralwire-v15'
+// Cache the HTML page too — needed for offline PWA. The page is network-first
+// (so users get fresh HTML on deploy), but falls back to cache when offline.
+const STATIC_ASSETS = ['/manifest.json', '/favicon-32.png', '/icon-192.png', '/icon-512.png', '/']
 
 // ---------- Install ----------
 self.addEventListener('install', (event) => {
@@ -44,21 +40,56 @@ self.addEventListener('fetch', (event) => {
   // Only handle GET requests
   if (req.method !== 'GET') return
 
-  // Navigation requests (HTML pages) → network-first
+  // Navigation requests (HTML pages) → network-first, cache fallback
   if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
     event.respondWith(
       (async () => {
         try {
           // Try network first
           const networkRes = await fetch(req, { cache: 'no-store' })
+          // Cache the HTML page for offline use
+          const cache = await caches.open(CACHE_NAME)
+          cache.put(req, networkRes.clone())
           return networkRes
         } catch {
-          // Network failed (offline) — fall back to cached HTML if available
+          // Network failed (offline) — fall back to cached HTML
           const cached = await caches.match(req)
           if (cached) return cached
-          // No cache either — return a basic offline page
+          // No cache either — return an offline skeleton page that
+          // auto-reloads when the connection comes back
           return new Response(
-            '<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>You are offline</h2><p>NeutralWire will load when you reconnect.</p></body></html>',
+            `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NeutralWire — Offline</title><style>
+              *{margin:0;padding:0;box-sizing:border-box}
+              body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0a;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+              .logo{font-size:24px;font-weight:800;margin-bottom:24px}
+              .skeleton{width:100%;max-width:400px}
+              .skel-card{background:#1a1a1a;border-radius:12px;padding:16px;margin-bottom:12px;animation:pulse 1.5s ease-in-out infinite}
+              .skel-img{height:120px;background:#222;border-radius:8px;margin-bottom:12px}
+              .skel-line{height:12px;background:#222;border-radius:4px;margin-bottom:8px}
+              .skel-line.short{width:60%}
+              .skel-line.medium{width:80%}
+              @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+              .status{margin-top:24px;font-size:14px;color:#666;text-align:center}
+            </style></head><body>
+              <div class="logo">NeutralWire</div>
+              <div class="skeleton">
+                <div class="skel-card"><div class="skel-img"></div><div class="skel-line medium"></div><div class="skel-line short"></div></div>
+                <div class="skel-card"><div class="skel-img"></div><div class="skel-line medium"></div><div class="skel-line short"></div></div>
+                <div class="skel-card"><div class="skel-line medium"></div><div class="skel-line short"></div></div>
+                <div class="skel-card"><div class="skel-line medium"></div><div class="skel-line short"></div></div>
+              </div>
+              <div class="status">Waiting for connection… NeutralWire will load automatically when you're back online.</div>
+              <script>
+                // Auto-reload when connection comes back
+                window.addEventListener('online', function() { window.location.reload() })
+                // Also try reloading every 5 seconds
+                setInterval(function() {
+                  fetch('/', { method: 'HEAD', cache: 'no-store' })
+                    .then(function() { window.location.reload() })
+                    .catch(function() {})
+                }, 5000)
+              </script>
+            </body></html>`,
             { headers: { 'Content-Type': 'text/html' } },
           )
         }
