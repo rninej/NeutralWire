@@ -85,12 +85,14 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   // ── MINI variant: compact horizontal card (thumbnail left, title right) ──
   // Used in dense lists where 4+ stories should be visible at once on mobile.
   // Includes a compact bias bar so every card shows the red/blue/grey spectrum.
-  // When no image: full-width text card (no empty placeholder).
+  // When no image: uses a colored left border accent instead of a blank space
+  // so the card looks intentional and pleasant next to image cards.
   if (variant === 'mini') {
     return (
       <Card
         className={cn(
           'overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
+          !showImage && 'border-l-4 border-l-foreground/20',
           onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
         )}
         onClick={handleCardClick}
@@ -106,7 +108,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             />
           </div>
         )}
-        <div className="flex flex-col gap-1 p-2.5 flex-1 min-w-0">
+        <div className="flex flex-col gap-1 p-2.5 flex-1 min-w-0 justify-center">
           <div className="flex items-center gap-1.5">
             <Badge variant="secondary" className="text-[9px] px-1.5 py-0">
               {topic.coverage}src

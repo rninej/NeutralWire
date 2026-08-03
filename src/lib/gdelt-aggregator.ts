@@ -1084,9 +1084,9 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
       .replace(/\s+/g, ' ').trim()
     if (title.length < 8) continue
 
-    // Skip sports
-    if (isSportsTitle(title)) continue
-    // Skip non-news
+    // Skip non-news (but NOT sports — sports gets a -3 penalty below
+    // instead of being filtered entirely, so some high-relevance sports
+    // stories can still appear if they're genuinely about the country)
     if (isNonNews(title)) continue
 
     const domain = a.domain || new URL(a.url).hostname
@@ -1146,6 +1146,12 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
         reasons.push(`blocked: ${term}`)
         break
       }
+    }
+
+    // -3 if title is about sports (deprioritize in My Country)
+    if (isSportsTitle(title)) {
+      score -= 3
+      reasons.push('sports deprioritized')
     }
 
     // Keep only articles with score >= 3
