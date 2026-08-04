@@ -19,6 +19,9 @@ import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+// Cap CPU time. A refresh involves RSS/GDELT aggregation (5-15s) +
+// background summary pre-generation. 25s is a safe ceiling.
+export const maxDuration = 25
 
 /**
  * Force a refresh of a single category.
@@ -139,16 +142,17 @@ export async function GET(req: NextRequest) {
     // Strategy: for each of the top N topics, check if a summary already
     // exists in Firebase. If not, fire a POST to /api/summary (which calls
     // the AI chain). We only pre-generate for topics that DON'T already have
-    // a cached summary — this avoids re-running the AI unnecessarily.
-    const topTopics = fresh.topics.slice(0, 8)
+    // a cached summary.
+    //
+    // ── CPU BUDGET: reduced from 8 to 3 topics ──
+    // Vercel Hobby has a 4hr/month Fluid Compute CPU limit. Pre-generating
+    // 8 summaries per refresh call (which happens on every stale category
+    // visit) was burning too much CPU. 3 is enough for the top stories;
+    // the rest generate on-demand when the user opens them.
+    const topTopics = fresh.topics.slice(0, 3)
     after(async () => {
       const origin = req.nextUrl.origin
       try {
-        // EMERGENCY FIX: Previously read the ENTIRE summaries node to check
-        // which topicIds already have summaries. Now we check each topic
-        // individually (tiny reads: summaries/<topicId> = ~1KB each).
-        // This avoids downloading the entire summaries root (which could be
-        // hundreds of KB with all the AI-generated text).
         const toGenerate: TopicArticle[] = []
         for (const topic of topTopics) {
           const existing = await firebaseRead<unknown>(`summaries/${topic.topicId}`)
@@ -162,9 +166,8 @@ export async function GET(req: NextRequest) {
 
         console.log(`[refresh] Pre-generating ${toGenerate.length} summaries in background...`)
 
-        // Fire all summary requests in parallel (max 4 at a time to avoid
-        // hammering the AI providers).
-        const batchSize = 4
+        // Batch of 2 (was 4) to reduce peak CPU usage.
+        const batchSize = 2
         for (let i = 0; i < toGenerate.length; i += batchSize) {
           const batch = toGenerate.slice(i, i + batchSize)
           await Promise.allSettled(
@@ -185,7 +188,7 @@ export async function GET(req: NextRequest) {
                   }),
                 })
               } catch {
-                // silent — best-effort
+                // silent
               }
             }),
           )

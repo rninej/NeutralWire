@@ -5,6 +5,9 @@ import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+// AI generation can take 5-10s. Cache hits are <100ms. 15s ceiling
+// prevents runaway AI calls from burning Fluid Compute CPU.
+export const maxDuration = 15
 
 // In-process cache for summaries (fastest, but per-instance).
 const SUMMARY_CACHE = new Map<string, { ts: number; summary: string }>()

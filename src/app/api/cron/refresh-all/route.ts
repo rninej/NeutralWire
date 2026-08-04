@@ -12,94 +12,72 @@ import { firebaseRead } from '@/lib/firebase-server'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-export const maxDuration = 60
+// Reduced from 60 to 30 — the background work is lighter now so 30s is
+// plenty. Lower maxDuration = less CPU time billed per invocation.
+export const maxDuration = 30
 
 /**
- * Cron-triggered endpoint that refreshes ALL NeutralWire news categories
- * every 60 minutes — WITHOUT requiring a visitor to hit the site.
+ * Cron-triggered endpoint that refreshes the MOST IMPORTANT news
+ * categories every 60 minutes — WITHOUT requiring a visitor to hit the site.
  *
- * This prevents topics from going stale when there's no traffic (e.g.
- * overnight, or when the first user of the day would otherwise have to
- * wait for RSS feeds to load).
+ * ── CPU BUDGET (Vercel Hobby: 4hr/month Fluid Compute CPU) ──
+ * This endpoint was previously refreshing ALL 8 RSS categories + 3 GDELT
+ * countries + 23 AI summaries per hour = ~40s CPU/invocation. Over a
+ * month that's ~20 hours of CPU — WAY over the 4hr limit.
  *
- * Categories refreshed:
- *   - RSS: top, world, politics, business, technology, science, health, sports
- *   - GDELT (My Country): GB (UK), US, IN (India) — the most common
- *     visitor countries. Other countries refresh on-demand when a visitor
- *     from that country arrives.
- *   - relevant: uses the RSS aggregator with a country-aware source mix
+ * NOW it only refreshes the categories users actually see on landing:
+ *   - relevant (the default tab — needs to be fresh)
+ *   - world + politics (always shown in the Relevant feed sections)
+ *   - mycountry-GB (UK is the most common visitor country)
  *
- * Summary pre-generation:
- *   For the `relevant` category (the default tab), the top 15 topics get
- *   their neutral AI summaries pre-generated and cached in Firebase. This
- *   means when a user opens the app from cache (offline PWA) and taps a
- *   topic, the summary is already there — no waiting for the AI.
+ * Other categories (business, tech, science, health, sports, US, IN)
+ * refresh ON-DEMAND when a user visits them — the /api/news route handles
+ * that automatically with its stale-while-revalidate cache.
  *
- * Security: the secret below is hardcoded (not an env var) so the user
- * doesn't need to configure anything. The URL itself acts as the secret —
- * anyone without the exact URL cannot trigger a refresh. The endpoint is
- * also idempotent and rate-limited per category (3 min gap), so even if
- * it's abused the impact is minimal.
+ * Summary pre-generation: only the top 5 relevant topics (was 15+8=23).
+ * This is enough to keep the landing page fast without burning CPU.
  *
- * Trigger: cron-job.org (free external cron service)
- *   URL (copy this exactly into cron-job.org):
- *     https://neutralwire.org/api/cron/refresh-all?secret=965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd
- *   Schedule: every 60 minutes
- *   Method: GET
- *   The endpoint returns 200 immediately (via after()) so cron-job.org's
- *   30s timeout is never hit. The actual refresh runs in the background
- *   for up to maxDuration (60s on Vercel Hobby with Fluid Compute).
+ * Security: hardcoded secret (URL acts as the secret).
+ *
+ * Trigger: cron-job.org every 60 minutes
+ *   URL: https://neutralwire.org/api/cron/refresh-all?secret=965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd
  */
 
-// Hardcoded cron secret. The URL containing this secret is the only thing
-// needed to trigger a refresh — no env vars to set. If this secret ever
-// needs rotating, change it here and update the cron-job.org URL.
 const CRON_SECRET = '965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd'
 
 export async function GET(req: NextRequest) {
   const t0 = Date.now()
 
-  // ── Auth: require the hardcoded secret ──
   const secret = req.nextUrl.searchParams.get('secret') || ''
   if (secret !== CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // ── Categories to refresh ──
-  const rssCategories: Category[] = [
-    'top', 'world', 'politics', 'business', 'technology', 'science', 'health', 'sports',
-  ]
-  const myCountryCodes = ['GB', 'US', 'IN']
+  // Only refresh the categories users see on landing. Other categories
+  // refresh on-demand via /api/news when a user visits them.
+  const rssCategories: Category[] = ['world', 'politics']
+  const myCountryCodes = ['GB']
 
-  // Use the production origin for internal fetch calls (summary pre-gen).
-  // On Vercel serverless, req.nextUrl.origin is usually correct, but we
-  // fall back to the env var to be safe.
   const origin = process.env.NEXT_PUBLIC_SITE_URL || req.nextUrl.origin
 
-  // Use `after()` so we return 200 immediately and let the refreshes run
-  // in the background. This is critical for cron-job.org, which has a
-  // 30-second timeout on the free plan — we return in <1s.
   after(async () => {
-    console.log(`[cron/refresh-all] Starting full refresh at ${new Date().toISOString()}`)
+    console.log(`[cron/refresh-all] Starting light refresh at ${new Date().toISOString()}`)
 
-    // ── 1. Refresh all RSS categories in parallel ──
-    const rssResults = await Promise.allSettled(
+    // 1. Refresh world + politics in parallel (light, ~5s each)
+    await Promise.allSettled(
       rssCategories.map(async (cat) => {
         try {
           const fresh = await refreshCategory(cat, '', async () => {
             return aggregateCategory(cat, { limit: 40, minCoverage: 1 })
           })
           console.log(`[cron/refresh-all] RSS ${cat}: ${fresh?.topics?.length || 0} topics`)
-          return { cat, topics: fresh?.topics || [] }
         } catch (err) {
           console.warn(`[cron/refresh-all] RSS ${cat} failed:`, err)
-          return { cat, topics: [] }
         }
       }),
     )
 
-    // ── 2. Refresh My Country for common countries (sequential — GDELT
-    //    rate-limits to 1 req/5s) ──
+    // 2. Refresh My Country GB (sequential, GDELT rate-limits)
     for (const cc of myCountryCodes) {
       try {
         const fresh = await refreshCategory('mycountry', cc, async () => {
@@ -113,7 +91,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // ── 3. Refresh "relevant" for the UK (default country) ──
+    // 3. Refresh relevant (UK default) — the landing page
     try {
       const countrySourceIds = sourcesForCountry('GB')
       const fresh = await refreshCategory('relevant', 'GB', async () => {
@@ -126,24 +104,14 @@ export async function GET(req: NextRequest) {
       })
       console.log(`[cron/refresh-all] relevant/GB: ${fresh?.topics?.length || 0} topics`)
 
-      // ── 4. Pre-generate summaries for the top relevant topics ──
-      // The relevant tab is the default landing page. Pre-generating
-      // summaries ensures that when a user opens the app (even from
-      // cache/offline) and taps a topic, the neutral summary is already
-      // cached in Firebase and loads instantly.
+      // 4. Pre-generate summaries for ONLY the top 5 relevant topics
+      // (was 15 + 8 = 23). This is enough for the first screen of the
+      // landing page. Other topics generate on-demand when opened.
       if (fresh && fresh.topics.length > 0) {
-        await preGenerateSummaries(fresh.topics.slice(0, 15), origin)
+        await preGenerateSummaries(fresh.topics.slice(0, 5), origin)
       }
     } catch (err) {
       console.warn(`[cron/refresh-all] relevant/GB failed:`, err)
-    }
-
-    // ── 5. Pre-generate summaries for top world topics (high-traffic) ──
-    const worldResult = rssResults.find(
-      (r) => r.status === 'fulfilled' && r.value.cat === 'world',
-    )
-    if (worldResult && worldResult.status === 'fulfilled' && worldResult.value.topics.length > 0) {
-      await preGenerateSummaries(worldResult.value.topics.slice(0, 8), origin)
     }
 
     console.log(`[cron/refresh-all] Complete in ${Date.now() - t0}ms`)
@@ -151,16 +119,16 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
-    message: 'Refresh dispatched in background',
+    message: 'Light refresh dispatched',
     categories: rssCategories.length + myCountryCodes.length + 1,
     ts: Date.now(),
   })
 }
 
 /**
- * Pre-generate neutral AI summaries for a list of topics.
- * Skips topics that already have a cached summary (checks Firebase first).
- * Runs in batches of 4 to avoid hammering the AI providers.
+ * Pre-generate summaries for a SMALL list of topics.
+ * Skips topics that already have a cached summary.
+ * Runs in batches of 3 (was 4) to stay gentle on CPU.
  */
 async function preGenerateSummaries(topics: TopicArticle[], origin: string): Promise<void> {
   try {
@@ -177,7 +145,7 @@ async function preGenerateSummaries(topics: TopicArticle[], origin: string): Pro
 
     console.log(`[cron/refresh-all] Pre-generating ${toGenerate.length} summaries...`)
 
-    const batchSize = 4
+    const batchSize = 3
     for (let i = 0; i < toGenerate.length; i += batchSize) {
       const batch = toGenerate.slice(i, i + batchSize)
       await Promise.allSettled(
@@ -198,7 +166,7 @@ async function preGenerateSummaries(topics: TopicArticle[], origin: string): Pro
               }),
             })
           } catch {
-            // silent — best-effort
+            // silent
           }
         }),
       )

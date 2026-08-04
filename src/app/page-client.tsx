@@ -625,78 +625,12 @@ export default function Home() {
     }
   }, [topics])
 
-  // ── Auto pre-generate neutral summaries for Relevant topics ──
-  // When the user is on the home screen (Relevant tab), we silently
-  // request the AI summary for each topic in series (top to bottom).
-  // The /api/summary endpoint caches results in Firebase, so:
-  //   - If the summary already exists → instant cache hit (tiny Firebase read)
-  //   - If not → generates and caches it (so it's ready when the user taps)
-  //
-  // This means when a user opens the app later from cache (offline PWA)
-  // and taps a topic, the neutral summary is already there — no waiting.
-  //
-  // We only run this on the Relevant tab (the default landing page) and
-  // process topics one at a time (series) to avoid hammering the AI.
-  // We also skip topics the user has already seen (no point pre-generating
-  // summaries for stories they've already read).
-  useEffect(() => {
-    if (category !== 'relevant') return
-    if (topics.length === 0) return
-    let cancelled = false
-
-    // Delay slightly so the initial feed render isn't blocked
-    const timer = setTimeout(() => {
-      if (cancelled) return
-      // Pre-generate for the top 12 topics (excluding seen ones — those
-      // are already read, no point caching their summaries)
-      const seen = getSeenTopics()
-      const toPregen = topics
-        .filter((t) => !seen[t.topicId])
-        .slice(0, 12)
-
-      if (toPregen.length === 0) return
-
-      console.log(`[summary-pre-gen] Pre-generating summaries for ${toPregen.length} relevant topics in series...`)
-
-      // Process in series (one at a time) to be gentle on AI providers.
-      // Each call either hits the Firebase cache (fast) or generates
-      // a new summary (slow but cached for next time).
-      ;(async () => {
-        for (const topic of toPregen) {
-          if (cancelled) break
-          try {
-            await fetch('/api/summary', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                topicId: topic.topicId,
-                title: topic.title,
-                topicSummary: topic.summary || '',
-                articles: (topic.articles || []).map((a) => ({
-                  title: a.title,
-                  description: a.description,
-                  sourceName: a.sourceName,
-                  leaning: a.leaning,
-                })),
-              }),
-            }).catch(() => {}) // fire-and-forget per topic, but sequential
-          } catch {
-            // silent
-          }
-          // Small delay between requests to avoid burst
-          await new Promise((r) => setTimeout(r, 500))
-        }
-        if (!cancelled) {
-          console.log(`[summary-pre-gen] Complete`)
-        }
-      })()
-    }, 3000) // 3s delay after page load — let the feed render first
-
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [topics, category])
+  // ── NOTE: Client-side summary pre-generation was REMOVED to avoid
+  // burning Vercel Fluid Compute CPU. Every page visit was firing 12
+  // /api/summary calls (each potentially calling the AI = 2-5s CPU).
+  // The cron job (api/cron/refresh-all) now handles summary pre-generation
+  // server-side, once per hour. When a user opens a topic, the summary
+  // generates on-demand (1 call, cached forever in Firebase).
 
   // --- Referral dialog state ---
   const [referralOpen, setReferralOpen] = useState(false)
