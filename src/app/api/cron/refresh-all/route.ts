@@ -36,15 +36,21 @@ export const maxDuration = 60
  *   topic, the summary is already there — no waiting for the AI.
  *
  * Security: requires a CRON_SECRET query param to prevent public abuse.
+ * Set the CRON_SECRET env var on Vercel. If not set, falls back to a dev
+ * secret for local testing.
  *
- * Trigger:
- *   - Vercel Cron (vercel.json) every 60 minutes in production
- *   - System crontab in the dev sandbox for testing
+ * Trigger: cron-job.org (free external cron service)
+ *   URL: https://neutralwire.org/api/cron/refresh-all?secret=<CRON_SECRET>
+ *   Schedule: every 60 minutes
+ *   The endpoint returns 200 immediately (via after()) so cron-job.org's
+ *   30s timeout is never hit. The actual refresh runs in the background
+ *   for up to maxDuration (60s on Vercel Hobby with Fluid Compute).
  */
 export async function GET(req: NextRequest) {
   const t0 = Date.now()
 
   // ── Auth: require CRON_SECRET ──
+  // cron-job.org includes the secret in the URL query string.
   const secret = req.nextUrl.searchParams.get('secret') || ''
   const expectedSecret = process.env.CRON_SECRET || 'neutralwire-cron-dev'
   if (secret !== expectedSecret) {
@@ -57,8 +63,14 @@ export async function GET(req: NextRequest) {
   ]
   const myCountryCodes = ['GB', 'US', 'IN']
 
+  // Use the production origin for internal fetch calls (summary pre-gen).
+  // On Vercel serverless, req.nextUrl.origin is usually correct, but we
+  // fall back to the env var to be safe.
+  const origin = process.env.NEXT_PUBLIC_SITE_URL || req.nextUrl.origin
+
   // Use `after()` so we return 200 immediately and let the refreshes run
-  // in the background.
+  // in the background. This is critical for cron-job.org, which has a
+  // 30-second timeout on the free plan — we return in <1s.
   after(async () => {
     console.log(`[cron/refresh-all] Starting full refresh at ${new Date().toISOString()}`)
 
@@ -112,7 +124,7 @@ export async function GET(req: NextRequest) {
       // cache/offline) and taps a topic, the neutral summary is already
       // cached in Firebase and loads instantly.
       if (fresh && fresh.topics.length > 0) {
-        await preGenerateSummaries(fresh.topics.slice(0, 15), req.nextUrl.origin)
+        await preGenerateSummaries(fresh.topics.slice(0, 15), origin)
       }
     } catch (err) {
       console.warn(`[cron/refresh-all] relevant/GB failed:`, err)
@@ -123,7 +135,7 @@ export async function GET(req: NextRequest) {
       (r) => r.status === 'fulfilled' && r.value.cat === 'world',
     )
     if (worldResult && worldResult.status === 'fulfilled' && worldResult.value.topics.length > 0) {
-      await preGenerateSummaries(worldResult.value.topics.slice(0, 8), req.nextUrl.origin)
+      await preGenerateSummaries(worldResult.value.topics.slice(0, 8), origin)
     }
 
     console.log(`[cron/refresh-all] Complete in ${Date.now() - t0}ms`)
