@@ -35,25 +35,33 @@ export const maxDuration = 60
  *   means when a user opens the app from cache (offline PWA) and taps a
  *   topic, the summary is already there — no waiting for the AI.
  *
- * Security: requires a CRON_SECRET query param to prevent public abuse.
- * Set the CRON_SECRET env var on Vercel. If not set, falls back to a dev
- * secret for local testing.
+ * Security: the secret below is hardcoded (not an env var) so the user
+ * doesn't need to configure anything. The URL itself acts as the secret —
+ * anyone without the exact URL cannot trigger a refresh. The endpoint is
+ * also idempotent and rate-limited per category (3 min gap), so even if
+ * it's abused the impact is minimal.
  *
  * Trigger: cron-job.org (free external cron service)
- *   URL: https://neutralwire.org/api/cron/refresh-all?secret=<CRON_SECRET>
+ *   URL (copy this exactly into cron-job.org):
+ *     https://neutralwire.org/api/cron/refresh-all?secret=965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd
  *   Schedule: every 60 minutes
+ *   Method: GET
  *   The endpoint returns 200 immediately (via after()) so cron-job.org's
  *   30s timeout is never hit. The actual refresh runs in the background
  *   for up to maxDuration (60s on Vercel Hobby with Fluid Compute).
  */
+
+// Hardcoded cron secret. The URL containing this secret is the only thing
+// needed to trigger a refresh — no env vars to set. If this secret ever
+// needs rotating, change it here and update the cron-job.org URL.
+const CRON_SECRET = '965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd'
+
 export async function GET(req: NextRequest) {
   const t0 = Date.now()
 
-  // ── Auth: require CRON_SECRET ──
-  // cron-job.org includes the secret in the URL query string.
+  // ── Auth: require the hardcoded secret ──
   const secret = req.nextUrl.searchParams.get('secret') || ''
-  const expectedSecret = process.env.CRON_SECRET || 'neutralwire-cron-dev'
-  if (secret !== expectedSecret) {
+  if (secret !== CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
