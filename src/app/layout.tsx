@@ -125,50 +125,6 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        {/* ── Initial loading splash ──
-            Injected by an inline script (NOT JSX) so React doesn't try to
-            hydrate it (which causes a hydration mismatch). The script
-            creates the splash div, appends it to <body>, and removes it
-            once React has mounted the app. This gives the PWA a fast,
-            branded black loading screen in <100ms, then the app fades in.
-
-            Using document.write here is safe because this script runs
-            synchronously during HTML parsing — before React hydrates. */}
-        <script dangerouslySetInnerHTML={{ __html: `
-          (function() {
-            // Create the splash element
-            var splash = document.createElement('div');
-            splash.id = 'initial-splash';
-            splash.style.cssText = 'position:fixed;inset:0;background:#000;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;transition:opacity 0.3s ease-out;';
-            splash.innerHTML = '<div style="font-size:clamp(32px,9vw,52px);font-weight:800;letter-spacing:-0.02em;background:linear-gradient(135deg,#fff 0%,#a0a0a0 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px;">NeutralWire</div>'
-              + '<div style="font-size:13px;color:#666;font-weight:400;margin-bottom:36px;">See how every outlet spins the same story</div>'
-              + '<div style="width:28px;height:28px;border:2.5px solid rgba(255,255,255,0.12);border-top-color:#fff;border-radius:50%;animation:nw-spin 0.8s linear infinite;"></div>'
-              + '<style>@keyframes nw-spin{to{transform:rotate(360deg)}}</style>';
-            document.body.appendChild(splash);
-
-            // Hide the splash once React has mounted (or after 3s fallback).
-            function hideSplash() {
-              var s = document.getElementById('initial-splash');
-              if (s) {
-                s.style.opacity = '0';
-                setTimeout(function() { if (s.parentNode) s.parentNode.removeChild(s); }, 300);
-              }
-            }
-            // Try to hide as soon as the app root has content.
-            var checkCount = 0;
-            var checkInterval = setInterval(function() {
-              checkCount++;
-              var root = document.getElementById('__next') || document.querySelector('main, [role=main]');
-              if ((root && root.children.length > 0) || checkCount > 30) {
-                clearInterval(checkInterval);
-                // Small delay so React can paint before we remove the splash
-                setTimeout(hideSplash, 50);
-              }
-            }, 100);
-            // Fallback: hide after 3s no matter what
-            setTimeout(hideSplash, 3000);
-          })();
-        `}} />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

@@ -1,12 +1,12 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 
-// v16: branded black loading screen, /api/summary SWR caching (offline
-//      summaries), /api/topic SWR caching (offline topic detail, don't
-//      cache errors), faster first load via app-shell precaching.
+// v17: removed branded loading splash (user request), kept minimal offline
+//      page only. /api/summary + /api/topic SWR caching retained.
+// v16: branded loading screen, /api/summary SWR, /api/topic SWR.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
 // v12: SWR. v11: fire-and-forget tracking. v10: fixed notificationclick.
-const CACHE_NAME = 'neutralwire-v17'
+const CACHE_NAME = 'neutralwire-v18'
 const STATIC_ASSETS = ['/manifest.json', '/favicon-32.png', '/icon-192.png', '/icon-512.png', '/']
 
 // ---------- Install ----------
@@ -42,39 +42,19 @@ self.addEventListener('activate', (event) => {
   self.clients.claim()
 })
 
-// ---------- Branded loading screen (inline HTML) ----------
-// Shown when: (a) offline and no cached HTML, or (b) first-ever load with
-// no cached app shell. Black background, big "NeutralWire" wordmark, and
-// a subtle pulsing animation. Auto-reloads when connection returns.
-const LOADING_SCREEN_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>NeutralWire</title><style>
+// ---------- Minimal offline page (inline HTML) ----------
+// Shown only when: offline AND no cached HTML at all. Just a simple
+// "waiting for connection" message that auto-reloads when back online.
+// (The app's own offline banner handles the normal offline case where
+// cached HTML + cached API responses are available.)
+const OFFLINE_PAGE_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>NeutralWire — Offline</title><style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;overflow:hidden}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#000;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px;-webkit-font-smoothing:antialiased}
-.logo{font-size:clamp(32px,9vw,52px);font-weight:800;letter-spacing:-0.02em;background:linear-gradient(135deg,#fff 0%,#a0a0a0 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px;animation:fadeUp .6s ease-out}
-.tagline{font-size:13px;color:#666;font-weight:400;margin-bottom:36px;animation:fadeUp .6s ease-out .1s both}
-.spinner{width:28px;height:28px;border:2.5px solid rgba(255,255,255,.12);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:20px}
-@keyframes spin{to{transform:rotate(360deg)}}
-@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.skeleton{width:100%;max-width:380px;display:flex;flex-direction:column;gap:10px;opacity:.5}
-.skel-card{background:#111;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:8px}
-.skel-img{height:80px;background:#1a1a1a;border-radius:6px}
-.skel-line{height:9px;background:#1a1a1a;border-radius:3px}
-.skel-line.w70{width:70%}.skel-line.w50{width:50%}.skel-line.w90{width:90%}
-.status{position:fixed;bottom:32px;left:0;right:0;text-align:center;font-size:12px;color:#555}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;text-align:center}
+.status{font-size:15px;color:#888}
 </style></head><body>
-<div class="logo">NeutralWire</div>
-<div class="tagline">See how every outlet spins the same story</div>
-<div class="spinner"></div>
-<div class="skeleton">
-<div class="skel-card"><div class="skel-img"></div><div class="skel-line w90"></div><div class="skel-line w50"></div></div>
-<div class="skel-card"><div class="skel-line w70"></div><div class="skel-line w50"></div></div>
-</div>
-<div class="status" id="status">Loading…</div>
+<div class="status" id="status">Waiting for connection… NeutralWire will load automatically when you're back online.</div>
 <script>
-// If we're offline, show "Offline mode" and auto-reload when back.
-if(!navigator.onLine){document.getElementById('status').textContent='Offline — waiting for connection…';}
-window.addEventListener('online',function(){document.getElementById('status').textContent='Back online — reloading…';setTimeout(function(){window.location.reload()},500)});
-// Poll for connection every 4s (covers cases where 'online' event doesn't fire)
+window.addEventListener('online',function(){window.location.reload()});
 setInterval(function(){fetch('/',{method:'HEAD',cache:'no-store'}).then(function(){window.location.reload()}).catch(function(){})},4000);
 </script>
 </body></html>`
@@ -100,8 +80,8 @@ self.addEventListener('fetch', (event) => {
           // Network failed (offline) — fall back to cached HTML
           const cached = await caches.match(req)
           if (cached) return cached
-          // No cache either — return the branded loading screen.
-          return new Response(LOADING_SCREEN_HTML, {
+          // No cache either — return the minimal offline page.
+          return new Response(OFFLINE_PAGE_HTML, {
             headers: { 'Content-Type': 'text/html' },
           })
         }
