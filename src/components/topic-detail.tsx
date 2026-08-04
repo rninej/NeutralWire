@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { motion } from 'framer-motion'
 import {
   X,
   Clock,
@@ -65,6 +66,14 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   // response (slim=1) strips the articles array. This guarantees the
   // "All Sources" section always has articles to show.
   const [displayTopic, setDisplayTopic] = React.useState<TopicArticle | null>(null)
+  // ── Sticky Ask AI button ──
+  // The "Ask AI" button lives inside the Neutral Summary card. When the
+  // user scrolls past it, we show a compact Ask AI button in the sticky
+  // top bar (between Close and Share) so it's always accessible.
+  // We track this by observing the summary card's position relative to
+  // the viewport via a scroll listener.
+  const [askAiSticky, setAskAiSticky] = React.useState(false)
+  const summaryCardRef = React.useRef<HTMLDivElement | null>(null)
 
   // ── Like/dislike persistence ──
   // Load saved vote from localStorage on mount (instant, no Firebase read needed).
@@ -159,6 +168,35 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   React.useEffect(() => {
     setImgError(false)
   }, [topic.topicId, topic.imageUrl])
+
+  // ── Sticky Ask AI: detect when the summary card scrolls out of view ──
+  // When the bottom of the summary card is above the top bar (h-14 = 56px),
+  // we show the compact Ask AI button in the top bar. This uses a scroll
+  // listener (not IntersectionObserver) because the overlay scrolls within
+  // its own container, not the window.
+  React.useEffect(() => {
+    const container = document.querySelector('[role="dialog"]') as HTMLElement | null
+    if (!container) return
+    const onScroll = () => {
+      const card = summaryCardRef.current
+      if (!card) {
+        setAskAiSticky(false)
+        return
+      }
+      // If the bottom of the summary card is above the top bar (56px) +
+      // some margin, the Ask AI button is out of view → show sticky.
+      const rect = card.getBoundingClientRect()
+      setAskAiSticky(rect.bottom < 70)
+    }
+    container.addEventListener('scroll', onScroll, { passive: true })
+    // Also check on window scroll (some browsers scroll the window)
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return () => {
+      container.removeEventListener('scroll', onScroll)
+      window.removeEventListener('scroll', onScroll)
+    }
+  }, [topic.topicId])
 
   // ── Fetch the FULL topic (with articles) from /api/topic/[id] ──
   // The slim feed response (slim=1) strips the articles array to save
@@ -326,18 +364,45 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   const rightArticles = articles.filter((a) => a.leaning === 'right')
 
   return (
-    <div
+    <motion.div
       className="fixed inset-0 z-50 overflow-y-auto bg-background"
       role="dialog"
       aria-modal="true"
       aria-label={topic.title}
+      initial={{ opacity: 0, y: 40 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 40 }}
+      transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
     >
-      {/* Sticky top bar with close + like/dislike + share */}
+      {/* Sticky top bar with close + sticky Ask AI + like/dislike + share */}
       <div className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
         </Button>
+        {/* ── Sticky Ask AI button ──
+            Appears in the top bar (between Close and the like/dislike group)
+            ONLY when the user has scrolled past the original Ask AI button
+            in the Neutral Summary card. Smooth fade/slide-in via CSS
+            transition. Uses the same purple→blue→cyan gradient as the
+            original so it's recognisable. */}
+        <div
+          className={`overflow-hidden transition-all duration-300 ${
+            askAiSticky ? 'max-w-32 opacity-100' : 'max-w-0 opacity-0'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => setAskAiOpen(true)}
+            className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity whitespace-nowrap"
+            aria-label="Ask AI about this story"
+          >
+            <span className="flex items-center gap-1.5 rounded-full bg-background px-3 py-1.5 text-xs font-semibold">
+              <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
+              <span>Ask AI</span>
+            </span>
+          </button>
+        </div>
         <div className="ml-auto flex items-center gap-2">
           {/* Like + Dislike buttons (left of Share) */}
           <div className="flex items-center gap-1 rounded-full border bg-muted/40 p-0.5">
@@ -464,7 +529,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
         </div>
 
         {/* Neutral in-depth summary */}
-        <Card className="mb-6 p-5 md:p-6">
+        <Card ref={summaryCardRef} className="mb-6 p-5 md:p-6">
           <div className="mb-4 flex items-center gap-2">
             <TrendingUp className="h-5 w-5 text-muted-foreground" />
             <h2 className="text-base font-bold">Neutral Summary</h2>
@@ -486,7 +551,12 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
               Could not generate summary. Showing original descriptions below.
             </div>
           ) : (
-            <div className="space-y-4 text-base leading-relaxed text-foreground/90 md:text-[17px] md:leading-[1.7]">
+            <motion.div
+              className="space-y-4 text-base leading-relaxed text-foreground/90 md:text-[17px] md:leading-[1.7]"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+            >
               {(() => {
                 // The LLM may use \n\n or \n between heading and paragraph.
                 // Normalise: split on \n\n first, then within each chunk,
@@ -558,7 +628,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
 
                 return elements
               })()}
-            </div>
+            </motion.div>
           )}
         </Card>
 
@@ -601,7 +671,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           onClose={() => setAskAiOpen(false)}
         />
       )}
-    </div>
+    </motion.div>
   )
 }
 

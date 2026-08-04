@@ -130,6 +130,153 @@ const COUNTRY_CONFIG: Record<string, CountryConfig> = {
     weakTerms: ['dublin', 'cork', 'galway', 'dail', 'taoiseach', 'leo varadkar'],
     blocklist: ['irish setter', 'irish coffee'],
   },
+  IN: {
+    name: 'India',
+    code: 'IN',
+    gdeltSourceCountries: ['IN'],
+    strongTerms: ['india', 'indian', 'modi', 'delhi', 'mumbai', 'bengaluru', 'chennai'],
+    weakTerms: ['kolkata', 'hyderabad', 'pune', 'ahmedabad', 'jaipur', 'lucknow',
+      'bhopal', 'patna', 'surat', 'kanpur', 'nagpur', 'indore', 'thane',
+      'lok sabha', 'rajya sabha', 'parliament', 'bharatiya janata', 'bjp',
+      'congress', 'rahul gandhi', 'narendra modi', 'amit shah', 'rashtriya',
+      'supreme court of india', 'reserve bank of india', 'rbi', 'isro',
+      'uttar pradesh', 'maharashtra', 'karnataka', 'tamil nadu', 'kerala',
+      'west bengal', 'gujarat', 'rajasthan', 'punjab', 'haryana', 'madhya pradesh',
+      'bihar', 'andhra pradesh', 'telangana', 'odisha', 'assam', 'jammu',
+      'kashmir', 'bollywood', 'tata', 'reliance', 'adani', 'infosys', 'wipro',
+      'hindu', 'sikh', 'muslim', 'jaish', 'lashkar', 'naxal'],
+    blocklist: ['indiana', 'indianapolis', 'indian ocean', 'west indian'],
+  },
+  HK: {
+    name: 'Hong Kong',
+    code: 'HK',
+    gdeltSourceCountries: ['HK'],
+    strongTerms: ['hong kong', 'hongkong'],
+    weakTerms: ['hong kong', 'hongkong', 'carrie lam', 'john lee',
+      'legco', 'legislative council', 'basic law', 'one country two systems',
+      'central', 'mong kok', 'causeway bay', 'kowloon', 'new territories',
+      'hksi', 'hang seng'],
+    blocklist: ['hong kong disneyland'],
+  },
+  SG: {
+    name: 'Singapore',
+    code: 'SG',
+    gdeltSourceCountries: ['SG'],
+    strongTerms: ['singapore', 'singaporean'],
+    weakTerms: ['lee hsien loong', 'lawrence wong', 'pap', 'people\u2019s action party',
+      'parliament of singapore', 'istana', 'marina bay', 'sentosa', 'changi',
+      'jurong', 'woodlands', 'temasek', 'gic', 'mas', 'sbs transit', 'smrt',
+      'singapore airlines'],
+    blocklist: ['singapore airlines flight'],
+  },
+  NZ: {
+    name: 'New Zealand',
+    code: 'NZ',
+    gdeltSourceCountries: ['NZ'],
+    strongTerms: ['new zealand', 'kiwi', 'wellington', 'auckland'],
+    weakTerms: ['christchurch', 'hamilton', 'dunedin', 'tauranga', 'napier',
+      'parliament of new zealand', 'jacinda', 'chris hipkins', 'christopher luxon',
+      'national party', 'labour party', 'aotearoa', 'treasury nz'],
+    blocklist: ['kiwi shoe polish', 'kiwi bird'],
+  },
+  ES: {
+    name: 'Spain',
+    code: 'ES',
+    gdeltSourceCountries: ['ES'],
+    strongTerms: ['spain', 'spanish', 'madrid'],
+    weakTerms: ['barcelona', 'seville', 'valencia', 'zaragoza', 'malaga',
+      'sanchez', 'pedro sanchez', 'cortes generales', 'congreso', 'senado',
+      'partido popular', 'psoe', 'vox', 'catalonia', 'catalan', 'basque'],
+    blocklist: ['spanish flu', 'spanish moss'],
+  },
+  IT: {
+    name: 'Italy',
+    code: 'IT',
+    gdeltSourceCountries: ['IT'],
+    strongTerms: ['italy', 'italian', 'rome'],
+    weakTerms: ['milan', 'naples', 'turin', 'florence', 'bologna', 'venice',
+      'meloni', 'giorgia meloni', 'parlamento', 'camera', 'senato',
+      'forza italia', 'lega', 'partito democratico', 'vatican', 'pope'],
+    blocklist: ['italian dressing', 'italian greyhound'],
+  },
+  NL: {
+    name: 'Netherlands',
+    code: 'NL',
+    gdeltSourceCountries: ['NL'],
+    strongTerms: ['netherlands', 'dutch', 'amsterdam'],
+    weakTerms: ['the hague', 'rotterdam', 'utrecht', 'eindhoven', 'tilders',
+      'rutte', 'mark rutte', 'staten-generaal', 'tweede kamer', 'eerste kamer',
+      'pvv', 'vvd', 'd66', 'amstelveen'],
+    blocklist: ['dutch oven', 'dutch bros'],
+  },
+  BR: {
+    name: 'Brazil',
+    code: 'BR',
+    gdeltSourceCountries: ['BR'],
+    strongTerms: ['brazil', 'brazilian'],
+    weakTerms: ['brasilia', 'sao paulo', 'rio de janeiro', 'salvador',
+      'fortaleza', 'lula', 'partido dos trabalhadores', 'congresso',
+      'senado', 'camara', 'stf', 'supremo', 'bolsonaro'],
+    blocklist: ['brazil nuts', 'brazilian wax'],
+  },
+  ZA: {
+    name: 'South Africa',
+    code: 'ZA',
+    gdeltSourceCountries: ['ZA'],
+    strongTerms: ['south africa', 'south african'],
+    weakTerms: ['pretoria', 'cape town', 'johannesburg', 'durban', 'bloemfontein',
+      'anc', 'eff', 'parliament of south africa', 'ramaphosa',
+      'cyril ramaphosa', 'zuma', 'jacob zuma'],
+    blocklist: ['south african airways'],
+  },
+  NG: {
+    name: 'Nigeria',
+    code: 'NG',
+    gdeltSourceCountries: ['NG'],
+    strongTerms: ['nigeria', 'nigerian'],
+    weakTerms: ['lagos', 'abuja', 'kano', 'ibadan', 'port harcourt', 'benin city',
+      'national assembly', 'tinubu', 'bola tinubu', 'apc', 'pdp', 'naira'],
+    blocklist: ['nigerian dwarf'],
+  },
+  AE: {
+    name: 'United Arab Emirates',
+    code: 'AE',
+    gdeltSourceCountries: ['AE'],
+    strongTerms: ['united arab emirates', 'uae', 'emirati'],
+    weakTerms: ['dubai', 'abu dhabi', 'sharjah', 'ajman', 'ras al khaimah',
+      'fujairah', 'umm al quwain', 'mohammed bin rashid', 'mbz',
+      'emirates news agency'],
+    blocklist: ['uae football'],
+  },
+  SA: {
+    name: 'Saudi Arabia',
+    code: 'SA',
+    gdeltSourceCountries: ['SA'],
+    strongTerms: ['saudi arabia', 'saudi'],
+    weakTerms: ['riyadh', 'jeddah', 'mecca', 'medina', 'dammam', 'mbs',
+      'mohammed bin salman', 'salman', 'shura council', 'aramco'],
+    blocklist: ['saudi arabian airlines'],
+  },
+  PK: {
+    name: 'Pakistan',
+    code: 'PK',
+    gdeltSourceCountries: ['PK'],
+    strongTerms: ['pakistan', 'pakistani'],
+    weakTerms: ['islamabad', 'karachi', 'lahore', 'peshawar', 'quetta',
+      'multan', 'faisalabad', 'rawalpindi', 'national assembly',
+      'shehbaz sharif', 'imran khan', 'pti', 'pml-n', 'ppp'],
+    blocklist: ['pakistani mango'],
+  },
+  BD: {
+    name: 'Bangladesh',
+    code: 'BD',
+    gdeltSourceCountries: ['BD'],
+    strongTerms: ['bangladesh', 'bangladeshi'],
+    weakTerms: ['dhaka', 'chittagong', 'khulna', 'rajshahi', 'sylhet',
+      'jatiya sangsad', 'hasina', 'sheikh hasina', 'yunus', 'muhammad yunus',
+      'awami league', 'bnp'],
+    blocklist: ['bangladesh tiger'],
+  },
 }
 
 // ISO country code → GDELT sourcecountry filter value (for backward compat)
@@ -439,6 +586,56 @@ const COUNTRY_KEYWORDS_GDELT: Record<string, string[]> = {
     'supreme court', 'fbi', 'cia', 'doj', 'trump', 'biden', 'harris',
     'new york', 'los angeles', 'chicago', 'houston', 'phoenix',
   ],
+  IN: [
+    'india', 'indian', 'delhi', 'new delhi', 'mumbai', 'bombay', 'bengaluru',
+    'bangalore', 'chennai', 'madras', 'kolkata', 'calcutta', 'hyderabad',
+    'pune', 'ahmedabad', 'jaipur', 'lucknow', 'modi', 'narendra modi',
+    'amit shah', 'rahul gandhi', 'bjp', 'congress', 'lok sabha', 'rajya sabha',
+    'parliament', 'supreme court of india', 'reserve bank of india', 'rbi',
+    'isro', 'uttar pradesh', 'maharashtra', 'karnataka', 'tamil nadu', 'kerala',
+    'west bengal', 'gujarat', 'rajasthan', 'punjab', 'haryana', 'madhya pradesh',
+    'bihar', 'telangana', 'jammu', 'kashmir', 'bollywood', 'tata', 'reliance',
+    'adani', 'infosys', 'wipro', 'hindu', 'sikh', 'naxal', 'jaish', 'lashkar',
+    'narendra', 'hindenburg',
+  ],
+  HK: ['hong kong', 'hongkong', 'carrie lam', 'john lee', 'legco',
+    'legislative council', 'basic law', 'mong kok', 'causeway bay', 'kowloon',
+    'new territories', 'hang seng'],
+  SG: ['singapore', 'singaporean', 'lee hsien loong', 'lawrence wong', 'pap',
+    'people\u2019s action party', 'istana', 'marina bay', 'sentosa', 'changi',
+    'jurong', 'temasek', 'smrt'],
+  NZ: ['new zealand', 'kiwi', 'wellington', 'auckland', 'christchurch',
+    'hamilton', 'jacinda', 'chris hipkins', 'christopher luxon', 'aotearoa'],
+  FR: ['france', 'french', 'paris', 'lyon', 'marseille', 'macron',
+    'elysee', 'national assembly'],
+  DE: ['germany', 'german', 'berlin', 'munich', 'hamburg', 'merz', 'bundestag',
+    'frankfurt'],
+  JP: ['japan', 'japanese', 'tokyo', 'osaka', 'kyoto', 'diet', 'abe', 'kishida'],
+  AU: ['australia', 'australian', 'canberra', 'sydney', 'melbourne', 'brisbane',
+    'perth', 'parliament house'],
+  CA: ['canada', 'canadian', 'ottawa', 'toronto', 'vancouver', 'montreal',
+    'parliament hill', 'trudeau'],
+  IE: ['ireland', 'irish', 'dublin', 'cork', 'galway', 'dail', 'taoiseach'],
+  ES: ['spain', 'spanish', 'madrid', 'barcelona', 'seville', 'valencia',
+    'sanchez', 'cortes generales', 'catalonia', 'catalan'],
+  IT: ['italy', 'italian', 'rome', 'milan', 'naples', 'turin', 'florence',
+    'meloni', 'parlamento', 'vatican', 'pope'],
+  NL: ['netherlands', 'dutch', 'amsterdam', 'the hague', 'rotterdam',
+    'utrecht', 'rutte', 'tweede kamer'],
+  BR: ['brazil', 'brazilian', 'brasilia', 'sao paulo', 'rio de janeiro',
+    'lula', 'bolsonaro', 'congresso', 'supremo'],
+  ZA: ['south africa', 'south african', 'pretoria', 'cape town',
+    'johannesburg', 'durban', 'anc', 'ramaphosa', 'zuma'],
+  NG: ['nigeria', 'nigerian', 'lagos', 'abuja', 'kano', 'ibadan',
+    'tinubu', 'apc', 'pdp', 'naira'],
+  AE: ['united arab emirates', 'uae', 'emirati', 'dubai', 'abu dhabi',
+    'sharjah', 'mohammed bin rashid', 'aramco'],
+  SA: ['saudi arabia', 'saudi', 'riyadh', 'jeddah', 'mecca', 'medina',
+    'mohammed bin salman', 'aramco'],
+  PK: ['pakistan', 'pakistani', 'islamabad', 'karachi', 'lahore', 'peshawar',
+    'quetta', 'shehbaz sharif', 'imran khan', 'pti'],
+  BD: ['bangladesh', 'bangladeshi', 'dhaka', 'chittagong', 'khulna',
+    'sheikh hasina', 'yunus', 'awami league'],
 }
 
 /**
@@ -906,75 +1103,37 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
   return topics
 }
 
-// ---------- Main: aggregate GDELT articles for a country ----------
-/**
- * Fetch + cluster UK (or any country) news from GDELT.
- *
- * @param countryCode ISO 3166-1 alpha-2 code (e.g. "GB", "US")
- * @param limit max topics to return
- * @returns { topics, articleCount, sourceCount }
- */
-export async function aggregateMyCountryViaGdelt(
+// ---------- RSS fallback with AI country filter ----------
+// Used when GDELT is unavailable (429, query rejected, network error).
+// Fetches from curated RSS sources for the country, then applies the AI
+// country filter to remove international stories those outlets covered.
+// Falls back to keyword filtering (isAboutCountry) if the AI fails.
+async function rssFallbackWithAIFilter(
   countryCode: string,
-  limit: number = 40,
+  cc: string,
 ): Promise<{ topics: TopicArticle[]; articleCount: number; sourceCount: number }> {
-  const cc = countryCode.toUpperCase()
-  const config = COUNTRY_CONFIG[cc] || COUNTRY_CONFIG[cc === 'UK' ? 'GB' : '']
-  const gdeltCountry = COUNTRY_TO_GDELT[cc] || COUNTRY_TO_GDELT[cc === 'UK' ? 'GB' : ''] || null
-  if (!gdeltCountry || !config) {
-    console.warn(`[gdelt] No country config for ${cc}, returning empty`)
-    return { topics: [], articleCount: 0, sourceCount: 0 }
-  }
-
-  // ── GDELT query: search for articles ABOUT the country ──
-  // Per the spec: use the country's strong terms as the query (not just
-  // sourcecountry). This finds articles from ANY outlet that mention the UK,
-  // not just UK-based outlets. sourcecountry is used as a scoring boost.
-  const strongQuery = config.strongTerms
-    .map((t) => `"${t}"`)
-    .join(' OR ')
-  const query = `(${strongQuery}) sourcelang:english`
-  const url = `${GDELT_API_URL}?query=${encodeURIComponent(query)}&mode=ArtList&maxrecords=250&format=json&sort=DateDesc&timewindow=1d`
-
-  let raw: GdeltArticle[] = []
   try {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(20000),
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; NeutralWireBot/1.0; +https://neutralwire.org)',
-        // Referer is REQUIRED — without it GDELT returns 429 for server-side requests
-        Referer: 'https://neutralwire.org',
-        Accept: 'application/json',
-      },
-      cache: 'no-store',
+    const { aggregateCategory } = await import('@/lib/news-aggregator')
+    const { sourcesForCountry } = await import('@/lib/country-detect')
+    const countrySourceIds = sourcesForCountry(countryCode)
+    const rssResult = await aggregateCategory('mycountry', {
+      limit: 40,
+      minCoverage: 1,
+      countrySourceIds,
+      countryCode: countryCode,
     })
-    if (!res.ok) {
-      console.warn(`[gdelt] API returned ${res.status} for ${cc} — falling back to RSS aggregator`)
-      // GDELT failed (429 rate limit, 500, etc.) — fall back to the RSS
-      // aggregator which fetches from curated UK sources (BBC, Guardian, etc.)
-      // This ensures My Country always has news, even when GDELT is unavailable.
-      try {
-        const { aggregateCategory } = await import('@/lib/news-aggregator')
-        const { sourcesForCountry } = await import('@/lib/country-detect')
-        const countrySourceIds = sourcesForCountry(countryCode)
-        const rssResult = await aggregateCategory('mycountry', {
-          limit: 40,
-          minCoverage: 1,
-          countrySourceIds,
-          countryCode: countryCode,
-        })
-        console.log(`[gdelt] RSS fallback for ${cc}: ${rssResult.topics.length} topics from ${rssResult.sourceCount} sources`)
+    console.log(`[gdelt] RSS fallback for ${cc}: ${rssResult.topics.length} topics from ${rssResult.sourceCount} sources`)
 
-        // ── Apply the AI country filter to RSS results too ──
-        // RSS sources are UK-based but cover international news. We need to
-        // filter out non-UK stories just like we do for GDELT.
-        if (rssResult.topics.length > 0) {
-          const countryDisplay = COUNTRY_DISPLAY[cc] || COUNTRY_TO_GDELT[cc] || cc
-          const titleList = rssResult.topics
-            .map((t, i) => `${i + 1}. ${t.title}`)
-            .join('\n')
+    // Apply the AI country filter to RSS results too.
+    // RSS sources are country-based but cover international news. We need
+    // to filter out non-country stories just like we do for GDELT.
+    if (rssResult.topics.length > 0) {
+      const countryDisplay = COUNTRY_DISPLAY[cc] || COUNTRY_TO_GDELT[cc] || cc
+      const titleList = rssResult.topics
+        .map((t, i) => `${i + 1}. ${t.title}`)
+        .join('\n')
 
-          const aiSystemPrompt = `You are a news editor for a ${countryDisplay} news app. You are given a list of news headlines from ${countryDisplay} news outlets. Your job is to identify which stories are ACTUALLY ABOUT ${countryDisplay} (or directly affect ${countryDisplay} people), and which are international stories that ${countryDisplay} outlets happened to cover.
+      const aiSystemPrompt = `You are a news editor for a ${countryDisplay} news app. You are given a list of news headlines from ${countryDisplay} news outlets. Your job is to identify which stories are ACTUALLY ABOUT ${countryDisplay} (or directly affect ${countryDisplay} people), and which are international stories that ${countryDisplay} outlets happened to cover.
 
 Rules for KEEPING a story:
 - The story is about events happening IN ${countryDisplay}
@@ -991,80 +1150,156 @@ Rules for REMOVING a story:
 Respond with ONLY the numbers of the stories to KEEP, comma-separated. Example: 1,3,5,7,10
 No explanation, no other text.`
 
-          const aiUserPrompt = `Country: ${countryDisplay}
+      const aiUserPrompt = `Country: ${countryDisplay}
 News headlines from ${countryDisplay} outlets:
 
 ${titleList}
 
 Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the numbers, comma-separated.`
 
-          try {
-            console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Sending ${rssResult.topics.length} titles to AI for country filtering...`)
-            const aiResponse = await callAI({ systemPrompt: aiSystemPrompt, userPrompt: aiUserPrompt, maxTokens: 200 })
+      try {
+        console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Sending ${rssResult.topics.length} titles to AI for country filtering...`)
+        const aiResponse = await callAI({ systemPrompt: aiSystemPrompt, userPrompt: aiUserPrompt, maxTokens: 200 })
 
-            if (aiResponse) {
-              const keepNumbers = aiResponse
-                .replace(/[^0-9,\s]/g, ' ')
-                .split(/[,\s]+/)
-                .map((s) => s.trim())
-                .filter((s) => s.length > 0)
-                .map((s) => parseInt(s, 10))
-                .filter((n) => !isNaN(n) && n >= 1 && n <= rssResult.topics.length)
+        if (aiResponse) {
+          const keepNumbers = aiResponse
+            .replace(/[^0-9,\s]/g, ' ')
+            .split(/[,\s]+/)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0)
+            .map((s) => parseInt(s, 10))
+            .filter((n) => !isNaN(n) && n >= 1 && n <= rssResult.topics.length)
 
-              if (keepNumbers.length > 0) {
-                const keepSet = new Set(keepNumbers)
-                const filtered = rssResult.topics.filter((_, i) => keepSet.has(i + 1))
-                console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): AI kept ${filtered.length}/${rssResult.topics.length} stories`)
-                rssResult.topics = filtered
-              } else {
-                console.warn(`[gdelt-ai-filter] ${cc} (RSS fallback): AI returned no valid numbers, using keyword fallback`)
-                rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
-                console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Keyword fallback kept ${rssResult.topics.length} stories`)
-              }
-            } else {
-              console.warn(`[gdelt-ai-filter] ${cc} (RSS fallback): AI returned null, using keyword fallback`)
-              rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
-              console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Keyword fallback kept ${rssResult.topics.length} stories`)
-            }
-          } catch (aiErr) {
-            console.warn(`[gdelt-ai-filter] ${cc} (RSS fallback): AI filter failed, using keyword fallback:`, aiErr)
+          if (keepNumbers.length > 0) {
+            const keepSet = new Set(keepNumbers)
+            const filtered = rssResult.topics.filter((_, i) => keepSet.has(i + 1))
+            console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): AI kept ${filtered.length}/${rssResult.topics.length} stories`)
+            rssResult.topics = filtered
+          } else {
+            console.warn(`[gdelt-ai-filter] ${cc} (RSS fallback): AI returned no valid numbers, using keyword fallback`)
             rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
             console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Keyword fallback kept ${rssResult.topics.length} stories`)
           }
+        } else {
+          console.warn(`[gdelt-ai-filter] ${cc} (RSS fallback): AI returned null, using keyword fallback`)
+          rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
+          console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Keyword fallback kept ${rssResult.topics.length} stories`)
         }
-
-        return rssResult
-      } catch (fallbackErr) {
-        console.warn(`[gdelt] RSS fallback also failed for ${cc}:`, fallbackErr)
-        return { topics: [], articleCount: 0, sourceCount: 0 }
+      } catch (aiErr) {
+        console.warn(`[gdelt-ai-filter] ${cc} (RSS fallback): AI filter failed, using keyword fallback:`, aiErr)
+        rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
+        console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Keyword fallback kept ${rssResult.topics.length} stories`)
       }
     }
-    const data = (await res.json()) as { articles?: GdeltArticle[] }
-    raw = data.articles || []
+
+    return rssResult
   } catch (err) {
-    console.warn(`[gdelt] fetch failed for ${cc} — falling back to RSS aggregator:`, err)
-    // Network error / timeout — also try RSS fallback
+    console.warn(`[gdelt] RSS fallback also failed for ${cc}:`, err)
+    return { topics: [], articleCount: 0, sourceCount: 0 }
+  }
+}
+
+// ---------- Main: aggregate GDELT articles for a country ----------
+/**
+ * Fetch + cluster UK (or any country) news from GDELT.
+ *
+ * @param countryCode ISO 3166-1 alpha-2 code (e.g. "GB", "US")
+ * @param limit max topics to return
+ * @returns { topics, articleCount, sourceCount }
+ */
+export async function aggregateMyCountryViaGdelt(
+  countryCode: string,
+  limit: number = 40,
+): Promise<{ topics: TopicArticle[]; articleCount: number; sourceCount: number }> {
+  const cc = countryCode.toUpperCase()
+  const config = COUNTRY_CONFIG[cc] || COUNTRY_CONFIG[cc === 'UK' ? 'GB' : '']
+  const gdeltCountry = COUNTRY_TO_GDELT[cc] || COUNTRY_TO_GDELT[cc === 'UK' ? 'GB' : ''] || null
+  if (!gdeltCountry) {
+    console.warn(`[gdelt] No GDELT mapping for ${cc}, returning empty`)
+    return { topics: [], articleCount: 0, sourceCount: 0 }
+  }
+
+  // ── GDELT query: search for articles ABOUT the country ──
+  // For countries WITH a full config (UK, US, IN, etc.): use the country's
+  // strong terms as the query. This finds articles from ANY outlet that
+  // mention the country. sourcecountry is used as a scoring boost.
+  //
+  // For countries WITHOUT a config (any other GDELT-supported country):
+  // use sourcecountry:<Country> directly. This returns articles from
+  // outlets IN that country. We then rely on the AI country filter to
+  // remove international stories those outlets covered.
+  const buildStrongQuery = () => {
+    const strongQuery = config.strongTerms
+      .map((t) => `"${t}"`)
+      .join(' OR ')
+    return `(${strongQuery}) sourcelang:english`
+  }
+  const buildSourceCountryQuery = () => `sourcecountry:${gdeltCountry} sourcelang:english`
+
+  let query: string
+  if (config) {
+    query = buildStrongQuery()
+  } else {
+    query = buildSourceCountryQuery()
+  }
+
+  // Helper: fetch from GDELT, returning raw articles or null on any failure.
+  // GDELT sometimes returns a text error page (e.g. "The specified query...")
+  // instead of JSON when it rejects a query — we catch that as a failure.
+  const fetchGdelt = async (q: string): Promise<GdeltArticle[] | null> => {
+    const u = `${GDELT_API_URL}?query=${encodeURIComponent(q)}&mode=ArtList&maxrecords=250&format=json&sort=DateDesc&timewindow=1d`
     try {
-      const { aggregateCategory } = await import('@/lib/news-aggregator')
-      const { sourcesForCountry } = await import('@/lib/country-detect')
-      const countrySourceIds = sourcesForCountry(countryCode)
-      const rssResult = await aggregateCategory('mycountry', {
-        limit: 40,
-        minCoverage: 1,
-        countrySourceIds,
-        countryCode: countryCode,
+      const res = await fetch(u, {
+        signal: AbortSignal.timeout(20000),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; NeutralWireBot/1.0; +https://neutralwire.org)',
+          Referer: 'https://neutralwire.org',
+          Accept: 'application/json',
+        },
+        cache: 'no-store',
       })
-      console.log(`[gdelt] RSS fallback (from catch) for ${cc}: ${rssResult.topics.length} topics`)
-      return rssResult
-    } catch (fallbackErr) {
-      console.warn(`[gdelt] RSS fallback (from catch) also failed for ${cc}:`, fallbackErr)
-      return { topics: [], articleCount: 0, sourceCount: 0 }
+      if (!res.ok) {
+        console.warn(`[gdelt] API returned ${res.status} for ${cc} (query: ${q.slice(0, 60)}...)`)
+        return null
+      }
+      // GDELT sometimes returns a text error page with 200 status — guard
+      // by checking content-type and trying to parse JSON safely.
+      const ct = res.headers.get('content-type') || ''
+      if (!ct.includes('json')) {
+        const text = await res.text()
+        console.warn(`[gdelt] Non-JSON response for ${cc}: ${text.slice(0, 100)}`)
+        return null
+      }
+      const data = (await res.json()) as { articles?: GdeltArticle[] }
+      return data.articles || []
+    } catch (err) {
+      console.warn(`[gdelt] fetch failed for ${cc} (query: ${q.slice(0, 60)}...):`, err)
+      return null
     }
   }
 
+  let raw: GdeltArticle[] = []
+  // 1. Try the primary query (strong-terms for configured countries,
+  //    sourcecountry for generic countries).
+  raw = (await fetchGdelt(query)) || []
+
+  // 2. If the strong-terms query failed AND we have a config, retry with
+  //    sourcecountry. This handles cases where GDELT rejects a complex
+  //    query (too many OR'd terms, etc.) but would accept the simpler
+  //    sourcecountry filter.
+  if (raw.length === 0 && config) {
+    console.log(`[gdelt] ${cc}: strong-terms query returned no results, retrying with sourcecountry...`)
+    raw = (await fetchGdelt(buildSourceCountryQuery())) || []
+    if (raw.length > 0) {
+      console.log(`[gdelt] ${cc}: sourcecountry retry succeeded with ${raw.length} articles`)
+    }
+  }
+
+  // 3. If BOTH GDELT queries failed → fall back to RSS aggregator with
+  //    AI country filter. This ensures My Country always has news.
   if (raw.length === 0) {
-    console.warn(`[gdelt] No articles for ${cc}`)
-    return { topics: [], articleCount: 0, sourceCount: 0 }
+    console.warn(`[gdelt] All GDELT queries failed for ${cc} — falling back to RSS aggregator with AI filter`)
+    return await rssFallbackWithAIFilter(countryCode, cc)
   }
 
   // ── Convert GDELT articles to FeedArticle + score + filter + dedup ──
@@ -1107,45 +1342,59 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
       .join('|')
     if (seenFingerprints.has(fingerprint)) continue
 
-    // ── Scoring (per the spec) ──
+    // ── Scoring ──
+    // For countries WITH a config: score via strong/weak/blocklist terms.
+    // For countries WITHOUT a config (generic sourcecountry fallback):
+    //   - every article starts at score 3 (passes the threshold)
+    //   - sports gets -3 (deprioritized but not removed)
+    //   - the AI country filter (below) does the real relevance filtering
     let score = 0
     const reasons: string[] = []
 
-    // +3 if title contains a strong country term
-    for (const term of config.strongTerms) {
-      if (titleLower.includes(term)) {
-        score += 3
-        reasons.push(`headline mentions ${term}`)
-        break
+    if (config) {
+      // +3 if title contains a strong country term
+      for (const term of config.strongTerms) {
+        if (titleLower.includes(term)) {
+          score += 3
+          reasons.push(`headline mentions ${term}`)
+          break
+        }
       }
-    }
 
-    // +2 if title contains a weak city/region term
-    for (const term of config.weakTerms) {
-      if (titleLower.includes(term)) {
-        score += 2
-        reasons.push(`headline mentions ${term}`)
-        break
+      // +2 if title contains a weak city/region term
+      for (const term of config.weakTerms) {
+        if (titleLower.includes(term)) {
+          score += 2
+          reasons.push(`headline mentions ${term}`)
+          break
+        }
       }
-    }
 
-    // +1 if sourcecountry matches one of the country's candidates
-    const articleSourceCountry = (a.sourcecountry || '').toLowerCase()
-    for (const candidate of config.gdeltSourceCountries) {
-      if (articleSourceCountry === candidate.toLowerCase()) {
-        score += 1
-        reasons.push('source is domestic')
-        break
+      // +1 if sourcecountry matches one of the country's candidates
+      const articleSourceCountry = (a.sourcecountry || '').toLowerCase()
+      for (const candidate of config.gdeltSourceCountries) {
+        if (articleSourceCountry === candidate.toLowerCase()) {
+          score += 1
+          reasons.push('source is domestic')
+          break
+        }
       }
-    }
 
-    // -2 if title contains a false-positive term
-    for (const term of config.blocklist) {
-      if (titleLower.includes(term)) {
-        score -= 2
-        reasons.push(`blocked: ${term}`)
-        break
+      // -2 if title contains a false-positive term
+      for (const term of config.blocklist) {
+        if (titleLower.includes(term)) {
+          score -= 2
+          reasons.push(`blocked: ${term}`)
+          break
+        }
       }
+    } else {
+      // ── Generic fallback (no country config) ──
+      // sourcecountry query already filtered to outlets in this country.
+      // Give a passing base score; the AI filter below removes irrelevant
+      // international stories. sourcecountry match = domestic source.
+      score = 3
+      reasons.push('source is domestic (sourcecountry filter)')
     }
 
     // -3 if title is about sports (deprioritize in My Country)

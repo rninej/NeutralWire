@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { motion } from 'framer-motion'
 import { Clock, ExternalLink, Globe } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
@@ -13,7 +14,13 @@ interface TopicCardProps {
   variant?: 'default' | 'featured' | 'compact' | 'hero' | 'mini'
   defaultOpen?: boolean
   onOpenDetail?: (topic: TopicArticle) => void
+  /** Index within its parent list — used to stagger entrance animations.
+   *  Capped internally so long lists don't get a giant delay. */
+  index?: number
 }
+
+// Shared easing curve for card entrances — smooth, slightly fast-out.
+const EASE_OUT = [0.16, 1, 0.3, 1] as const
 
 /**
  * Format a timestamp as a fixed date/time string.
@@ -56,7 +63,7 @@ function proxyImage(url: string): string {
   return `/api/img?url=${encodeURIComponent(url)}`
 }
 
-export function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDetail }: TopicCardProps) {
+export function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDetail, index = 0 }: TopicCardProps) {
   // Sources are HIDDEN by default on ALL cards (including the featured
   // first card). Users tap "View sources" to expand. Previously the featured
   // card auto-opened its source list, which made the first news story look
@@ -82,6 +89,16 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
     onOpenDetail?.(topic)
   }
 
+  // Stagger delay: cap so the last card in a long list isn't waiting seconds.
+  const staggerDelay = Math.min(index * 0.04, 0.32)
+  const cardMotion = {
+    initial: { opacity: 0, y: 8 },
+    animate: { opacity: 1, y: 0 },
+    transition: { duration: 0.3, delay: staggerDelay, ease: EASE_OUT },
+    whileHover: onOpenDetail ? { scale: 1.02 } : undefined,
+    whileTap: onOpenDetail ? { scale: 0.98 } : undefined,
+  }
+
   // ── MINI variant: compact horizontal card (thumbnail left, title right) ──
   // Used in dense lists where 4+ stories should be visible at once on mobile.
   // Includes a compact bias bar so every card shows the red/blue/grey spectrum.
@@ -89,9 +106,10 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   // so the card looks intentional and pleasant next to image cards.
   if (variant === 'mini') {
     return (
+      <motion.div {...cardMotion} className="h-full">
       <Card
         className={cn(
-          'overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
+          'h-full overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
           !showImage && 'border-l-4 border-l-foreground/20',
           onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
         )}
@@ -126,6 +144,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
           </div>
         </div>
       </Card>
+      </motion.div>
     )
   }
 
@@ -134,9 +153,10 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   const isHero = variant === 'hero'
 
   return (
+    <motion.div {...cardMotion} className="h-full">
     <Card
       className={cn(
-        'overflow-hidden p-0 gap-0 flex flex-col',
+        'h-full overflow-hidden p-0 gap-0 flex flex-col',
         onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
       )}
       onClick={handleCardClick}
@@ -272,6 +292,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         </div>
       )}
     </Card>
+    </motion.div>
   )
 }
 

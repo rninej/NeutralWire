@@ -954,3 +954,57 @@ Stage Summary:
 - Push: success (main → main, 84c2c98..dfef0c0).
 - PAT cleaned from .git/config (grep -c returns 0; remote URL is the bare https://github.com/rninej/NeutralWire.git).
 - Files in commit (2): src/app/page-client.tsx (mobile 2x2 grid from the start, not just sm+), src/components/bias-bar.tsx (labels overlaid inside the bar segments, h-5 taller bar, >8% width gate).
+
+---
+Task ID: 5
+Agent: full-stack-developer
+Task: Add smooth, appealing Framer Motion animations throughout the NeutralWire news PWA app
+
+Work Log:
+- Read previous worklog and the three target files (topic-card.tsx, topic-detail.tsx, page-client.tsx) to understand existing structure and props.
+- Confirmed `framer-motion` ^12.26.2 is installed.
+
+Changes Made:
+
+1. `src/components/topic-card.tsx` (motion wrappers on every card variant):
+   - Imported `motion` from `framer-motion`.
+   - Added an optional `index?: number` prop to `TopicCardProps` (default 0). Used to stagger entrance animations, capped at 0.32s so long lists don't wait.
+   - Defined a shared `cardMotion` props object: `initial {opacity:0, y:8}` → `animate {opacity:1, y:0}`, `transition {duration:0.3, delay:stagger, ease:[0.16,1,0.3,1]}`, `whileHover {scale:1.02}` (only when `onOpenDetail` is truthy), `whileTap {scale:0.98}`.
+   - Wrapped the MINI variant's `<Card>` in `<motion.div {...cardMotion} className="h-full">`.
+   - Wrapped the DEFAULT / HERO / FEATURED / COMPACT variant's `<Card>` in the same `<motion.div>` wrapper.
+   - Added `h-full` to the inner `<Card>` classNames so the card keeps filling the grid cell (motion.div is now the grid item).
+   - All existing click handlers, state, props, and `transition-all hover:ring-2` styles are preserved — motion's scale transform layers on top.
+
+2. `src/components/topic-detail.tsx` (overlay slide-up/down + summary fade-in):
+   - Imported `motion` from `framer-motion`.
+   - Converted the root overlay `<div className="fixed inset-0 z-50 overflow-y-auto bg-background" role="dialog">` to `<motion.div>` with:
+     - `initial={{opacity:0, y:40}}` (starts slightly below + transparent)
+     - `animate={{opacity:1, y:0}}` (slides up + fades in)
+     - `exit={{opacity:0, y:40}}` (slides down + fades out — pairs with AnimatePresence in parent)
+     - `transition={{duration:0.3, ease:[0.32,0.72,0,1]}}`
+   - Kept `role="dialog"`, `aria-modal`, `aria-label` attributes intact.
+   - Wrapped the parsed-summary content `<div>` (inside the Neutral Summary `<Card>`) in a `<motion.div>` with `initial={{opacity:0, y:6}}`, `animate={{opacity:1, y:0}}`, `transition={{duration:0.3, ease:'easeOut'}}`. This runs once when the summary finishes loading (because the motion.div only mounts after `summaryLoading` is false).
+   - Did NOT animate the Ask AI panel (out of scope, conditional render remains instant).
+   - Body scroll lock, history push/popstate handling, Escape-to-close, and the sticky Ask AI button logic all preserved.
+
+3. `src/app/page-client.tsx` (AnimatePresence for detail + tab switching + section stagger):
+   - Imported `{ AnimatePresence, motion }` from `framer-motion`.
+   - Wrapped `<TopicDetail>` with `<AnimatePresence>` and gave it `key={detailTopic.topicId}` so the exit animation runs when `detailTopic` becomes null. All onClose logic (URL cleanup, history.back) preserved.
+   - Tab switching animation: wrapped the content area (the `<>...</>` fragment that contains error / sources / loading / empty / columns / feed branches) inside `<AnimatePresence mode="wait">` with a single `<motion.div key={category}>`. Animation: `initial {opacity:0, x:14}` → `animate {opacity:1, x:0}` → `exit {opacity:0, x:-14}`, `transition {duration:0.28, ease:[0.4,0,0.2,1]}`. The slide direction gives a clear "switch" feel when changing categories (Relevant → World → Politics, etc.) and the small x-offset (14px) keeps it subtle and free of horizontal scrollbars. Because the key is only `category`, normal state changes (loading → ready, search filter, infinite scroll) do NOT re-trigger the animation.
+   - SectionedFeed: converted each `<section>` to `<motion.section>` with `initial={{opacity:0, y:12}}`, `whileInView={{opacity:1, y:0}}`, `viewport={{once:true, margin:'-40px'}}`, staggered transition `delay: min(sectionIdx * 0.06, 0.3)`. The `whileInView` + `once:true` means sections below the fold fade in when scrolled to and never re-trigger (per the perf rules in the task).
+   - MobileTopicLayout: applied the same `<motion.section>` treatment to each chunk for consistency.
+   - Passed `index` prop to every `<TopicCard>` (desktop grids, SectionedFeed, MobileTopicLayout) so the card entrance stagger works across the app. Index is computed per-list (featured=0, rest starts at 1, older continues after rest).
+   - All existing state, click handlers, URL sync logic, infinite scroll, search, and personalization are untouched.
+
+Performance / Quality:
+- All animations are 200-400ms (mostly 280-350ms) with custom cubic-bezier easings or 'easeOut'.
+- Only transform + opacity are animated (GPU-friendly, no layout thrash).
+- `viewport={{ once: true }}` used for scroll-triggered section animations to avoid re-triggering on every scroll.
+- Hover/tap effects only applied when the card is actually clickable (`onOpenDetail` truthy).
+- Verified with `bun run lint` — ESLint passed with zero errors.
+- Did NOT change the dev server port, did NOT run `bun run build`.
+
+Files modified:
+- `src/components/topic-card.tsx`
+- `src/components/topic-detail.tsx`
+- `src/app/page-client.tsx`

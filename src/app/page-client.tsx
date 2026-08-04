@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import { useState, useEffect } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   RefreshCw,
   Search,
@@ -504,11 +505,39 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false
     let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let historyFixed = false
 
     const openTopicFromUrl = async () => {
       const urlParams = new URLSearchParams(window.location.search)
       const topicId = urlParams.get('topic')
       if (!topicId) return
+
+      // ── Fix back-button history for notification/shared-link opens ──
+      // When the app is opened via a notification tap or a shared link,
+      // the initial URL is `/?topic=xxx`. The browser history has only
+      // this ONE entry, so pressing back exits the app entirely.
+      //
+      // Fix: on the first call, REPLACE the current entry with a clean
+      // home URL (`/`), then PUSH `/?topic=xxx` on top. Now the history
+      // stack is: [/] → [/?topic=xxx]. Pressing back from the topic
+      // detail goes to the home screen instead of closing the app.
+      //
+      // We only do this ONCE per page load (guarded by `historyFixed`)
+      // to avoid interfering with normal topic-open navigation.
+      if (!historyFixed) {
+        historyFixed = true
+        const currentUrl = window.location.href
+        const url = new URL(currentUrl)
+        const hadTopicParam = url.searchParams.has('topic')
+        if (hadTopicParam) {
+          // Step 1: Replace current entry with clean home URL (no topic param)
+          const homeUrl = new URL(currentUrl)
+          homeUrl.searchParams.delete('topic')
+          window.history.replaceState({ notificationBackFix: true }, '', homeUrl.toString())
+          // Step 2: Push the topic URL back on top
+          window.history.pushState({ detailOpen: true }, '', currentUrl)
+        }
+      }
 
       // Already open? Don't re-open.
       if (detailTopicRef.current?.topicId === topicId) return
@@ -594,6 +623,79 @@ export default function Home() {
       window.removeEventListener('message', messageHandler)
     }
   }, [topics])
+
+  // ── Auto pre-generate neutral summaries for Relevant topics ──
+  // When the user is on the home screen (Relevant tab), we silently
+  // request the AI summary for each topic in series (top to bottom).
+  // The /api/summary endpoint caches results in Firebase, so:
+  //   - If the summary already exists → instant cache hit (tiny Firebase read)
+  //   - If not → generates and caches it (so it's ready when the user taps)
+  //
+  // This means when a user opens the app later from cache (offline PWA)
+  // and taps a topic, the neutral summary is already there — no waiting.
+  //
+  // We only run this on the Relevant tab (the default landing page) and
+  // process topics one at a time (series) to avoid hammering the AI.
+  // We also skip topics the user has already seen (no point pre-generating
+  // summaries for stories they've already read).
+  useEffect(() => {
+    if (category !== 'relevant') return
+    if (topics.length === 0) return
+    let cancelled = false
+
+    // Delay slightly so the initial feed render isn't blocked
+    const timer = setTimeout(() => {
+      if (cancelled) return
+      // Pre-generate for the top 12 topics (excluding seen ones — those
+      // are already read, no point caching their summaries)
+      const seen = getSeenTopics()
+      const toPregen = topics
+        .filter((t) => !seen[t.topicId])
+        .slice(0, 12)
+
+      if (toPregen.length === 0) return
+
+      console.log(`[summary-pre-gen] Pre-generating summaries for ${toPregen.length} relevant topics in series...`)
+
+      // Process in series (one at a time) to be gentle on AI providers.
+      // Each call either hits the Firebase cache (fast) or generates
+      // a new summary (slow but cached for next time).
+      ;(async () => {
+        for (const topic of toPregen) {
+          if (cancelled) break
+          try {
+            await fetch('/api/summary', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                topicId: topic.topicId,
+                title: topic.title,
+                topicSummary: topic.summary || '',
+                articles: (topic.articles || []).map((a) => ({
+                  title: a.title,
+                  description: a.description,
+                  sourceName: a.sourceName,
+                  leaning: a.leaning,
+                })),
+              }),
+            }).catch(() => {}) // fire-and-forget per topic, but sequential
+          } catch {
+            // silent
+          }
+          // Small delay between requests to avoid burst
+          await new Promise((r) => setTimeout(r, 500))
+        }
+        if (!cancelled) {
+          console.log(`[summary-pre-gen] Complete`)
+        }
+      })()
+    }, 3000) // 3s delay after page load — let the feed render first
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [topics, category])
 
   // --- Referral dialog state ---
   const [referralOpen, setReferralOpen] = useState(false)
@@ -1336,7 +1438,14 @@ export default function Home() {
             onOpenTopic={handleOpenDetail}
           />
         ) : (
-          <>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={category}
+              initial={{ opacity: 0, x: 14 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -14 }}
+              transition={{ duration: 0.28, ease: [0.4, 0, 0.2, 1] }}
+            >
             {/* Content */}
             {error ? (
               <Card className="flex flex-col items-center gap-3 p-12 text-center">
@@ -1401,20 +1510,23 @@ export default function Home() {
                           topic={featured}
                           variant="featured"
                           onOpenDetail={handleOpenDetail}
+                          index={0}
                         />
                       )}
-                      {rest.map((t) => (
+                      {rest.map((t, i) => (
                         <TopicCard
                           key={t.topicId + (t.imageUrl || '')}
                           topic={t}
                           onOpenDetail={handleOpenDetail}
+                          index={i + 1}
                         />
                       ))}
-                      {olderTopics.map((t) => (
+                      {olderTopics.map((t, i) => (
                         <TopicCard
                           key={t.topicId + (t.imageUrl || '')}
                           topic={t}
                           onOpenDetail={handleOpenDetail}
+                          index={rest.length + 1 + i}
                         />
                       ))}
                     </div>
@@ -1428,20 +1540,23 @@ export default function Home() {
                         topic={featured}
                         variant="featured"
                         onOpenDetail={handleOpenDetail}
+                        index={0}
                       />
                     )}
-                    {rest.map((t) => (
+                    {rest.map((t, i) => (
                       <TopicCard
                         key={t.topicId + (t.imageUrl || '')}
                         topic={t}
                         onOpenDetail={handleOpenDetail}
+                        index={i + 1}
                       />
                     ))}
-                    {olderTopics.map((t) => (
+                    {olderTopics.map((t, i) => (
                       <TopicCard
                         key={t.topicId + (t.imageUrl || '')}
                         topic={t}
                         onOpenDetail={handleOpenDetail}
+                        index={rest.length + 1 + i}
                       />
                     ))}
                   </div>
@@ -1464,7 +1579,8 @@ export default function Home() {
                 </div>
               </>
             )}
-          </>
+            </motion.div>
+          </AnimatePresence>
         )}
       </main>
 
@@ -1483,27 +1599,31 @@ export default function Home() {
       {/* Referral dialog */}
       {referralOpen && <ReferralDialog onClose={() => setReferralOpen(false)} />}
 
-      {/* Detail overlay */}
-      {detailTopic && (
-        <TopicDetail
-          topic={detailTopic}
-          onClose={() => {
-            // Clean up the ?topic= URL param when closing.
-            const url = new URL(window.location.href)
-            if (url.searchParams.has('topic')) {
-              url.searchParams.delete('topic')
-              // If we were opened via a shared link, we pushed a history
-              // entry; go back to clean up. Otherwise just replace the URL.
-              if (window.history.state?.detailOpen) {
-                window.history.back()
-              } else {
-                window.history.replaceState({}, '', url.toString())
+      {/* Detail overlay — wrapped in AnimatePresence so the TopicDetail
+          can run its exit animation (slide-down + fade-out) when closing. */}
+      <AnimatePresence>
+        {detailTopic && (
+          <TopicDetail
+            key={detailTopic.topicId}
+            topic={detailTopic}
+            onClose={() => {
+              // Clean up the ?topic= URL param when closing.
+              const url = new URL(window.location.href)
+              if (url.searchParams.has('topic')) {
+                url.searchParams.delete('topic')
+                // If we were opened via a shared link, we pushed a history
+                // entry; go back to clean up. Otherwise just replace the URL.
+                if (window.history.state?.detailOpen) {
+                  window.history.back()
+                } else {
+                  window.history.replaceState({}, '', url.toString())
+                }
               }
-            }
-            setDetailTopic(null)
-          }}
-        />
-      )}
+              setDetailTopic(null)
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -1651,21 +1771,50 @@ function SectionedFeed({
   // we fetch the actual top stories from each category's API endpoint.
   // This guarantees that the "World News" section shows actual world news,
   // "Politics" shows actual politics, etc.
+  //
+  // ── Which categories to fetch? ──
+  // 1. ALWAYS fetch 'world' and 'politics' (core news everyone needs)
+  // 2. Fetch every category the user picked as an interest in the PWA
+  //    onboarding popup (technology, business, science, health, sports, etc.)
+  //    — this ensures ALL the user's interests are represented with their
+  //    own section of top stories.
+  // 3. Fetch My Country stories for the "My Country" section.
+  //
+  // With slim=1, each fetch is ~20KB so fetching 6-8 categories is still
+  // only ~120-160KB total — well within budget.
   React.useEffect(() => {
     let cancelled = false
-    // ── MINIMAL Firebase reads: only fetch 2 categories (was 4-6) ──
-    // Each fetch = 1 Firebase read. 2 categories + mycountry = 3 reads.
-    // Combined with the main feed read, that's 4 total reads per page load.
-    // With slim=1, each read is ~20KB (was ~200KB with full articles).
-    const categoriesToFetch = [
-      { cat: 'world', label: 'world' },
-      { cat: 'politics', label: 'politics' },
-    ]
+
+    // Map interest IDs to category IDs. Most overlap directly, but
+    // 'entertainment' isn't a news category (no RSS feeds for it), so
+    // we skip it. 'world' and 'politics' are always included.
+    const INTEREST_TO_CATEGORY: Record<string, string> = {
+      politics: 'politics',
+      world: 'world',
+      technology: 'technology',
+      business: 'business',
+      science: 'science',
+      health: 'health',
+      sports: 'sports',
+      // 'entertainment' has no dedicated category — skip
+    }
+
+    // Always include world + politics. Then add all user interests.
+    const categorySet = new Set<string>(['world', 'politics'])
+    for (const interest of interests) {
+      const cat = INTEREST_TO_CATEGORY[interest]
+      if (cat) categorySet.add(cat)
+    }
+
+    const categoriesToFetch = Array.from(categorySet).map((cat) => ({
+      cat: cat as Category,
+      label: cat,
+    }))
 
     // Also fetch My Country stories for the "My Country" section in Relevant
     const countryCode = country?.code && country.code !== 'INT' ? country.code : ''
     if (countryCode) {
-      categoriesToFetch.push({ cat: 'mycountry', label: 'mycountry' })
+      categoriesToFetch.push({ cat: 'mycountry' as Category, label: 'mycountry' })
     }
 
     ;(async () => {
@@ -1701,7 +1850,7 @@ function SectionedFeed({
     })()
 
     return () => { cancelled = true }
-  }, [country?.code])
+  }, [country?.code, interests])
 
   if (allTopics.length === 0 && loadingCategories) return null
 
@@ -1876,12 +2025,18 @@ function SectionedFeed({
 
   return (
     <div className="space-y-8">
-      {allSections.map((section) => {
+      {allSections.map((section, sectionIdx) => {
         const { key, label, topics: sectionTopics, isInterested } = section
         if (sectionTopics.length === 0) return null
 
         return (
-          <section key={key}>
+          <motion.section
+            key={key}
+            initial={{ opacity: 0, y: 12 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: '-40px' }}
+            transition={{ duration: 0.35, delay: Math.min(sectionIdx * 0.06, 0.3), ease: [0.16, 1, 0.3, 1] }}
+          >
             <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
               <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight">
                 {label}
@@ -1915,20 +2070,22 @@ function SectionedFeed({
                     topic={sectionTopics[0]}
                     variant="hero"
                     onOpenDetail={onOpenDetail}
+                    index={0}
                   />
                 </div>
               )}
               {/* Mini cards: 2x2 square grid on mobile, fill columns on desktop */}
-              {sectionTopics.slice(1, 7).map((t) => (
+              {sectionTopics.slice(1, 7).map((t, i) => (
                 <TopicCard
                   key={t.topicId}
                   topic={t}
                   variant="mini"
                   onOpenDetail={onOpenDetail}
+                  index={i + 1}
                 />
               ))}
             </div>
-          </section>
+          </motion.section>
         )
       })}
     </div>
@@ -1977,7 +2134,13 @@ function MobileTopicLayout({
   return (
     <div className="space-y-8">
       {chunks.map((chunk, chunkIdx) => (
-        <section key={chunkIdx}>
+        <motion.section
+          key={chunkIdx}
+          initial={{ opacity: 0, y: 12 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-40px' }}
+          transition={{ duration: 0.35, delay: Math.min(chunkIdx * 0.06, 0.3), ease: [0.16, 1, 0.3, 1] }}
+        >
           {chunkIdx === 0 && (
             <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
               <h2 className="text-lg font-bold tracking-tight">
@@ -2004,19 +2167,21 @@ function MobileTopicLayout({
                   topic={chunk[0]}
                   variant="hero"
                   onOpenDetail={onOpenDetail}
+                  index={0}
                 />
               </div>
             )}
-            {chunk.slice(1, 7).map((t) => (
+            {chunk.slice(1, 7).map((t, i) => (
               <TopicCard
                 key={t.topicId}
                 topic={t}
                 variant="mini"
                 onOpenDetail={onOpenDetail}
+                index={i + 1}
               />
             ))}
           </div>
-        </section>
+        </motion.section>
       ))}
     </div>
   )

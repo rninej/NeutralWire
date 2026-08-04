@@ -149,18 +149,23 @@ export async function refreshCategory(
 
       // ── For mycountry: merge old + new topics to prevent good stories
       // from disappearing on refresh ──
-      if (category === 'mycountry') {
+      //
+      // MERGE POLICY: Only merge when the new result is SPARSE (< 10 topics).
+      // When the new result has >= 10 topics, REPLACE the cache entirely.
+      // This prevents stale topics from a previous broken fetch (e.g. when
+      // a country was misconfigured and cached wrong-country news) from
+      // lingering in the feed for 24h. The merge is only a safety net for
+      // when GDELT/RSS returns very few results on a given refresh.
+      if (category === 'mycountry' && agg.topics.length < 10) {
         const oldCached = await readCachedNews(category, country)
         if (oldCached && oldCached.topics && oldCached.topics.length > 0) {
           const now = Date.now()
-          // Keep old topics that are still fresh (within 24h — was 48h.
-          // 48h was keeping stale stories too long, making the feed feel old)
+          // Keep old topics that are still fresh (within 24h)
           const freshOldTopics = oldCached.topics.filter(
             (t) => now - t.latestSeen < 24 * 60 * 60 * 1000,
           )
           // Merge: NEW topics first (fresh from GDELT), then old ones not
-          // already in the new set. This ensures the freshest stories appear
-          // at the top, not 4-day-old cached stories.
+          // already in the new set.
           const newTopicIds = new Set(agg.topics.map((t) => t.topicId))
           const preservedOldTopics = freshOldTopics.filter(
             (t) => !newTopicIds.has(t.topicId),
@@ -169,7 +174,7 @@ export async function refreshCategory(
           const finalTopics = [...agg.topics, ...preservedOldTopics].slice(0, 40)
 
           console.log(
-            `[news-cache] mycountry merge: ${agg.topics.length} new + ${preservedOldTopics.length} preserved old = ${finalTopics.length} total (was ${oldCached.topics.length})`,
+            `[news-cache] mycountry merge (sparse result): ${agg.topics.length} new + ${preservedOldTopics.length} preserved old = ${finalTopics.length} total (was ${oldCached.topics.length})`,
           )
 
           await writeCachedNews(category, country, finalTopics, agg.articleCount, agg.sourceCount)
