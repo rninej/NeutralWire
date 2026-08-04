@@ -15,6 +15,7 @@ import {
   X,
   DollarSign,
   Heart,
+  WifiOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -700,6 +701,25 @@ export default function Home() {
   // --- Referral dialog state ---
   const [referralOpen, setReferralOpen] = useState(false)
 
+  // ── Offline mode detection ──
+  // Tracks whether the browser is offline. When offline, a big banner is
+  // shown at the top of the page saying "Offline Mode — showing cached
+  // news". The SW serves cached /api/news, /api/summary, and /api/topic
+  // responses so the app remains fully functional offline.
+  const [isOffline, setIsOffline] = useState(false)
+  useEffect(() => {
+    // Set initial state (navigator.onLine is false when offline)
+    setIsOffline(!navigator.onLine)
+    const goOffline = () => setIsOffline(true)
+    const goOnline = () => setIsOffline(false)
+    window.addEventListener('offline', goOffline)
+    window.addEventListener('online', goOnline)
+    return () => {
+      window.removeEventListener('offline', goOffline)
+      window.removeEventListener('online', goOnline)
+    }
+  }, [])
+
   // --- Referral + session tracking ---
   useEffect(() => {
     const deviceId = getDeviceId()
@@ -1290,6 +1310,18 @@ export default function Home() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      {/* ── Offline mode banner ──
+          Big, prominent banner shown when the browser is offline. The SW
+          serves cached /api/news, /api/summary, and /api/topic responses
+          so the app remains fully functional — this banner just tells the
+          user they're seeing cached content. Disappears automatically when
+          the connection returns (via the 'online' event listener). */}
+      {isOffline && (
+        <div className="sticky top-0 z-[60] flex items-center justify-center gap-2 bg-amber-500 px-4 py-2.5 text-center text-sm font-semibold text-black shadow-lg">
+          <WifiOff className="h-4 w-4 flex-shrink-0" />
+          <span>Offline Mode — showing cached news. Summaries & sources still work.</span>
+        </div>
+      )}
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">

@@ -59,6 +59,17 @@ interface CountryConfig {
   strongTerms: string[]
   weakTerms: string[]
   blocklist: string[]
+  /**
+   * If true, try sourcecountry:<Country> FIRST (before strong-terms).
+   * Use this for countries with many English-language domestic outlets
+   * that GDELT indexes well (India, Hong Kong, Singapore, etc.). The
+   * strong-terms OR query can be rejected by GDELT for these countries
+   * because the terms match too many articles globally.
+   *
+   * UK and US leave this false — their strong-terms queries work well
+   * and give better relevance filtering.
+   */
+  preferSourceCountry?: boolean
 }
 
 const COUNTRY_CONFIG: Record<string, CountryConfig> = {
@@ -146,6 +157,12 @@ const COUNTRY_CONFIG: Record<string, CountryConfig> = {
       'kashmir', 'bollywood', 'tata', 'reliance', 'adani', 'infosys', 'wipro',
       'hindu', 'sikh', 'muslim', 'jaish', 'lashkar', 'naxal'],
     blocklist: ['indiana', 'indianapolis', 'indian ocean', 'west indian'],
+    // India has many English-language domestic outlets that GDELT indexes
+    // well (Times of India, Hindustan Times, Indian Express, NDTV, etc.).
+    // sourcecountry:India is more reliable than the strong-terms OR query,
+    // which GDELT sometimes rejects because "india" matches too many
+    // articles globally.
+    preferSourceCountry: true,
   },
   HK: {
     name: 'Hong Kong',
@@ -157,6 +174,7 @@ const COUNTRY_CONFIG: Record<string, CountryConfig> = {
       'central', 'mong kok', 'causeway bay', 'kowloon', 'new territories',
       'hksi', 'hang seng'],
     blocklist: ['hong kong disneyland'],
+    preferSourceCountry: true,
   },
   SG: {
     name: 'Singapore',
@@ -168,6 +186,7 @@ const COUNTRY_CONFIG: Record<string, CountryConfig> = {
       'jurong', 'woodlands', 'temasek', 'gic', 'mas', 'sbs transit', 'smrt',
       'singapore airlines'],
     blocklist: ['singapore airlines flight'],
+    preferSourceCountry: true,
   },
   NZ: {
     name: 'New Zealand',
@@ -1237,7 +1256,11 @@ export async function aggregateMyCountryViaGdelt(
   const buildSourceCountryQuery = () => `sourcecountry:${gdeltCountry} sourcelang:english`
 
   let query: string
-  if (config) {
+  if (config?.preferSourceCountry) {
+    // Countries with many English-language domestic outlets (India, HK,
+    // SG, etc.): sourcecountry first — more reliable than strong-terms.
+    query = buildSourceCountryQuery()
+  } else if (config) {
     query = buildStrongQuery()
   } else {
     query = buildSourceCountryQuery()
@@ -1279,19 +1302,21 @@ export async function aggregateMyCountryViaGdelt(
   }
 
   let raw: GdeltArticle[] = []
-  // 1. Try the primary query (strong-terms for configured countries,
-  //    sourcecountry for generic countries).
+  // 1. Try the primary query.
   raw = (await fetchGdelt(query)) || []
 
-  // 2. If the strong-terms query failed AND we have a config, retry with
-  //    sourcecountry. This handles cases where GDELT rejects a complex
-  //    query (too many OR'd terms, etc.) but would accept the simpler
-  //    sourcecountry filter.
+  // 2. If the primary query failed, try the OTHER query as a fallback.
+  //    - If we tried sourcecountry first → try strong-terms
+  //    - If we tried strong-terms first → try sourcecountry
+  //    This gives every country TWO chances at GDELT before RSS fallback.
   if (raw.length === 0 && config) {
-    console.log(`[gdelt] ${cc}: strong-terms query returned no results, retrying with sourcecountry...`)
-    raw = (await fetchGdelt(buildSourceCountryQuery())) || []
+    const fallbackQuery = config.preferSourceCountry
+      ? buildStrongQuery()
+      : buildSourceCountryQuery()
+    console.log(`[gdelt] ${cc}: primary query returned no results, retrying with ${config.preferSourceCountry ? 'strong-terms' : 'sourcecountry'}...`)
+    raw = (await fetchGdelt(fallbackQuery)) || []
     if (raw.length > 0) {
-      console.log(`[gdelt] ${cc}: sourcecountry retry succeeded with ${raw.length} articles`)
+      console.log(`[gdelt] ${cc}: retry succeeded with ${raw.length} articles`)
     }
   }
 

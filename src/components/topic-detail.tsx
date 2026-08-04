@@ -68,12 +68,15 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   const [displayTopic, setDisplayTopic] = React.useState<TopicArticle | null>(null)
   // ── Sticky Ask AI button ──
   // The "Ask AI" button lives inside the Neutral Summary card. When the
-  // user scrolls past it, we show a compact Ask AI button in the sticky
-  // top bar (between Close and Share) so it's always accessible.
-  // We track this by observing the summary card's position relative to
-  // the viewport via a scroll listener.
+  // user scrolls past it (it goes above the top bar), we show a compact
+  // Ask AI button in the sticky top bar (between Close and Share) so
+  // it's always accessible.
+  //
+  // We track the ORIGINAL Ask AI button's position (not the whole card)
+  // so the sticky appears the moment the button scrolls off-screen —
+  // not after the entire summary card has passed.
   const [askAiSticky, setAskAiSticky] = React.useState(false)
-  const summaryCardRef = React.useRef<HTMLDivElement | null>(null)
+  const askAiButtonRef = React.useRef<HTMLButtonElement | null>(null)
 
   // ── Like/dislike persistence ──
   // Load saved vote from localStorage on mount (instant, no Firebase read needed).
@@ -169,27 +172,27 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
     setImgError(false)
   }, [topic.topicId, topic.imageUrl])
 
-  // ── Sticky Ask AI: detect when the summary card scrolls out of view ──
-  // When the bottom of the summary card is above the top bar (h-14 = 56px),
-  // we show the compact Ask AI button in the top bar. This uses a scroll
-  // listener (not IntersectionObserver) because the overlay scrolls within
-  // its own container, not the window.
+  // ── Sticky Ask AI: detect when the original Ask AI button scrolls off ──
+  // The moment the Ask AI button's top edge goes above the sticky top bar
+  // (h-14 = 56px), we show the compact Ask AI button in the top bar.
+  // This triggers as soon as the button leaves the viewport, NOT after
+  // the entire summary card has scrolled past (which was the old behavior
+  // that required scrolling to the bottom of the card).
   React.useEffect(() => {
     const container = document.querySelector('[role="dialog"]') as HTMLElement | null
     if (!container) return
     const onScroll = () => {
-      const card = summaryCardRef.current
-      if (!card) {
+      const btn = askAiButtonRef.current
+      if (!btn) {
         setAskAiSticky(false)
         return
       }
-      // If the bottom of the summary card is above the top bar (56px) +
-      // some margin, the Ask AI button is out of view → show sticky.
-      const rect = card.getBoundingClientRect()
-      setAskAiSticky(rect.bottom < 70)
+      // If the button's top edge is above the top bar (56px), it's
+      // scrolled out of view → show the sticky button.
+      const rect = btn.getBoundingClientRect()
+      setAskAiSticky(rect.bottom < 56)
     }
     container.addEventListener('scroll', onScroll, { passive: true })
-    // Also check on window scroll (some browsers scroll the window)
     window.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
     return () => {
@@ -529,11 +532,12 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
         </div>
 
         {/* Neutral in-depth summary */}
-        <Card ref={summaryCardRef} className="mb-6 p-5 md:p-6">
+        <Card className="mb-6 p-5 md:p-6">
           <div className="mb-4 flex items-center gap-2">
             <TrendingUp className="h-5 w-5 text-muted-foreground" />
             <h2 className="text-base font-bold">Neutral Summary</h2>
             <button
+              ref={askAiButtonRef}
               onClick={() => setAskAiOpen(true)}
               className="ml-auto flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity"
             >
