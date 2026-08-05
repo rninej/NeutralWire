@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { recordSession, checkReferralQualification } from '@/lib/referral'
+import { firebasePatch } from '@/lib/firebase-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -8,11 +9,15 @@ export const revalidate = 0
 /**
  * Record a session activity for a device.
  *
- * Called by the client every 15 seconds while the user is active.
+ * Called by the client every 2 minutes while the user is active.
  * Accumulates time per day. When a day reaches 15 seconds, it counts
  * as a "qualified day". Checks referral qualification after each update.
  *
- * Body: { deviceId: string, seconds: number, referralCode?: string }
+ * Also stores the user's IANA timezone (e.g. 'Asia/Kolkata', 'Europe/London')
+ * so the timezone-aware notification trigger can send morning/lunch/evening
+ * briefings at the correct LOCAL time for each user.
+ *
+ * Body: { deviceId: string, seconds: number, referralCode?: string, tz?: string }
  */
 export async function POST(req: NextRequest) {
   try {
@@ -20,6 +25,7 @@ export async function POST(req: NextRequest) {
       deviceId: string
       seconds: number
       referralCode?: string
+      tz?: string
     }
 
     if (!body.deviceId) {
@@ -27,6 +33,15 @@ export async function POST(req: NextRequest) {
     }
 
     const device = await recordSession(body.deviceId, body.seconds || 15)
+
+    // Store the user's timezone for timezone-aware notification scheduling.
+    // Only write if it changed (avoids unnecessary Firebase writes).
+    if (body.tz && device?.timezone !== body.tz) {
+      await firebasePatch(`devices/${body.deviceId}`, {
+        timezone: body.tz,
+        timezoneUpdatedAt: Date.now(),
+      }).catch(() => {})
+    }
 
     // If this device was referred, check if they've now qualified.
     if (device?.referralCode) {

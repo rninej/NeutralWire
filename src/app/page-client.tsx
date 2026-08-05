@@ -681,13 +681,18 @@ export default function Home() {
 
     // Track session activity every 2 MINUTES (was 15 seconds — was causing
     // excessive Firebase reads/writes. 2 minutes is enough for streak tracking).
+    // Also sends the user's IANA timezone so notifications can be scheduled
+    // at the correct local time (morning/lunch/evening per timezone).
+    const userTimezone = typeof Intl !== 'undefined'
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+      : ''
     let sessionInterval: ReturnType<typeof setInterval>
     const startSessionTracking = () => {
       sessionInterval = setInterval(() => {
         fetch('/api/session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deviceId, seconds: 120, referralCode: refCode }),
+          body: JSON.stringify({ deviceId, seconds: 120, referralCode: refCode, tz: userTimezone }),
         }).catch(() => {})
       }, 120000) // 2 minutes (was 15000 = 15 seconds)
     }
