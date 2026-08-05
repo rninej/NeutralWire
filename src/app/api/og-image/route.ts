@@ -6,38 +6,16 @@ import type { TopicArticle } from '@/lib/news-aggregator'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-// OG image generation involves fetching the article image + compositing —
-// can take 3-5s. 15s is a safe ceiling.
 export const maxDuration = 15
-
-// Cache the NW logo in memory (read once from disk, reused across requests)
-let nwLogoBuffer: Buffer | null = null
-async function getNwLogo(): Promise<Buffer | null> {
-  if (nwLogoBuffer) return nwLogoBuffer
-  try {
-    // Use the icon-512.png as the NW logo, trimmed to a circular badge
-    const logo = await sharp('public/icon-512.png')
-      .resize(120, 120, { fit: 'cover' })
-      .composite([{
-        input: Buffer.from('<svg width="120" height="120"><circle cx="60" cy="60" r="60" fill="#fff"/></svg>'),
-        blend: 'dest-in',
-      }])
-      .png()
-      .toBuffer()
-    nwLogoBuffer = logo
-    return logo
-  } catch {
-    return null
-  }
-}
 
 /**
  * Generate a dynamic OG image for a shared topic link.
  *
  * The image is a 1200x630 composite:
  *   - Article image (fetched + resized to fill the canvas)
- *   - NW logo badge (bottom-right corner, 96px circle with white background)
- *   - Bias bar (bottom of the image, showing L/C/R coverage proportions)
+ *   - NW logo badge (bottom-right corner — white circle with "NW" text)
+ *   - Chunky bias bar (bottom of image — showing L/C/R counts as colored
+ *     segments with the numbers inside each segment)
  *
  * If the article image can't be fetched, falls back to a dark background
  * with the NW logo + bias bar (so the preview ALWAYS shows, never a broken
@@ -45,9 +23,6 @@ async function getNwLogo(): Promise<Buffer | null> {
  *
  * Usage:
  *   /api/og-image?topicId=abc123
- *
- * The image is cached by the SW (cache-first) and by WhatsApp's crawler
- * (which caches OG images for ~7 days). So the generation cost is amortized.
  */
 export async function GET(req: NextRequest) {
   const topicId = req.nextUrl.searchParams.get('topicId') || ''
@@ -81,11 +56,10 @@ export async function GET(req: NextRequest) {
     }
 
     if (!topic) {
-      // Topic not found — return a default OG image
       return generateFallbackImage('Story not found — NeutralWire')
     }
 
-    const { imageUrl, leanLeft = 0, leanCenter = 0, leanRight = 0, title } = topic
+    const { imageUrl, leanLeft = 0, leanCenter = 0, leanRight = 0 } = topic
     const total = leanLeft + leanCenter + leanRight
 
     // ── 2. Fetch the article image ──
@@ -120,7 +94,6 @@ export async function GET(req: NextRequest) {
       base = sharp(articleImageBuffer)
         .resize(W, H, { fit: 'cover', position: 'center' })
     } else {
-      // Dark gradient fallback
       const gradient = Buffer.from(
         `<svg width="${W}" height="${H}">
           <defs>
@@ -135,65 +108,79 @@ export async function GET(req: NextRequest) {
       base = sharp(gradient).png()
     }
 
-    // ── 4. Build the bias bar SVG overlay ──
-    // Position: bottom of the image, full width, 12px tall
-    const barHeight = 14
-    const barY = H - barHeight - 16 // 16px padding from bottom
-    const barWidth = W - 32 // 16px padding left/right
-    const barX = 16
+    // ── 4. Build the chunky bias bar with numbers ──
+    // The bar is at the bottom of the image, full width, 48px tall.
+    // Each segment is proportional to its count, with the number centered
+    // inside. Colors: blue (left), grey (center), red (right).
+    const barHeight = 48
+    const barPadding = 20
+    const barWidth = W - barPadding * 2
+    const barX = barPadding
+    const barY = H - barHeight - 20 // 20px from bottom
 
     let biasBarSvg = ''
     if (total > 0) {
-      const leftPct = (leanLeft / total) * 100
-      const centerPct = (leanCenter / total) * 100
-      const rightPct = (leanRight / total) * 100
+      const leftW = (leanLeft / total) * barWidth
+      const centerW = (leanCenter / total) * barWidth
+      const rightW = (leanRight / total) * barWidth
 
-      // Build the bar segments with rounded corners on the outer edges
-      const leftW = (leftPct / 100) * barWidth
-      const centerW = (centerPct / 100) * barWidth
-      const rightW = (rightPct / 100) * barWidth
+      // Background bar (dark, rounded)
+      biasBarSvg += `<rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="8" fill="#000" opacity="0.7"/>`
 
-      biasBarSvg = `
-        <rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="7" fill="#000" opacity="0.5"/>
-        ${leftW > 0 ? `<rect x="${barX}" y="${barY}" width="${leftW}" height="${barHeight}" rx="7" fill="#3b82f6"/>` : ''}
-        ${centerW > 0 ? `<rect x="${barX + leftW}" y="${barY}" width="${centerW}" height="${barHeight}" fill="#71717a"/>` : ''}
-        ${rightW > 0 ? `<rect x="${barX + leftW + centerW}" y="${barY}" width="${rightW}" height="${barHeight}" rx="7" fill="#ef4444"/>` : ''}
-      `
+      // Left segment (blue) — only if > 0
+      if (leftW > 0) {
+        // Clip the left side to rounded corners
+        const leftClip = `M${barX + 8} ${barY} L${barX + leftW} ${barY} L${barX + leftW} ${barY + barHeight} L${barX + 8} ${barY + barHeight} Q${barX} ${barY + barHeight} ${barX} ${barY + barHeight - 8} L${barX} ${barY + 8} Q${barX} ${barY} ${barX + 8} ${barY} Z`
+        biasBarSvg += `<path d="${leftClip}" fill="#3b82f6"/>`
+        // Number inside (only if segment is wide enough)
+        if (leftW > 30) {
+          biasBarSvg += `<text x="${barX + leftW / 2}" y="${barY + barHeight / 2 + 7}" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#fff" text-anchor="middle">${leanLeft}</text>`
+        }
+      }
+
+      // Center segment (grey)
+      if (centerW > 0) {
+        biasBarSvg += `<rect x="${barX + leftW}" y="${barY}" width="${centerW}" height="${barHeight}" fill="#71717a"/>`
+        if (centerW > 30) {
+          biasBarSvg += `<text x="${barX + leftW + centerW / 2}" y="${barY + barHeight / 2 + 7}" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#fff" text-anchor="middle">${leanCenter}</text>`
+        }
+      }
+
+      // Right segment (red) — rounded right corners
+      if (rightW > 0) {
+        const rightX = barX + leftW + centerW
+        const rightClip = `M${rightX} ${barY} L${rightX + rightW - 8} ${barY} Q${rightX + rightW} ${barY} ${rightX + rightW} ${barY + 8} L${rightX + rightW} ${barY + barHeight - 8} Q${rightX + rightW} ${barY + barHeight} ${rightX + rightW - 8} ${barY + barHeight} L${rightX} ${barY + barHeight} Z`
+        biasBarSvg += `<path d="${rightClip}" fill="#ef4444"/>`
+        if (rightW > 30) {
+          biasBarSvg += `<text x="${rightX + rightW / 2}" y="${barY + barHeight / 2 + 7}" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#fff" text-anchor="middle">${leanRight}</text>`
+        }
+      }
     }
 
     // ── 5. Build the NW logo badge (bottom-right) ──
-    // 80px circle with white background + NW icon
-    const logoSize = 80
-    const logoX = W - logoSize - 24 // 24px padding from right
-    const logoY = H - logoSize - 40 // above the bias bar
+    // White circle with "NW" text inside. Positioned to the right of the
+    // bias bar, above it.
+    const logoSize = 72
+    const logoX = W - logoSize - 24
+    const logoY = barY - logoSize - 12 // above the bias bar
 
-    const logoBadgeSvg = `
+    const logoSvg = `
       <circle cx="${logoX + logoSize / 2}" cy="${logoY + logoSize / 2}" r="${logoSize / 2 + 4}" fill="#000" opacity="0.6"/>
       <circle cx="${logoX + logoSize / 2}" cy="${logoY + logoSize / 2}" r="${logoSize / 2}" fill="#fff"/>
+      <text x="${logoX + logoSize / 2}" y="${logoY + logoSize / 2 + 12}" font-family="Arial, sans-serif" font-size="30" font-weight="900" fill="#0a0a0a" text-anchor="middle">NW</text>
     `
 
     // ── 6. Composite everything ──
     const overlaySvg = Buffer.from(`
       <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
         ${biasBarSvg}
-        ${logoBadgeSvg}
+        ${logoSvg}
       </svg>
     `)
 
-    let composite = base.composite([{ input: overlaySvg, blend: 'over' }])
+    const composite = base.composite([{ input: overlaySvg, blend: 'over' }])
 
-    // Add the NW logo image on top of the white circle
-    const logo = await getNwLogo()
-    if (logo) {
-      composite = composite.composite([{
-        input: await sharp(logo).resize(logoSize - 16, logoSize - 16).toBuffer(),
-        blend: 'over',
-        top: logoY + 8,
-        left: logoX + 8,
-      }])
-    }
-
-    // ── 7. Output as JPEG (smaller than PNG for OG images) ──
+    // ── 7. Output as JPEG ──
     const outputBuffer = await composite
       .jpeg({ quality: 85, mozjpeg: true })
       .toBuffer()
@@ -202,7 +189,6 @@ export async function GET(req: NextRequest) {
       headers: {
         'Content-Type': 'image/jpeg',
         'Cache-Control': 'public, max-age=86400, s-maxage=604800',
-        // Allow WhatsApp/Twitter/etc crawlers to fetch this
         'Access-Control-Allow-Origin': '*',
       },
     })
@@ -214,7 +200,6 @@ export async function GET(req: NextRequest) {
 
 /**
  * Generate a simple fallback OG image (dark background + NW text).
- * Used when the topic or article image can't be found.
  */
 async function generateFallbackImage(text: string): Promise<NextResponse> {
   const W = 1200
@@ -228,7 +213,7 @@ async function generateFallbackImage(text: string): Promise<NextResponse> {
         </linearGradient>
       </defs>
       <rect width="${W}" height="${H}" fill="url(#bg)"/>
-      <text x="${W / 2}" y="${H / 2}" font-family="-apple-system, sans-serif" font-size="48" font-weight="bold" fill="#fff" text-anchor="middle">${text}</text>
+      <text x="${W / 2}" y="${H / 2}" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="#fff" text-anchor="middle">${text}</text>
     </svg>
   `)
   const buf = await sharp(svg).jpeg({ quality: 85 }).toBuffer()
