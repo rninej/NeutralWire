@@ -897,6 +897,61 @@ export default function Home() {
       return text.includes(cityNameLower)
     }
 
+    // ── Deduplicate by title or image (always runs, no search only) ──
+    // Sometimes the same story appears twice with slightly different
+    // topicIds (e.g. one from RSS and one from GDELT, or a story clustered
+    // differently). When two topics have the same title (case-insensitive,
+    // trimmed) or the same image URL (query params stripped), we remove the
+    // duplicate — keeping the one with MORE sources (coverage). If both have
+    // the same source count, remove one at random.
+    if (!debouncedSearch && list.length > 1) {
+      // Normalize title: lowercase, strip ALL punctuation, collapse whitespace
+      const normTitle = (t: string) =>
+        t.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+      const titleGroups = new Map<string, TopicArticle[]>()
+      const imageGroups = new Map<string, TopicArticle[]>()
+      for (const t of list) {
+        const nt = normTitle(t.title)
+        if (nt) {
+          const arr = titleGroups.get(nt) || []
+          arr.push(t)
+          titleGroups.set(nt, arr)
+        }
+        const imgUrl = t.imageUrl?.split('?')[0]?.trim()
+        if (imgUrl) {
+          const arr = imageGroups.get(imgUrl) || []
+          arr.push(t)
+          imageGroups.set(imgUrl, arr)
+        }
+      }
+      const toRemove = new Set<string>()
+      const pickKeeper = (group: TopicArticle[]): TopicArticle => {
+        const sorted = [...group].sort((a, b) => b.coverage - a.coverage)
+        const maxCov = sorted[0].coverage
+        const tied = sorted.filter((t) => t.coverage === maxCov)
+        return tied[Math.floor(Math.random() * tied.length)]
+      }
+      for (const group of titleGroups.values()) {
+        if (group.length > 1) {
+          const keeper = pickKeeper(group)
+          for (const t of group) {
+            if (t.topicId !== keeper.topicId) toRemove.add(t.topicId)
+          }
+        }
+      }
+      for (const group of imageGroups.values()) {
+        if (group.length > 1) {
+          const keeper = pickKeeper(group)
+          for (const t of group) {
+            if (t.topicId !== keeper.topicId) toRemove.add(t.topicId)
+          }
+        }
+      }
+      if (toRemove.size > 0) {
+        list = list.filter((t) => !toRemove.has(t.topicId))
+      }
+    }
+
     // Only personalise when there's no active search (otherwise the user
     // is looking for something specific and we shouldn't hide results).
     const hasInterests = interests.length > 0
@@ -1009,6 +1064,27 @@ export default function Home() {
         }
         result = interspersed
       }
+    }
+
+    // ── Final dedup pass after My Country interspersing ──
+    // The My Country topics come from GDELT and the main feed from RSS —
+    // they could have the same story with different topicIds. Run one
+    // final dedup to catch any cross-source duplicates that appeared.
+    if (result.length > 1) {
+      const seenTitles = new Set<string>()
+      const seenImages = new Set<string>()
+      const norm = (t: string) =>
+        t.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+      result = result.filter((t) => {
+        const nt = norm(t.title)
+        const imgUrl = t.imageUrl?.split('?')[0]?.trim()
+        let isDup = false
+        if (nt && seenTitles.has(nt)) isDup = true
+        if (imgUrl && seenImages.has(imgUrl)) isDup = true
+        if (nt) seenTitles.add(nt)
+        if (imgUrl) seenImages.add(imgUrl)
+        return !isDup
+      })
     }
 
     return result
@@ -1921,14 +1997,40 @@ function SectionedFeed({
     isInterested: boolean
   }> = []
 
-  // ── Track all topicIds already shown to prevent duplicates across sections ──
-  // If a story appears in Top Headlines, it won't appear again in World News,
-  // Politics, etc. Each story shows only once, in the first section it appears.
+  // ── Track all topicIds + titles + images already shown to prevent
+  // duplicates across sections ──
+  // If a story appears in Top Headlines, it won't appear again in World
+  // News, Politics, etc. Each story shows only once, in the first section
+  // it appears. We track not just topicId but also normalized title and
+  // image URL — so the same story from different aggregators (RSS vs
+  // GDELT, different topicIds) is still deduped.
   const shownTopicIds = new Set<string>()
+  const shownTitles = new Set<string>()
+  const shownImages = new Set<string>()
+  // Normalize title for comparison: lowercase, collapse whitespace, strip
+  // ALL punctuation (so smart quotes, apostrophes, etc. don't prevent
+  // matching). e.g. "Spain's" → "spains" matches "Spains".
+  const normTitle = (t: string) =>
+    t.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+  const isDuplicate = (t: TopicArticle): boolean => {
+    if (shownTopicIds.has(t.topicId)) return true
+    const nt = normTitle(t.title)
+    if (nt && shownTitles.has(nt)) return true
+    const imgUrl = t.imageUrl?.split('?')[0]?.trim()
+    if (imgUrl && shownImages.has(imgUrl)) return true
+    return false
+  }
+  const markShown = (t: TopicArticle) => {
+    shownTopicIds.add(t.topicId)
+    const nt = normTitle(t.title)
+    if (nt) shownTitles.add(nt)
+    const imgUrl = t.imageUrl?.split('?')[0]?.trim()
+    if (imgUrl) shownImages.add(imgUrl)
+  }
 
   // Top Headlines
   if (headlines.length > 0) {
-    for (const t of headlines) shownTopicIds.add(t.topicId)
+    for (const t of headlines) markShown(t)
     allSections.push({
       key: 'headlines',
       label: 'Top Headlines',
@@ -1949,10 +2051,11 @@ function SectionedFeed({
   for (const cat of sortedCategories) {
     const catTopics = categoryTopics[cat]
     if (!catTopics || catTopics.length === 0) continue
-    // Filter out topics already shown in earlier sections
-    const uniqueTopics = catTopics.filter((t) => !shownTopicIds.has(t.topicId))
+    // Filter out topics already shown in earlier sections (by topicId,
+    // title, or image)
+    const uniqueTopics = catTopics.filter((t) => !isDuplicate(t))
     if (uniqueTopics.length === 0) continue
-    for (const t of uniqueTopics) shownTopicIds.add(t.topicId)
+    for (const t of uniqueTopics) markShown(t)
     allSections.push({
       key: cat,
       label: SECTOR_LABELS[cat] || cat,
@@ -1964,9 +2067,9 @@ function SectionedFeed({
   // My Country section — placed naturally (not boosted)
   const myCountryCatTopics = categoryTopics['mycountry']
   if (myCountryCatTopics && myCountryCatTopics.length > 0) {
-    const uniqueMc = myCountryCatTopics.filter((t) => !shownTopicIds.has(t.topicId))
+    const uniqueMc = myCountryCatTopics.filter((t) => !isDuplicate(t))
     if (uniqueMc.length > 0) {
-      for (const t of uniqueMc) shownTopicIds.add(t.topicId)
+      for (const t of uniqueMc) markShown(t)
       const countryDisplay = country?.code === 'GB' ? 'UK' : (country?.code || 'My Country')
       allSections.push({
         key: 'mycountry',
@@ -1978,9 +2081,9 @@ function SectionedFeed({
   }
 
   // Remaining relevant topics not in headlines (as "More News")
-  const moreNews = allTopics.filter((t) => !shownTopicIds.has(t.topicId))
+  const moreNews = allTopics.filter((t) => !isDuplicate(t))
   if (moreNews.length > 0) {
-    for (const t of moreNews) shownTopicIds.add(t.topicId)
+    for (const t of moreNews) markShown(t)
     allSections.push({
       key: 'more',
       label: 'More News',
