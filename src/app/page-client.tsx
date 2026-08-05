@@ -1764,6 +1764,45 @@ function CategoryTab({
           style={{ zIndex: 0 }}
         />
       )}
+      {/* ── Blindspots Venn diagram icon ──
+          Two overlapping circles (blue left, red right) arranged like a
+          Venn diagram. Visually communicates "blindspots" — what one side
+          sees that the other doesn't. Only shown for the 'blindspots' tab. */}
+      {cat === 'blindspots' && (
+        <span className="relative z-10 flex-shrink-0">
+          <svg
+            width="14"
+            height="10"
+            viewBox="0 0 14 10"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            {/* Blue circle (left) */}
+            <circle
+              cx="4.5"
+              cy="5"
+              r="3.5"
+              className={cn(
+                'transition-colors',
+                active ? 'fill-white/80' : 'fill-blue-500',
+              )}
+              opacity="0.85"
+            />
+            {/* Red circle (right) */}
+            <circle
+              cx="9.5"
+              cy="5"
+              r="3.5"
+              className={cn(
+                'transition-colors',
+                active ? 'fill-white/80' : 'fill-red-500',
+              )}
+              opacity="0.85"
+            />
+          </svg>
+        </span>
+      )}
       <span className="relative z-10">{label}</span>
     </button>
   )
