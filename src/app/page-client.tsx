@@ -231,6 +231,13 @@ export default function Home() {
         url.searchParams.set('category', cat)
       }
       window.history.replaceState({}, '', url.toString())
+      // ── Scroll to top when switching categories ──
+      // If the user scrolled down in one subtopic (e.g. World) and taps
+      // another (e.g. Politics), jump to the top so they see the new
+      // section's first stories, not mid-scroll position from the old tab.
+      // Uses 'instant' behavior for an immediate jump (smooth scrolling
+      // 2000px takes ~2s and feels sluggish on a tab switch).
+      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior })
     }
   }, [])
 
