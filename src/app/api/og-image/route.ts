@@ -1,40 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
-import { readFile } from 'fs/promises'
-import { join } from 'path'
 import { firebaseRead } from '@/lib/firebase-server'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import { renderTextAsPaths } from './char-paths'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const maxDuration = 15
 
-// Cache the base64-encoded bold font so we only read it once per instance.
-let boldFontB64: string | null = null
-async function getBoldFontB64(): Promise<string> {
-  if (boldFontB64) return boldFontB64
-  try {
-    const fontPath = join(process.cwd(), 'src/app/api/og-image/fonts/bold.ttf')
-    const fontBuffer = await readFile(fontPath)
-    boldFontB64 = fontBuffer.toString('base64')
-    return boldFontB64
-  } catch {
-    return ''
-  }
-}
-
 /**
  * Generate a dynamic OG image for a shared topic link.
  *
  * The image is a 1200x630 composite:
  *   - Article image (fetched + resized to fill the canvas)
- *   - NW logo badge (bottom-right corner — white circle with "NW" text)
+ *   - NW logo badge (bottom-right corner — white circle with "NW" drawn
+ *     as SVG paths, NOT font-based text)
  *   - Chunky bias bar (bottom — L/C/R counts as colored segments with
- *     the numbers rendered inside each segment)
+ *     the numbers drawn as SVG paths inside each segment)
  *
- * Uses an embedded bold font (base64 @font-face in the SVG) so text
- * renders correctly in sharp's SVG renderer (which has no system fonts).
+ * IMPORTANT: All text is rendered as SVG vector paths, NOT <text> elements.
+ * Sharp's SVG renderer (librsvg) has no system fonts and @font-face with
+ * base64 TTF doesn't work reliably — it shows "tofu" boxes (□) instead
+ * of actual characters. Drawing as paths guarantees the text always
+ * renders correctly regardless of the server environment.
  *
  * Usage:
  *   /api/og-image?topicId=abc123
@@ -70,7 +59,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (!topic) {
-      return generateFallbackImage('Story not found')
+      return generateFallbackImage()
     }
 
     const { imageUrl, leanLeft = 0, leanCenter = 0, leanRight = 0 } = topic
@@ -98,10 +87,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // ── 3. Load the bold font (base64 for SVG @font-face) ──
-    const fontB64 = await getBoldFontB64()
-
-    // ── 4. Build the composite image (1200x630) ──
+    // ── 3. Build the composite image (1200x630) ──
     const W = 1200
     const H = 630
 
@@ -124,7 +110,7 @@ export async function GET(req: NextRequest) {
       base = sharp(gradient).png()
     }
 
-    // ── 5. Build the chunky bias bar with numbers ──
+    // ── 4. Build the chunky bias bar with numbers (as SVG paths) ──
     const barHeight = 48
     const barPadding = 20
     const barWidth = W - barPadding * 2
@@ -140,12 +126,19 @@ export async function GET(req: NextRequest) {
       // Dark background bar (rounded)
       biasBarSvg += `<rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="8" fill="#000" opacity="0.7"/>`
 
-      // Left segment (blue) with rounded left corners
+      // Left segment (blue)
       if (leftW > 0) {
         const clip = `M${barX + 8} ${barY} L${barX + leftW} ${barY} L${barX + leftW} ${barY + barHeight} L${barX + 8} ${barY + barHeight} Q${barX} ${barY + barHeight} ${barX} ${barY + barHeight - 8} L${barX} ${barY + 8} Q${barX} ${barY} ${barX + 8} ${barY} Z`
         biasBarSvg += `<path d="${clip}" fill="#3b82f6"/>`
+        // Draw the number as SVG paths (NOT <text>)
         if (leftW > 30) {
-          biasBarSvg += `<text x="${barX + leftW / 2}" y="${barY + barHeight / 2 + 8}" font-family="NWBold" font-size="24" fill="#fff" text-anchor="middle">${leanLeft}</text>`
+          biasBarSvg += renderTextAsPaths(
+            String(leanLeft),
+            barX + leftW / 2, // center X
+            barY + 8,         // top Y (centered in 48px bar: 8px padding top, 32px text)
+            32,               // character height
+            '#fff',           // white
+          )
         }
       }
 
@@ -153,43 +146,48 @@ export async function GET(req: NextRequest) {
       if (centerW > 0) {
         biasBarSvg += `<rect x="${barX + leftW}" y="${barY}" width="${centerW}" height="${barHeight}" fill="#71717a"/>`
         if (centerW > 30) {
-          biasBarSvg += `<text x="${barX + leftW + centerW / 2}" y="${barY + barHeight / 2 + 8}" font-family="NWBold" font-size="24" fill="#fff" text-anchor="middle">${leanCenter}</text>`
+          biasBarSvg += renderTextAsPaths(
+            String(leanCenter),
+            barX + leftW + centerW / 2,
+            barY + 8,
+            32,
+            '#fff',
+          )
         }
       }
 
-      // Right segment (red) with rounded right corners
+      // Right segment (red)
       if (rightW > 0) {
         const rightX = barX + leftW + centerW
         const clip = `M${rightX} ${barY} L${rightX + rightW - 8} ${barY} Q${rightX + rightW} ${barY} ${rightX + rightW} ${barY + 8} L${rightX + rightW} ${barY + barHeight - 8} Q${rightX + rightW} ${barY + barHeight} ${rightX + rightW - 8} ${barY + barHeight} L${rightX} ${barY + barHeight} Z`
         biasBarSvg += `<path d="${clip}" fill="#ef4444"/>`
         if (rightW > 30) {
-          biasBarSvg += `<text x="${rightX + rightW / 2}" y="${barY + barHeight / 2 + 8}" font-family="NWBold" font-size="24" fill="#fff" text-anchor="middle">${leanRight}</text>`
+          biasBarSvg += renderTextAsPaths(
+            String(leanRight),
+            rightX + rightW / 2,
+            barY + 8,
+            32,
+            '#fff',
+          )
         }
       }
     }
 
-    // ── 6. Build the NW logo badge (bottom-right) ──
+    // ── 5. Build the NW logo badge (bottom-right) ──
+    // White circle with "NW" drawn as SVG paths inside.
     const logoSize = 72
     const logoX = W - logoSize - 24
-    const logoY = barY - logoSize - 12
+    const logoY = barY - logoSize - 12 // above the bias bar
 
     const logoSvg = `
       <circle cx="${logoX + logoSize / 2}" cy="${logoY + logoSize / 2}" r="${logoSize / 2 + 4}" fill="#000" opacity="0.6"/>
       <circle cx="${logoX + logoSize / 2}" cy="${logoY + logoSize / 2}" r="${logoSize / 2}" fill="#fff"/>
-      <text x="${logoX + logoSize / 2}" y="${logoY + logoSize / 2 + 11}" font-family="NWBold" font-size="32" fill="#0a0a0a" text-anchor="middle">NW</text>
+      ${renderTextAsPaths('NW', logoX + logoSize / 2, logoY + 18, 36, '#0a0a0a')}
     `
 
-    // ── 7. Build the full SVG with embedded font ──
-    // The @font-face embeds the bold TTF as base64 so sharp's SVG renderer
-    // (resvg) can render text without system fonts. Without this, text
-    // shows as "tofu" boxes (□□□).
-    const fontFace = fontB64
-      ? `<style>@font-face { font-family: "NWBold"; src: url(data:font/ttf;base64,${fontB64}) format("truetype"); }</style>`
-      : ''
-
+    // ── 6. Composite everything ──
     const overlaySvg = Buffer.from(`
       <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-        ${fontFace}
         ${biasBarSvg}
         ${logoSvg}
       </svg>
@@ -210,20 +208,19 @@ export async function GET(req: NextRequest) {
     })
   } catch (err) {
     console.error('[og-image] Error:', err)
-    return generateFallbackImage('NeutralWire')
+    return generateFallbackImage()
   }
 }
 
-async function generateFallbackImage(text: string): Promise<NextResponse> {
+/**
+ * Generate a simple fallback OG image (dark background + NW paths).
+ */
+async function generateFallbackImage(): Promise<NextResponse> {
   const W = 1200
   const H = 630
-  const fontB64 = await getBoldFontB64()
-  const fontFace = fontB64
-    ? `<style>@font-face { font-family: "NWBold"; src: url(data:font/ttf;base64,${fontB64}) format("truetype"); }</style>`
-    : ''
+  const nwPaths = renderTextAsPaths('NW', W / 2, H / 2 - 70, 140, '#fff')
   const svg = Buffer.from(`
     <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-      ${fontFace}
       <defs>
         <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stop-color="#0a0a0a"/>
@@ -231,7 +228,7 @@ async function generateFallbackImage(text: string): Promise<NextResponse> {
         </linearGradient>
       </defs>
       <rect width="${W}" height="${H}" fill="url(#bg)"/>
-      <text x="${W / 2}" y="${H / 2}" font-family="NWBold" font-size="48" fill="#fff" text-anchor="middle">${text}</text>
+      ${nwPaths}
     </svg>
   `)
   const buf = await sharp(svg).jpeg({ quality: 85 }).toBuffer()
