@@ -377,37 +377,18 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
       exit={{ opacity: 0, y: 40 }}
       transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
     >
-      {/* Sticky top bar with close + sticky Ask AI + like/dislike + share */}
+      {/* Sticky top bar: Close (left) | like/dislike + Share (center-left) | Ask AI (far right, appears on scroll) */}
       <div className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
-        <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5">
+        <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5 flex-shrink-0">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
         </Button>
-        {/* ── Sticky Ask AI button ──
-            Appears in the top bar (between Close and the like/dislike group)
-            ONLY when the user has scrolled past the original Ask AI button
-            in the Neutral Summary card. Smooth fade/slide-in via CSS
-            transition. Uses the same purple→blue→cyan gradient as the
-            original so it's recognisable. */}
-        <div
-          className={`overflow-hidden transition-all duration-300 ${
-            askAiSticky ? 'max-w-32 opacity-100' : 'max-w-0 opacity-0'
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() => setAskAiOpen(true)}
-            className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity whitespace-nowrap"
-            aria-label="Ask AI about this story"
-          >
-            <span className="flex items-center gap-1.5 rounded-full bg-background px-3 py-1.5 text-xs font-semibold">
-              <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
-              <span>Ask AI</span>
-            </span>
-          </button>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          {/* Like + Dislike buttons (left of Share) */}
+
+        {/* Like + Dislike + Share group — sits right after Close.
+            When the sticky Ask AI button appears (on scroll), this group
+            stays in place and the Ask AI button is pushed to the far right. */}
+        <div className="flex items-center gap-2">
+          {/* Like + Dislike buttons */}
           <div className="flex items-center gap-1 rounded-full border bg-muted/40 p-0.5">
             <button
               type="button"
@@ -449,6 +430,33 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
               <Share2 className="h-3.5 w-3.5 text-orange-500" />
               {/* Show "Share" on ALL viewports (mobile + desktop) */}
               <span>Share</span>
+            </span>
+          </button>
+        </div>
+
+        {/* Spacer pushes the sticky Ask AI button to the far right */}
+        <div className="flex-1" />
+
+        {/* ── Sticky Ask AI button (far right) ──
+            Appears ONLY when the user has scrolled past the original Ask AI
+            button in the Neutral Summary card. Sits to the RIGHT of the
+            Share button (the like/dislike + Share group stays on the left
+            next to Close). Smooth fade/slide-in via CSS transition. Uses
+            the same purple→blue→cyan gradient as the original. */}
+        <div
+          className={`overflow-hidden transition-all duration-300 flex-shrink-0 ${
+            askAiSticky ? 'max-w-32 opacity-100' : 'max-w-0 opacity-0'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => setAskAiOpen(true)}
+            className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity whitespace-nowrap"
+            aria-label="Ask AI about this story"
+          >
+            <span className="flex items-center gap-1.5 rounded-full bg-background px-3 py-1.5 text-xs font-semibold">
+              <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
+              <span>Ask AI</span>
             </span>
           </button>
         </div>
