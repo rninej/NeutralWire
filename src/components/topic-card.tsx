@@ -184,9 +184,9 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
           </Badge>
           {/* Blindspot badge — only shown for blindspot topics.
-              Shows which side is NOT covering the story and at what %.
-              Red badge = right-leaning blindspot (left isn't covering).
-              Blue badge = left-leaning blindspot (right isn't covering). */}
+              Shows which side is covering the story (the side with ≥80%).
+              Blue badge = left-leaning blindspot (right isn't covering).
+              Red badge = right-leaning blindspot (left isn't covering). */}
           {topic.blindspotSide && (
             <Badge
               className={cn(
@@ -197,7 +197,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
               )}
               variant="outline"
             >
-              Only {topic.blindspotPct}% {topic.blindspotSide === 'left' ? 'Right' : 'Left'}
+              {topic.blindspotSide === 'left' ? 'Left' : 'Right'}
             </Badge>
           )}
           <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
