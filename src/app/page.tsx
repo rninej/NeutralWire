@@ -32,36 +32,64 @@ export async function generateMetadata({
       title: 'NeutralWire — See How Every Outlet Spins the Same Story',
       description: 'Is your news feeding you the full picture? Compare how left, right, and center outlets cover the SAME story — side by side. See the bias, spot the spin, decide for yourself.',
       type: 'website',
+      // Default OG image — the branded neutralwire preview
+      images: [{ url: '/api/og-image', width: 1200, height: 630 }],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: 'NeutralWire — See How Every Outlet Spins the Same Story',
+      description: 'Is your news feeding you the full picture? Compare how left, right, and center outlets cover the SAME story — side by side.',
+      images: ['/api/og-image'],
     },
   }
 
   if (!topicId) return defaultMeta
 
   try {
-    // EMERGENCY: Instead of reading the ENTIRE newsCache (which downloads
-    // all categories at once = huge Firebase download), read just the
-    // specific topic from the archive (single small read).
-    const archived = await firebaseRead<TopicArticle & { archivedAt?: number }>(
+    // Look up the topic in the archive first (permanent storage for
+    // topics sent via notifications). If not found, check the live cache.
+    let topic: (TopicArticle & { archivedAt?: number }) | null = null
+
+    topic = await firebaseRead<TopicArticle & { archivedAt?: number }>(
       `archive/${topicId}`,
     )
-    if (archived) {
-      const ogImage = archived.imageUrl
-        ? `/api/img?url=${encodeURIComponent(archived.imageUrl)}`
-        : undefined
+
+    // Fallback: check the live news cache categories
+    if (!topic) {
+      const cacheCategories = ['relevant', 'top', 'world', 'politics', 'business', 'technology']
+      for (const cat of cacheCategories) {
+        try {
+          const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${cat}`)
+          if (payload?.topics) {
+            topic = payload.topics.find((t) => t.topicId === topicId) || null
+            if (topic) break
+          }
+        } catch {
+          // continue
+        }
+      }
+    }
+
+    if (topic) {
+      // ── Dynamic OG image: article image + NW logo (bottom-right) + bias bar ──
+      // This endpoint generates a composite 1200x630 image that ALWAYS
+      // renders in WhatsApp/Twitter/etc (even if the article image is
+      // stale or blocked). The NW logo + bias bar are overlaid on top.
+      const ogImage = `/api/og-image?topicId=${encodeURIComponent(topicId)}`
       return {
-        title: `${archived.title} — NeutralWire`,
-        description: archived.summary?.slice(0, 200) || archived.title,
+        title: `${topic.title} — NeutralWire`,
+        description: topic.summary?.slice(0, 200) || topic.title,
         openGraph: {
-          title: archived.title,
-          description: archived.summary?.slice(0, 200) || 'Read this story on NeutralWire',
+          title: topic.title,
+          description: topic.summary?.slice(0, 200) || 'Read this story on NeutralWire',
           type: 'article',
-          images: ogImage ? [{ url: ogImage, width: 1200, height: 630 }] : [],
+          images: [{ url: ogImage, width: 1200, height: 630 }],
         },
         twitter: {
           card: 'summary_large_image',
-          title: archived.title,
-          description: archived.summary?.slice(0, 200) || '',
-          images: ogImage ? [ogImage] : [],
+          title: topic.title,
+          description: topic.summary?.slice(0, 200) || '',
+          images: [ogImage],
         },
       }
     }
