@@ -110,12 +110,15 @@ export async function GET(req: NextRequest) {
       base = sharp(gradient).png()
     }
 
-    // ── 4. Build the chunky bias bar with numbers (as SVG paths) ──
-    const barHeight = 48
+    // ── 4. Build the chunky bias bar with pill-shaped edges + numbers ──
+    // The bar is fully rounded (pill shape) on the outer edges. Inner
+    // segment borders are straight. Numbers are solid (not segmented).
+    const barHeight = 52
     const barPadding = 20
     const barWidth = W - barPadding * 2
     const barX = barPadding
     const barY = H - barHeight - 20
+    const radius = barHeight / 2 // pill shape = radius = half height
 
     let biasBarSvg = ''
     if (total > 0) {
@@ -123,66 +126,78 @@ export async function GET(req: NextRequest) {
       const centerW = (leanCenter / total) * barWidth
       const rightW = (leanRight / total) * barWidth
 
-      // Dark background bar (rounded)
-      biasBarSvg += `<rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="8" fill="#000" opacity="0.7"/>`
+      // Use a clipPath to make the entire bar pill-shaped (rounded ends).
+      // All segments are drawn as plain rectangles, then clipped to the
+      // pill shape. This gives clean rounded outer edges without complex
+      // per-segment path math.
+      const clipId = 'barClip'
+      biasBarSvg += `<defs><clipPath id="${clipId}"><rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="${radius}" ry="${radius}"/></clipPath></defs>`
 
-      // Left segment (blue)
+      // Dark background (visible through any gaps)
+      biasBarSvg += `<rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="${radius}" fill="#000" opacity="0.8"/>`
+
+      // Segments (clipped to pill shape)
+      biasBarSvg += `<g clip-path="url(#${clipId})">`
       if (leftW > 0) {
-        const clip = `M${barX + 8} ${barY} L${barX + leftW} ${barY} L${barX + leftW} ${barY + barHeight} L${barX + 8} ${barY + barHeight} Q${barX} ${barY + barHeight} ${barX} ${barY + barHeight - 8} L${barX} ${barY + 8} Q${barX} ${barY} ${barX + 8} ${barY} Z`
-        biasBarSvg += `<path d="${clip}" fill="#3b82f6"/>`
-        // Draw the number as SVG paths (NOT <text>)
-        if (leftW > 30) {
-          biasBarSvg += renderTextAsPaths(
-            String(leanLeft),
-            barX + leftW / 2, // center X
-            barY + 8,         // top Y (centered in 48px bar: 8px padding top, 32px text)
-            32,               // character height
-            '#fff',           // white
-          )
-        }
+        biasBarSvg += `<rect x="${barX}" y="${barY}" width="${leftW}" height="${barHeight}" fill="#3b82f6"/>`
       }
-
-      // Center segment (grey)
       if (centerW > 0) {
         biasBarSvg += `<rect x="${barX + leftW}" y="${barY}" width="${centerW}" height="${barHeight}" fill="#71717a"/>`
-        if (centerW > 30) {
-          biasBarSvg += renderTextAsPaths(
-            String(leanCenter),
-            barX + leftW + centerW / 2,
-            barY + 8,
-            32,
-            '#fff',
-          )
-        }
       }
-
-      // Right segment (red)
       if (rightW > 0) {
         const rightX = barX + leftW + centerW
-        const clip = `M${rightX} ${barY} L${rightX + rightW - 8} ${barY} Q${rightX + rightW} ${barY} ${rightX + rightW} ${barY + 8} L${rightX + rightW} ${barY + barHeight - 8} Q${rightX + rightW} ${barY + barHeight} ${rightX + rightW - 8} ${barY + barHeight} L${rightX} ${barY + barHeight} Z`
-        biasBarSvg += `<path d="${clip}" fill="#ef4444"/>`
-        if (rightW > 30) {
-          biasBarSvg += renderTextAsPaths(
-            String(leanRight),
-            rightX + rightW / 2,
-            barY + 8,
-            32,
-            '#fff',
-          )
-        }
+        biasBarSvg += `<rect x="${rightX}" y="${barY}" width="${rightW}" height="${barHeight}" fill="#ef4444"/>`
+      }
+      biasBarSvg += `</g>`
+
+      // Numbers (drawn on top, not clipped — they're inside the segments)
+      if (leftW > 35) {
+        biasBarSvg += renderTextAsPaths(
+          String(leanLeft),
+          barX + leftW / 2,
+          barY + (barHeight - 34) / 2, // vertically centered
+          34,
+          '#fff',
+        )
+      }
+      if (centerW > 35) {
+        biasBarSvg += renderTextAsPaths(
+          String(leanCenter),
+          barX + leftW + centerW / 2,
+          barY + (barHeight - 34) / 2,
+          34,
+          '#fff',
+        )
+      }
+      if (rightW > 35) {
+        const rightX = barX + leftW + centerW
+        biasBarSvg += renderTextAsPaths(
+          String(leanRight),
+          rightX + rightW / 2,
+          barY + (barHeight - 34) / 2,
+          34,
+          '#fff',
+        )
       }
     }
 
-    // ── 5. Build the NW logo badge (bottom-right) ──
-    // White circle with "NW" drawn as SVG paths inside.
-    const logoSize = 72
-    const logoX = W - logoSize - 24
-    const logoY = barY - logoSize - 12 // above the bias bar
+    // ── 5. Build the "NeutralWire" rectangle banner (bottom-right) ──
+    // A large rounded rectangle with dark background + white "NeutralWire"
+    // text rendered as SVG paths. Positioned above the bias bar.
+    const bannerText = 'NeutralWire'
+    const bannerHeight = 44
+    const bannerCharHeight = 30
+    const bannerCharWidth = 100 * (bannerCharHeight / 140) * 0.55
+    const bannerTextWidth = bannerText.length * bannerCharWidth
+    const bannerWidth = bannerTextWidth + 32 // padding
+    const bannerX = W - bannerWidth - 24
+    const bannerY = barY - bannerHeight - 12
+    const bannerRadius = 10
 
     const logoSvg = `
-      <circle cx="${logoX + logoSize / 2}" cy="${logoY + logoSize / 2}" r="${logoSize / 2 + 4}" fill="#000" opacity="0.6"/>
-      <circle cx="${logoX + logoSize / 2}" cy="${logoY + logoSize / 2}" r="${logoSize / 2}" fill="#fff"/>
-      ${renderTextAsPaths('NW', logoX + logoSize / 2, logoY + 18, 36, '#0a0a0a')}
+      <rect x="${bannerX - 3}" y="${bannerY - 3}" width="${bannerWidth + 6}" height="${bannerHeight + 6}" rx="${bannerRadius + 3}" fill="#000" opacity="0.5"/>
+      <rect x="${bannerX}" y="${bannerY}" width="${bannerWidth}" height="${bannerHeight}" rx="${bannerRadius}" fill="#0a0a0a"/>
+      ${renderTextAsPaths(bannerText, bannerX + bannerWidth / 2, bannerY + (bannerHeight - bannerCharHeight) / 2, bannerCharHeight, '#fff')}
     `
 
     // ── 6. Composite everything ──
