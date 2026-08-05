@@ -68,3 +68,31 @@ export function renderTextAsPaths(
   }
   return svg
 }
+
+/**
+ * Like renderTextAsPaths but with adjustable letter spacing.
+ * Each character is separated by `spacing` pixels.
+ */
+export function renderTextAsPathsSpaced(
+  text: string,
+  centerX: number,
+  topY: number,
+  height: number,
+  fill: string,
+  spacing: number,
+): string {
+  const scale = height / 140
+  const charWidth = 100 * scale * 0.6
+  const totalWidth = text.length * charWidth + (text.length - 1) * spacing
+  const startX = centerX - totalWidth / 2
+
+  let svg = ''
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    const path = CHAR_PATHS[ch.toUpperCase()]
+    if (!path) continue
+    const charX = startX + i * (charWidth + spacing)
+    svg += `<g transform="translate(${charX},${topY}) scale(${scale})"><path d="${path}" fill="${fill}"/></g>`
+  }
+  return svg
+}

@@ -1755,11 +1755,11 @@ function CategoryTab({
       type="button"
       onClick={onClick}
       className={cn(
-        // Smaller text + tighter padding on mobile so all 10 categories
-        // (Relevant, UK, Top Stories, World, Politics, Business,
-        // Tech, Science, Health, Sports) fit in 2 lines.
-        // sm: restores normal size on wider screens.
-        'relative inline-flex items-center gap-1 rounded-md whitespace-nowrap text-[11px] px-2 py-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors',
+        // Smaller text + tighter padding on mobile so all 11 categories
+        // (Relevant, UK, Top Stories, World, Politics, Business, Tech,
+        // Science, Health, Sports, Blindspots) fit in 2 lines on a 320px
+        // iPhone screen. sm: restores normal size on wider screens.
+        'relative inline-flex items-center gap-0.5 rounded-md whitespace-nowrap text-[10px] px-1.5 py-1 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors',
         active
           ? 'text-background'
           : 'hover:bg-muted text-foreground/80',
@@ -1984,68 +1984,108 @@ function SectionedFeed({
   if (allTopics.length === 0 && loadingCategories) return null
 
   // ── Top Headlines: heavily personalized ──
-  // Prioritizes: user interests > my country > world news > demotes US news
-  // For PWA users with interests: pick top 5 topics ranked by a STRONG
-  // personalization score that demotes US domestic politics.
-  // For new visitors (no interests): use the natural feed order but still
-  // demote US politics so it doesn't dominate.
+  // For non-US users: HEAVILY demote US domestic news so country/world/
+  // other subtopic news rises to the top. US news is still shown but
+  // pushed way down unless it's a major international event.
   const hasPersonalization = interests.length > 0 || Object.keys(engagement || {}).length > 0
+  const isUSUser = country?.code === 'US'
 
-  // US politics keywords — demoted in Top Headlines
-  const usPoliticsKw = [
-    'trump says', 'trump claims', 'trump attacks', 'trump threatens',
-    'trump praises', 'trump blasts', 'trump lashes', 'trump insists',
-    'trump calls', 'trump urges', 'trump defends', 'trump mocks',
-    'trump vows', 'trump promises', 'trump tweets', 'trump posts',
-    'trump campaign', 'trump re-election', 'trump 2028',
-    'gop rep', 'gop senator', 'senator says', 'congressman says',
+  // Broad US news detection — catches ANY US-focused story, not just Trump
+  const usNewsKw = [
+    // US politics
+    'trump', 'biden', 'harris', 'obama', 'gop', 'republican', 'democrat',
     'us congress', 'us senate', 'us house', 'us supreme court', 'scotus',
-    'us poll', 'us approval', 'us election', 'us primary',
-    'biden says', 'biden claims', 'biden signs',
-    'rand paul', 'fauci', 'senate hearing', 'house hearing',
-    'trump-iran', 'trump iran', 'trump saudi', 'trump netanyahu',
-    'trump putin', 'trump xi', 'trump warns', 'trump orders',
+    'senate hearing', 'house hearing', 'senator', 'congressman', 'congresswoman',
+    'us poll', 'us approval', 'us election', 'us primary', 'us governor',
+    // US domestic
+    'us state', 'us law', 'us federal', 'us military', 'us troops',
+    'white house', 'capitol', 'pentagon', 'fbi', 'cia', 'doj',
+    // US cities (when the story is about US local news)
+    'new york', 'los angeles', 'chicago', 'houston', 'phoenix', 'philadelphia',
+    'san antonio', 'san diego', 'dallas', 'san jose', 'austin', 'jacksonville',
+    'fort worth', 'columbus', 'indianapolis', 'charlotte', 'san francisco',
+    'seattle', 'denver', 'boston', 'el paso', 'nashville', 'detroit',
+    'portland', 'memphis', 'oklahoma city', 'las vegas', 'louisville',
+    'baltimore', 'milwaukee', 'albuquerque', 'tucson', 'fresno',
+    // US-specific terms
+    'us weekly', 'us news', 'us marshals', 'us border', 'us customs',
+    'us citizen', 'us nationals', 'us embassy',
   ]
+
+  // World news keywords — boosted for ALL users
+  const worldKw = ['ukraine', 'russia', 'putin', 'china', 'israel', 'gaza',
+    'hamas', 'iran', 'middle east', 'nato', 'united nations', 'europe',
+    'war', 'ceasefire', 'nuclear', 'un security', 'climate summit',
+    'cop ', 'g20', 'g7', 'un general assembly', 'european union',
+    'north korea', 'south korea', 'japan', 'india', 'modi', 'africa',
+    'asia', 'latin america', 'refugee', 'migrant', 'air strike',
+    'france', 'germany', 'macron', 'merz', 'turkey', 'erdogan',
+    'australia', 'canada', 'brazil', 'argentina', 'mexico']
 
   function headlineScore(topic: TopicArticle): number {
     let score = personalizationBoost(topic, interests, engagement || {})
 
-    // Demote US domestic politics heavily
     const titleLower = topic.title.toLowerCase()
-    for (const kw of usPoliticsKw) {
-      if (titleLower.includes(kw)) {
-        score -= 50
-        break
+
+    // ── For NON-US users: heavily demote US domestic news ──
+    // US news gets -80 (pushes it way down) so country/world/other news
+    // naturally rises to the top of the headlines.
+    if (!isUSUser) {
+      let isUSNews = false
+      for (const kw of usNewsKw) {
+        if (titleLower.includes(kw)) {
+          isUSNews = true
+          break
+        }
+      }
+      if (isUSNews) {
+        score -= 80
+      }
+      // Extra blanket Trump demotion for non-US users
+      if (titleLower.includes('trump')) {
+        score -= 40
       }
     }
 
-    // Blanket Trump demotion — ANY title with "trump" gets -60
-    if (titleLower.includes('trump')) {
-      score -= 60
-    }
-
-    // Boost world news (international affairs that affect everyone)
-    const worldKw = ['ukraine', 'russia', 'putin', 'china', 'israel', 'gaza',
-      'hamas', 'iran', 'middle east', 'nato', 'united nations', 'europe',
-      'war', 'ceasefire', 'nuclear', 'un security', 'climate summit',
-      'cop ', 'g20', 'g7', 'un general assembly']
+    // ── Boost world news for ALL users ──
     for (const kw of worldKw) {
       if (titleLower.includes(kw)) {
-        score += 15
+        score += 25
         break
       }
     }
 
-    // Boost UK-specific news (if user is in UK)
-    if (country?.code === 'GB' || country?.code === 'UK') {
-      const ukKw = ['uk ', 'britain', 'british', 'england', 'london', 'scotland',
-        'wales', 'parliament', 'westminster', 'downing street', 'nhs',
-        'starmer', 'burnham', 'labour', 'conservative', 'tories',
-        'council tax', 'met police', 'heathrow', 'gatwick', 'bbc']
-      for (const kw of ukKw) {
-        if (titleLower.includes(kw)) {
-          score += 20
-          break
+    // ── Boost country-specific news (user's own country) ──
+    if (country?.code && !isUSUser) {
+      const cc = country.code.toLowerCase()
+      const countryName = (country.name || '').toLowerCase()
+      // Boost if the title mentions the user's country name or code
+      if (titleLower.includes(countryName) || titleLower.includes(cc + ' ')) {
+        score += 30
+      }
+      // UK-specific keywords
+      if (country.code === 'GB' || country.code === 'UK') {
+        const ukKw = ['uk ', 'britain', 'british', 'england', 'london', 'scotland',
+          'wales', 'parliament', 'westminster', 'downing street', 'nhs',
+          'starmer', 'burnham', 'labour', 'conservative', 'tories',
+          'council tax', 'met police', 'heathrow', 'gatwick', 'bbc']
+        for (const kw of ukKw) {
+          if (titleLower.includes(kw)) {
+            score += 30
+            break
+          }
+        }
+      }
+      // India-specific keywords
+      if (country.code === 'IN') {
+        const inKw = ['india', 'indian', 'modi', 'delhi', 'mumbai', 'bengaluru',
+          'chennai', 'kolkata', 'hyderabad', 'lok sabha', 'rajya sabha',
+          'bjp', 'congress', 'parliament', 'supreme court of india', 'rbi', 'isro']
+        for (const kw of inKw) {
+          if (titleLower.includes(kw)) {
+            score += 30
+            break
+          }
         }
       }
     }

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
 import { firebaseRead } from '@/lib/firebase-server'
 import type { TopicArticle } from '@/lib/news-aggregator'
-import { renderTextAsPaths } from './char-paths'
+import { renderTextAsPaths, renderTextAsPathsSpaced } from './char-paths'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -183,22 +183,22 @@ export async function GET(req: NextRequest) {
 
     // ── 5. Build the "NEUTRALWIRE" rectangle banner (bottom-right) ──
     // A large rounded rectangle with dark background + white "NEUTRALWIRE"
-    // text rendered as SVG paths. Positioned above the bias bar.
-    // Uses uppercase letters because they render cleanly as vector paths.
+    // text rendered as SVG paths with letter spacing for readability.
     const bannerText = 'NEUTRALWIRE'
-    const bannerHeight = 56
-    const bannerCharHeight = 40
+    const bannerHeight = 72
+    const bannerCharHeight = 50
+    const letterSpacing = 12 // gap between letters in px (visible spacing)
     const bannerCharWidth = 100 * (bannerCharHeight / 140) * 0.6
-    const bannerTextWidth = bannerText.length * bannerCharWidth
-    const bannerWidth = bannerTextWidth + 48 // generous padding
+    const bannerTextWidth = bannerText.length * bannerCharWidth + (bannerText.length - 1) * letterSpacing
+    const bannerWidth = bannerTextWidth + 56 // generous padding
     const bannerX = W - bannerWidth - 24
     const bannerY = barY - bannerHeight - 16
-    const bannerRadius = 12
+    const bannerRadius = 14
 
     const logoSvg = `
       <rect x="${bannerX - 4}" y="${bannerY - 4}" width="${bannerWidth + 8}" height="${bannerHeight + 8}" rx="${bannerRadius + 4}" fill="#000" opacity="0.5"/>
       <rect x="${bannerX}" y="${bannerY}" width="${bannerWidth}" height="${bannerHeight}" rx="${bannerRadius}" fill="#0a0a0a"/>
-      ${renderTextAsPaths(bannerText, bannerX + bannerWidth / 2, bannerY + (bannerHeight - bannerCharHeight) / 2, bannerCharHeight, '#fff')}
+      ${renderTextAsPathsSpaced(bannerText, bannerX + bannerWidth / 2, bannerY + (bannerHeight - bannerCharHeight) / 2, bannerCharHeight, '#fff', letterSpacing)}
     `
 
     // ── 6. Composite everything ──

@@ -495,9 +495,9 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           <Badge variant="secondary" className="text-[10px]">
             {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
           </Badge>
-          <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Clock className="h-3 w-3" />
-            Updated {mounted ? formatTime(topic.latestSeen) : ""}
+          <span className="inline-flex items-center gap-1 text-sm font-medium text-foreground">
+            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+            {mounted ? formatTime(topic.latestSeen) : ""}
           </span>
           {topic.localCoverage && topic.localCoverage > 0 && (
             <Badge variant="outline" className="text-[10px]">
