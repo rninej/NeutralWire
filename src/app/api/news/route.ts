@@ -252,24 +252,45 @@ async function handleBlindspots(
   offset: number,
   t0: number,
 ) {
-  // Read multiple cached categories in parallel
+  // Read ALL cached categories in parallel — includes relevant, mycountry,
+  // and all the standard subtopics. This gives the widest pool of stories
+  // to find blindspots from.
   const catsToCheck: Category[] = [
-    'top', 'world', 'politics', 'business', 'technology', 'science', 'health',
+    'top', 'world', 'politics', 'business', 'technology', 'science', 'health', 'sports',
   ]
-  const cachedResults = await Promise.all(
-    catsToCheck.map((cat) => readCachedNews(cat, '').catch(() => null)),
-  )
+  // Also check the user's relevant + mycountry caches for common countries.
+  // These are virtual categories (country-specific), so we check a few
+  // common country codes.
+  const virtualCats: Array<{ cat: Category; country: string }> = [
+    { cat: 'relevant', country: 'GB' },
+    { cat: 'relevant', country: 'US' },
+    { cat: 'relevant', country: 'IN' },
+    { cat: 'mycountry', country: 'GB' },
+    { cat: 'mycountry', country: 'US' },
+    { cat: 'mycountry', country: 'IN' },
+  ]
 
-  // Merge all topics, dedup by topicId
-  const seen = new Set<string>()
+  const cachedResults = await Promise.all([
+    ...catsToCheck.map((cat) => readCachedNews(cat, '').catch(() => null)),
+    ...virtualCats.map(({ cat, country }) => readCachedNews(cat, country).catch(() => null)),
+  ])
+
+  // Merge all topics, dedup by topicId AND by normalized title (so the same
+  // story from different category caches doesn't appear twice)
+  const seenTopicIds = new Set<string>()
+  const seenTitles = new Set<string>()
   const allTopics: TopicArticle[] = []
   for (const cached of cachedResults) {
     if (!cached || !Array.isArray(cached.topics)) continue
     for (const t of cached.topics) {
-      if (!seen.has(t.topicId)) {
-        seen.add(t.topicId)
-        allTopics.push(t)
-      }
+      if (seenTopicIds.has(t.topicId)) continue
+      // Also dedup by normalized title (different topicId, same story
+      // from different aggregators)
+      const normTitle = t.title.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+      if (normTitle && seenTitles.has(normTitle)) continue
+      seenTopicIds.add(t.topicId)
+      if (normTitle) seenTitles.add(normTitle)
+      allTopics.push(t)
     }
   }
 
@@ -277,9 +298,9 @@ async function handleBlindspots(
   // total = leanLeft + leanCenter + leanRight
   // If leanLeft/total >= 0.8 → left blindspot (right isn't covering it)
   // If leanRight/total >= 0.8 → right blindspot (left isn't covering it)
-  // Require at least 3 sources total so it's a real story
+  // Require at least 2 sources total (was 3 — lowered to show more stories)
   const BLINDSPOT_THRESHOLD = 0.8
-  const MIN_TOTAL = 3
+  const MIN_TOTAL = 2
   const blindspots = allTopics
     .map((t) => {
       const total = t.leanLeft + t.leanCenter + t.leanRight
@@ -297,8 +318,12 @@ async function handleBlindspots(
       return { topic: t, side, pct, total }
     })
     .filter((entry) => entry.side !== null && entry.total >= MIN_TOTAL)
-    // Sort: most extreme blindspots first (lowest % from the other side)
-    .sort((a, b) => a.pct - b.pct)
+    // Sort: most extreme blindspots first (lowest % from the other side),
+    // then by coverage (more sources = more important story)
+    .sort((a, b) => {
+      if (a.pct !== b.pct) return a.pct - b.pct
+      return b.topic.coverage - a.topic.coverage
+    })
 
   const result = blindspots
     .slice(offset, offset + limit)

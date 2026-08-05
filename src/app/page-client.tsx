@@ -1544,22 +1544,6 @@ export default function Home() {
               <BiasColumns topics={filteredTopics} />
             ) : (
               <>
-                {/* Blindspots info banner — explains what this tab shows */}
-                {category === 'blindspots' && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                    className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm"
-                  >
-                    <span className="font-semibold text-amber-600 dark:text-amber-400">
-                      Blindspots
-                    </span>{' '}
-                    <span className="text-muted-foreground">
-                      — stories where ≥80% of coverage comes from one side of the political spectrum. See what the other side isn't telling you.
-                    </span>
-                  </motion.div>
-                )}
                 {/* ── Mobile: sectioned layout for ALL tabs ── */}
                 {/* Desktop: simple grid layout (clean, fills space properly) */}
                 {!debouncedSearch ? (
@@ -1764,10 +1748,13 @@ function CategoryTab({
           style={{ zIndex: 0 }}
         />
       )}
-      {/* ── Blindspots Venn diagram icon ──
+      <span className="relative z-10">{label}</span>
+      {/* ── Blindspots Venn diagram icon (RIGHT of text) ──
           Two overlapping circles (blue left, red right) arranged like a
           Venn diagram. Visually communicates "blindspots" — what one side
-          sees that the other doesn't. Only shown for the 'blindspots' tab. */}
+          sees that the other doesn't. Only shown for the 'blindspots' tab.
+          Colors stay blue/red even when the tab is active (so the icon is
+          always recognizable, not invisible on the dark pill background). */}
       {cat === 'blindspots' && (
         <span className="relative z-10 flex-shrink-0">
           <svg
@@ -1778,32 +1765,13 @@ function CategoryTab({
             xmlns="http://www.w3.org/2000/svg"
             aria-hidden="true"
           >
-            {/* Blue circle (left) */}
-            <circle
-              cx="4.5"
-              cy="5"
-              r="3.5"
-              className={cn(
-                'transition-colors',
-                active ? 'fill-white/80' : 'fill-blue-500',
-              )}
-              opacity="0.85"
-            />
-            {/* Red circle (right) */}
-            <circle
-              cx="9.5"
-              cy="5"
-              r="3.5"
-              className={cn(
-                'transition-colors',
-                active ? 'fill-white/80' : 'fill-red-500',
-              )}
-              opacity="0.85"
-            />
+            {/* Blue circle (left) — always blue, even when active */}
+            <circle cx="4.5" cy="5" r="3.5" className="fill-blue-500" opacity="0.85" />
+            {/* Red circle (right) — always red, even when active */}
+            <circle cx="9.5" cy="5" r="3.5" className="fill-red-500" opacity="0.85" />
           </svg>
         </span>
       )}
-      <span className="relative z-10">{label}</span>
     </button>
   )
 }
@@ -1817,14 +1785,6 @@ function LoadingState() {
           <Card key={i} className="h-64 animate-pulse bg-muted/40" />
         ))}
       </div>
-      <motion.div
-        className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground"
-        animate={{ opacity: [0.55, 1, 0.55] }}
-        transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-      >
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading from Firebase cache…
-      </motion.div>
     </div>
   )
 }
