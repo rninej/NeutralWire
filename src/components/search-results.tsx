@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { motion } from 'framer-motion'
 import { Loader2, Search as SearchIcon } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -93,10 +94,11 @@ export function SearchResults({ query, loading, result, onOpenTopic }: SearchRes
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {uniqueTopics.map((topic) => (
+        {uniqueTopics.map((topic, i) => (
           <SearchTopicCard
             key={topic.topicId}
             topic={topic}
+            index={i}
             onOpen={onOpenTopic}
           />
         ))}
@@ -107,9 +109,11 @@ export function SearchResults({ query, loading, result, onOpenTopic }: SearchRes
 
 function SearchTopicCard({
   topic,
+  index = 0,
   onOpen,
 }: {
   topic: TopicArticle
+  index?: number
   onOpen?: (topic: TopicArticle) => void
 }) {
   const [imgError, setImgError] = React.useState(false)
@@ -124,55 +128,66 @@ function SearchTopicCard({
     onOpen?.(topic)
   }
 
+  // Staggered fade-in: each card delays by ~40ms (capped at 0.32s so long
+  // result lists don't make the user wait). 250ms duration keeps it snappy.
+  const staggerDelay = Math.min(index * 0.04, 0.32)
+
   return (
-    <Card
-      className="overflow-hidden p-0 gap-0 flex flex-col cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all"
-      onClick={handleClick}
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, delay: staggerDelay, ease: 'easeOut' }}
+      className="h-full"
     >
-      <div className="flex flex-col gap-2 p-4 pb-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary" className="text-[10px]">
-            {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
-          </Badge>
-          <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Clock className="h-3 w-3" />
-            {mounted ? formatTime(topic.latestSeen) : ''}
-          </span>
+      <Card
+        className="overflow-hidden p-0 gap-0 flex flex-col cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all h-full"
+        onClick={handleClick}
+      >
+        <div className="flex flex-col gap-2 p-4 pb-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary" className="text-[10px]">
+              {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
+            </Badge>
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <Clock className="h-3 w-3" />
+              {mounted ? formatTime(topic.latestSeen) : ''}
+            </span>
+          </div>
+          <h3 className="font-semibold leading-snug text-base">
+            {topic.title}
+          </h3>
         </div>
-        <h3 className="font-semibold leading-snug text-base">
-          {topic.title}
-        </h3>
-      </div>
 
-      {showImage && (
-        <div className="relative w-full overflow-hidden bg-muted aspect-[16/10]">
-          <img
-            src={`/api/img?url=${encodeURIComponent(topic.imageUrl!)}`}
-            alt=""
-            className="h-full w-full object-cover"
-            onError={() => setImgError(true)}
-          />
-        </div>
-      )}
+        {showImage && (
+          <div className="relative w-full overflow-hidden bg-muted aspect-[16/10]">
+            <img
+              src={`/api/img?url=${encodeURIComponent(topic.imageUrl!)}`}
+              alt=""
+              className="h-full w-full object-cover"
+              onError={() => setImgError(true)}
+            />
+          </div>
+        )}
 
-      {topic.summary && (
-        <div className={cn('px-4', showImage ? 'pt-3' : '')}>
-          <p className="text-sm text-muted-foreground line-clamp-3">{topic.summary}</p>
-        </div>
-      )}
+        {topic.summary && (
+          <div className={cn('px-4', showImage ? 'pt-3' : '')}>
+            <p className="text-sm text-muted-foreground line-clamp-3">{topic.summary}</p>
+          </div>
+        )}
 
-      <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
-        <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-muted-foreground">
-            {total} {total === 1 ? 'article' : 'articles'} across the spectrum
-          </span>
-          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground">
-            <Globe className="h-2.5 w-2.5" />
-            Open in NeutralWire
-          </span>
+        <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
+          <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted-foreground">
+              {total} {total === 1 ? 'article' : 'articles'} across the spectrum
+            </span>
+            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground">
+              <Globe className="h-2.5 w-2.5" />
+              Open in NeutralWire
+            </span>
+          </div>
         </div>
-      </div>
-    </Card>
+      </Card>
+    </motion.div>
   )
 }

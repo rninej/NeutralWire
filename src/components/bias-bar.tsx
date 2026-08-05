@@ -1,5 +1,6 @@
 'use client'
 
+import { motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
 
 interface BiasBarProps {
@@ -9,6 +10,10 @@ interface BiasBarProps {
   showLabels?: boolean
   className?: string
 }
+
+// Shared animation for the segment width growth — smooth, slightly slow
+// so the user can see the spectrum "fill in" on mount.
+const SEGMENT_TRANSITION = { duration: 0.6, ease: 'easeOut' as const }
 
 export function BiasBar({ left, center, right, showLabels = true, className }: BiasBarProps) {
   const total = left + center + right
@@ -26,37 +31,43 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
           aria-label={`Coverage: ${left} left, ${center} center, ${right} right`}
         >
           {lPct > 0 && (
-            <div
-              className="flex items-center justify-center bg-blue-500 transition-all"
-              style={{ width: `${lPct}%` }}
+            <motion.div
+              className="flex items-center justify-center bg-blue-500"
+              initial={{ width: 0 }}
+              animate={{ width: `${lPct}%` }}
+              transition={SEGMENT_TRANSITION}
               title={`Left: ${left}`}
             >
               {lPct > 10 && (
                 <span className="text-[8px] font-bold text-white leading-none">L{left}</span>
               )}
-            </div>
+            </motion.div>
           )}
           {cPct > 0 && (
-            <div
-              className="flex items-center justify-center bg-zinc-500 transition-all"
-              style={{ width: `${cPct}%` }}
+            <motion.div
+              className="flex items-center justify-center bg-zinc-500"
+              initial={{ width: 0 }}
+              animate={{ width: `${cPct}%` }}
+              transition={SEGMENT_TRANSITION}
               title={`Center: ${center}`}
             >
               {cPct > 10 && (
                 <span className="text-[8px] font-bold text-white leading-none">C{center}</span>
               )}
-            </div>
+            </motion.div>
           )}
           {rPct > 0 && (
-            <div
-              className="flex items-center justify-center bg-red-500 transition-all"
-              style={{ width: `${rPct}%` }}
+            <motion.div
+              className="flex items-center justify-center bg-red-500"
+              initial={{ width: 0 }}
+              animate={{ width: `${rPct}%` }}
+              transition={SEGMENT_TRANSITION}
               title={`Right: ${right}`}
             >
               {rPct > 10 && (
                 <span className="text-[8px] font-bold text-white leading-none">R{right}</span>
               )}
-            </div>
+            </motion.div>
           )}
         </div>
       ) : (
@@ -66,23 +77,29 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
           aria-label={`Coverage: ${left} left, ${center} center, ${right} right`}
         >
           {lPct > 0 && (
-            <div
-              className="bg-blue-500 transition-all"
-              style={{ width: `${lPct}%` }}
+            <motion.div
+              className="bg-blue-500"
+              initial={{ width: 0 }}
+              animate={{ width: `${lPct}%` }}
+              transition={SEGMENT_TRANSITION}
               title={`Left: ${left}`}
             />
           )}
           {cPct > 0 && (
-            <div
-              className="bg-zinc-500 transition-all"
-              style={{ width: `${cPct}%` }}
+            <motion.div
+              className="bg-zinc-500"
+              initial={{ width: 0 }}
+              animate={{ width: `${cPct}%` }}
+              transition={SEGMENT_TRANSITION}
               title={`Center: ${center}`}
             />
           )}
           {rPct > 0 && (
-            <div
-              className="bg-red-500 transition-all"
-              style={{ width: `${rPct}%` }}
+            <motion.div
+              className="bg-red-500"
+              initial={{ width: 0 }}
+              animate={{ width: `${rPct}%` }}
+              transition={SEGMENT_TRANSITION}
               title={`Right: ${right}`}
             />
           )}

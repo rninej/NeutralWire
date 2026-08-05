@@ -1325,21 +1325,32 @@ export default function Home() {
           serves cached /api/news, /api/summary, and /api/topic responses
           so the app remains fully functional — this banner just tells the
           user they're seeing cached content. Disappears automatically when
-          the connection returns (via the 'online' event listener). */}
-      {isOffline && (
-        <div className="sticky top-0 z-[60] flex items-center justify-center gap-2 bg-amber-500 px-4 py-2.5 text-center text-sm font-semibold text-black shadow-lg">
-          <WifiOff className="h-4 w-4 flex-shrink-0" />
-          <span>Offline Mode — showing cached news. Summaries & sources still work.</span>
-        </div>
-      )}
+          the connection returns (via the 'online' event listener).
+          Slides down from the top on appear; slides back up on disappear. */}
+      <AnimatePresence>
+        {isOffline && (
+          <motion.div
+            initial={{ y: -40, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -40, opacity: 0 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="sticky top-0 z-[60] flex items-center justify-center gap-2 bg-amber-500 px-4 py-2.5 text-center text-sm font-semibold text-black shadow-lg"
+          >
+            <WifiOff className="h-4 w-4 flex-shrink-0" />
+            <span>Offline Mode — showing cached news. Summaries & sources still work.</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
           <a href="/" className="flex items-center gap-2 font-bold">
-            <img
+            <motion.img
               src="/icon-192.png"
               alt="NeutralWire"
               className="h-7 w-7 rounded"
+              whileHover={{ scale: 1.15 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 14 }}
             />
             <span className="hidden sm:inline">NeutralWire</span>
           </a>
@@ -1471,14 +1482,23 @@ export default function Home() {
         )}
 
         {/* Search results (full-catalog API search) — replaces the normal view
-            when local search yields nothing and an API search is running. */}
+            when local search yields nothing and an API search is running.
+            Wrapped in a motion.div so the transition from feed → search
+            results is smooth (fade + slight slide-up). The individual result
+            cards stagger inside SearchResults via their own motion. */}
         {showApiSearch ? (
-          <SearchResults
-            query={debouncedSearch}
-            loading={apiSearchLoading}
-            result={apiSearchResult}
-            onOpenTopic={handleOpenDetail}
-          />
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+          >
+            <SearchResults
+              query={debouncedSearch}
+              loading={apiSearchLoading}
+              result={apiSearchResult}
+              onOpenTopic={handleOpenDetail}
+            />
+          </motion.div>
         ) : (
           <AnimatePresence mode="wait">
             <motion.div
@@ -1703,13 +1723,25 @@ function CategoryTab({
         // (Relevant, UK, Top Stories, World, Politics, Business,
         // Tech, Science, Health, Sports) fit in 2 lines.
         // sm: restores normal size on wider screens.
-        'inline-flex items-center gap-1 rounded-md whitespace-nowrap text-[11px] px-2 py-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors',
+        'relative inline-flex items-center gap-1 rounded-md whitespace-nowrap text-[11px] px-2 py-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors',
         active
-          ? 'bg-foreground text-background'
+          ? 'text-background'
           : 'hover:bg-muted text-foreground/80',
       )}
     >
-      {label}
+      {active && (
+        // Sliding pill indicator — uses layoutId so Framer Motion animates
+        // it from the previously-active tab's position to this one when the
+        // active tab changes. Spring physics give it a snappy but smooth
+        // slide (≈250ms effective duration).
+        <motion.span
+          layoutId="category-tab-pill"
+          className="absolute inset-0 rounded-md bg-foreground"
+          transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+          style={{ zIndex: 0 }}
+        />
+      )}
+      <span className="relative z-10">{label}</span>
     </button>
   )
 }
@@ -1723,10 +1755,14 @@ function LoadingState() {
           <Card key={i} className="h-64 animate-pulse bg-muted/40" />
         ))}
       </div>
-      <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+      <motion.div
+        className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground"
+        animate={{ opacity: [0.55, 1, 0.55] }}
+        transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+      >
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading from Firebase cache…
-      </div>
+      </motion.div>
     </div>
   )
 }

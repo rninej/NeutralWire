@@ -106,7 +106,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   // so the card looks intentional and pleasant next to image cards.
   if (variant === 'mini') {
     return (
-      <motion.div {...cardMotion} className="h-full">
+      <motion.div {...cardMotion} className="group h-full">
       <Card
         className={cn(
           'h-full overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
@@ -121,7 +121,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
               src={proxyImage(imageUrl!)}
               alt=""
               loading="lazy"
-              className="h-full w-full object-cover"
+              className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
               onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
             />
           </div>
@@ -153,7 +153,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   const isHero = variant === 'hero'
 
   return (
-    <motion.div {...cardMotion} className="h-full">
+    <motion.div {...cardMotion} className="group h-full">
     <Card
       className={cn(
         'h-full overflow-hidden p-0 gap-0 flex flex-col',
@@ -171,7 +171,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             loading={variant === 'featured' || isHero ? 'eager' : 'lazy'}
             // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
             fetchpriority={variant === 'featured' || isHero ? 'high' : 'low'}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
         </div>
@@ -213,7 +213,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             loading={variant === 'featured' ? 'eager' : 'lazy'}
             // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
             fetchpriority={variant === 'featured' ? 'high' : 'low'}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
         </div>

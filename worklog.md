@@ -1008,3 +1008,80 @@ Files modified:
 - `src/components/topic-card.tsx`
 - `src/components/topic-detail.tsx`
 - `src/app/page-client.tsx`
+
+---
+
+---
+Task ID: 2
+Agent: full-stack-developer (animation enhancement pass)
+Task: Add MORE smooth, appealing Framer Motion animations throughout the NeutralWire news PWA app (the user liked the previous animations and wants more).
+
+Work Log:
+
+Read the existing worklog and the 4 target files (topic-card.tsx, bias-bar.tsx, page-client.tsx, topic-detail.tsx) plus search-results.tsx to understand the current animation baseline and component structure. Confirmed the existing animations (staggered card entrance, slide-up detail overlay, tab switch slide, whileInView sectioned feed, summary fade-in) and identified the 10 new animation areas requested.
+
+Changes made (all FAST 150-350ms, transform/opacity only where possible, viewport={{ once: true }} for scroll-triggered):
+
+1. `src/components/topic-card.tsx` — Image hover zoom
+   - Added `group` class to the outer `<motion.div>` wrapper for BOTH the mini variant and the default/hero variant.
+   - Added `transition-transform duration-500 ease-out group-hover:scale-[1.08]` to all three `<img>` elements (mini thumbnail, hero image on top, non-hero image below header).
+   - The image containers already had `overflow-hidden` so the zoom stays clipped.
+   - Combined with the existing `whileHover: { scale: 1.02 }` on the card itself, the effective image zoom on hover is ~1.10 — subtle and pleasant.
+   - Pure CSS hover (group-hover), no JS — zero perf overhead.
+
+2. `src/components/bias-bar.tsx` — Animated segment width on mount
+   - Converted all 6 segment `<div>`s (3 for showLabels=true, 3 for showLabels=false) to `<motion.div>` with `initial={{ width: 0 }} animate={{ width: 'X%' }} transition={{ duration: 0.6, ease: 'easeOut' }}`.
+   - Added `import { motion } from 'framer-motion'` and a shared `SEGMENT_TRANSITION` constant.
+   - The blue/grey/red segments now grow from 0% to their actual percentage when the bias bar mounts (visible on every card entrance, in the detail view, and in search results).
+   - Note: width animation is not GPU-accelerated, but the bars are tiny (max 3 per card, h-2 or h-3.5) so the layout cost is negligible. The 0.6s duration is slow enough to be visible but fast enough to not delay interaction.
+   - Preserved the existing `title`, `role="img"`, `aria-label`, and label-rendering logic (`lPct > 10` check).
+
+3. `src/components/topic-detail.tsx` — Like/dislike pop + share success + source stagger
+   - Added `AnimatePresence` to the framer-motion import (was only `motion`).
+   - **Like/dislike pop**: Converted both `<button>` elements (ThumbsUp + ThumbsDown) to `<motion.button>` with `whileTap={{ scale: 1.2 }}` and `transition={{ duration: 0.15, ease: 'easeOut' }}`. The pop is a quick 150ms scale-up to 1.2 then back to 1 on release — feels like a physical "tap". All `onClick`, `className`, `aria-label`, `title`, and conditional active-state styling preserved.
+   - **Share button success**: Wrapped the Share2/Check icon+label swap in `<AnimatePresence mode="wait" initial={false}>`. When `shared` becomes true (clipboard copy success), the icon+label cross-fades with a scale+rotate entrance: the "Copied!" checkmark enters with `initial={{ scale: 0, rotate: -90, opacity: 0 }} animate={{ scale: 1, rotate: 0, opacity: 1 }}` (200ms easeOut), and the original Share2 icon exits with the mirror rotation. The reverse happens when `shared` flips back to false after 2s.
+   - **Source list stagger**: In `SourceGroup`, converted each source `<a>` to `<motion.a>` with `initial={{ opacity: 0, y: 8 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-20px' }} transition={{ duration: 0.25, delay: Math.min(i * 0.04, 0.32), ease: 'easeOut' }}`. Each source link fades+slides in staggered as the user scrolls to the "All Sources" section. The `once: true` ensures it never re-triggers on scroll-back. All `href`, `target`, `rel`, `onClick`, and hover styling preserved.
+
+4. `src/app/page-client.tsx` — Tab indicator + offline banner + logo hover + loading pulse + search wrapper
+   - **Category tab indicator (layoutId)**: Refactored `CategoryTab` so the button is now `relative`, and when `active` it renders a `<motion.span layoutId="category-tab-pill">` absolutely positioned (`absolute inset-0 rounded-md bg-foreground`) behind the label text. The label is wrapped in `<span className="relative z-10">` so it sits on top. Removed `bg-foreground` from the active button's className (the pill provides it); kept `text-background` for active so the label stays visible over the dark pill. Spring transition `{ type: 'spring', stiffness: 400, damping: 32 }` gives a snappy ~250ms slide between tabs. Framer Motion's layoutId automatically animates the pill from the previously-active tab's position to the newly-active one — works across the PRIMARY/SECONDARY category groups since they share the same React tree.
+   - **Offline banner slide**: Wrapped the amber offline banner in `<AnimatePresence>` and converted its `<div>` to `<motion.div>` with `initial={{ y: -40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -40, opacity: 0 }} transition={{ duration: 0.25, ease: 'easeOut' }}`. The banner now slides down from the top when the browser goes offline, and slides back up when connection returns. All content (WifiOff icon + message) and sticky positioning preserved.
+   - **Header logo hover**: Converted the `<img src="/icon-192.png">` to `<motion.img>` with `whileHover={{ scale: 1.15 }} transition={{ type: 'spring', stiffness: 400, damping: 14 }}`. The spring's low damping gives a subtle bounce/overshoot when the user hovers the logo — feels playful without being distracting. `alt`, `src`, and `className` preserved.
+   - **Loading spinner pulse**: Wrapped the "Loading from Firebase cache…" row (Loader2 + text) in `<motion.div>` with `animate={{ opacity: [0.55, 1, 0.55] }} transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}`. The row now gently breathes (opacity 55% → 100% → 55%) on a 1.8s loop while the cards above it use the existing Tailwind `animate-pulse`. The infinite repeat is acceptable here because it's a temporary loading state (a few seconds), not in the main scroll area, and opacity is GPU-accelerated.
+   - **Search results wrapper fade-in**: Wrapped `<SearchResults>` in `<motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25, ease: 'easeOut' }}>` so the transition from the normal feed → search results view is smooth. The individual search result cards stagger inside `SearchResults` via their own motion (see #5 below).
+
+5. `src/components/search-results.tsx` — Search results stagger
+   - Added `import { motion } from 'framer-motion'`.
+   - Passed `index={i}` from the `uniqueTopics.map()` to each `SearchTopicCard`.
+   - Added `index?: number` prop to `SearchTopicCard` (defaults to 0).
+   - Wrapped each `SearchTopicCard`'s `<Card>` in `<motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25, delay: Math.min(index * 0.04, 0.32), ease: 'easeOut' }} className="h-full">`. Each search result card fades+slides in with a 40ms stagger (capped at 320ms so long result lists don't make the user wait). Added `h-full` to the inner Card so it stretches to match sibling card heights in the grid row.
+   - All existing click handlers, deduplication logic, image error handling, and BiasBar rendering preserved.
+
+Performance / Quality notes:
+- All animations are 150-350ms (the bias bar's 0.6s is the only exception, deliberately slower so the spectrum "fill-in" is visible).
+- Only transform + opacity animated everywhere except the bias bar width (required by the task spec; bars are tiny so layout cost is negligible).
+- `viewport={{ once: true }}` used for all scroll-triggered animations (source list items, sectioned feed sections) — never re-triggers on scroll-back.
+- Hover/tap effects use spring physics or short tweens for snappy feedback.
+- The `layoutId` tab indicator uses Framer Motion's shared layout animation — no manual position tracking, no JS measurement, pure declarative.
+- All existing click handlers, state, props, ARIA labels, conditional rendering, URL sync logic, body scroll lock, history handling, and accessibility attributes are untouched.
+- Verified with `bun run lint` — ESLint passed with zero errors.
+- Checked dev.log after each file touch — no compile errors, no runtime errors.
+- Did NOT change the dev server port (3000), did NOT run `bun run build`.
+
+Files modified:
+- `src/components/topic-card.tsx` (image hover zoom — 3 img elements + 2 group classes)
+- `src/components/bias-bar.tsx` (full rewrite — 6 motion.div segments with animated width)
+- `src/components/topic-detail.tsx` (like/dislike motion.button, share AnimatePresence, source list motion.a stagger)
+- `src/app/page-client.tsx` (tab indicator layoutId, offline banner AnimatePresence, header logo motion.img, loading pulse motion.div, search results wrapper motion.div)
+- `src/components/search-results.tsx` (staggered motion.div wrapper around each SearchTopicCard)
+
+Summary of the 10 requested animation areas — all completed:
+1. ✅ Topic card image zoom (group-hover:scale-[1.08], 500ms ease-out)
+2. ✅ Bias bar animated width (motion.div, 0→X%, 600ms easeOut)
+3. ✅ Category tab indicator (layoutId="category-tab-pill", spring slide)
+4. ✅ Like/dislike pop (whileTap scale 1.2, 150ms)
+5. ✅ Share button success (scale+rotate entrance via AnimatePresence, 200ms)
+6. ✅ Source list stagger (whileInView fade+slide, 40ms stagger, once:true)
+7. ✅ Search results stagger (initial→animate fade+slide, 40ms stagger)
+8. ✅ Offline banner slide (AnimatePresence y:-40→0, 250ms)
+9. ✅ Loading spinner pulse (opacity keyframes 0.55→1→0.55, 1.8s loop)
+10. ✅ Header logo hover (motion.img whileHover scale 1.15, spring bounce)

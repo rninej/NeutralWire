@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   X,
   Clock,
@@ -377,22 +377,48 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
       exit={{ opacity: 0, y: 40 }}
       transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
     >
-      {/* Sticky top bar: Close (left) | like/dislike + Share (center-left) | Ask AI (far right, appears on scroll) */}
+      {/* Sticky top bar: Close (left) | right group (ml-auto) → like/dislike + Share + Ask AI(sticky) */}
       <div className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5 flex-shrink-0">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
         </Button>
 
-        {/* Like + Dislike + Share group — sits right after Close.
-            When the sticky Ask AI button appears (on scroll), this group
-            stays in place and the Ask AI button is pushed to the far right. */}
-        <div className="flex items-center gap-2">
-          {/* Like + Dislike buttons */}
-          <div className="flex items-center gap-1 rounded-full border bg-muted/40 p-0.5">
+        {/* Right group: like/dislike + Share + sticky Ask AI.
+            Uses ml-auto so the whole group sits on the RIGHT side of the
+            bar. When the sticky Ask AI button appears (on scroll), it
+            slides in to the LEFT of the like/share group — the group
+            shifts left just enough to make room, not all the way left. */}
+        <div className="ml-auto flex items-center gap-2">
+          {/* ── Sticky Ask AI button ──
+              Sits to the LEFT of like/share (inside the right group).
+              Appears ONLY when the user scrolls past the original Ask AI
+              button. Fades + slides in from the right. */}
+          <div
+            className={`overflow-hidden transition-all duration-300 flex-shrink-0 ${
+              askAiSticky ? 'max-w-32 opacity-100' : 'max-w-0 opacity-0'
+            }`}
+          >
             <button
               type="button"
+              onClick={() => setAskAiOpen(true)}
+              className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity whitespace-nowrap"
+              aria-label="Ask AI about this story"
+            >
+              <span className="flex items-center gap-1.5 rounded-full bg-background px-3 py-1.5 text-xs font-semibold">
+                <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
+                <span>Ask AI</span>
+              </span>
+            </button>
+          </div>
+
+          {/* Like + Dislike buttons */}
+          <div className="flex items-center gap-1 rounded-full border bg-muted/40 p-0.5">
+            <motion.button
+              type="button"
               onClick={handleLike}
+              whileTap={{ scale: 1.2 }}
+              transition={{ duration: 0.15, ease: 'easeOut' }}
               className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
                 likeState === 'liked'
                   ? 'bg-emerald-500 text-white'
@@ -402,10 +428,12 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
               title="Interested — more stories like this"
             >
               <ThumbsUp className="h-4 w-4" />
-            </button>
-            <button
+            </motion.button>
+            <motion.button
               type="button"
               onClick={handleDislike}
+              whileTap={{ scale: 1.2 }}
+              transition={{ duration: 0.15, ease: 'easeOut' }}
               className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
                 likeState === 'disliked'
                   ? 'bg-rose-500 text-white'
@@ -415,7 +443,7 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
               title="Not interested — fewer stories like this"
             >
               <ThumbsDown className="h-4 w-4" />
-            </button>
+            </motion.button>
           </div>
           <button
             type="button"
@@ -427,36 +455,34 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
             aria-label="Share this story"
           >
             <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
-              <Share2 className="h-3.5 w-3.5 text-orange-500" />
-              {/* Show "Share" on ALL viewports (mobile + desktop) */}
-              <span>Share</span>
-            </span>
-          </button>
-        </div>
-
-        {/* Spacer pushes the sticky Ask AI button to the far right */}
-        <div className="flex-1" />
-
-        {/* ── Sticky Ask AI button (far right) ──
-            Appears ONLY when the user has scrolled past the original Ask AI
-            button in the Neutral Summary card. Sits to the RIGHT of the
-            Share button (the like/dislike + Share group stays on the left
-            next to Close). Smooth fade/slide-in via CSS transition. Uses
-            the same purple→blue→cyan gradient as the original. */}
-        <div
-          className={`overflow-hidden transition-all duration-300 flex-shrink-0 ${
-            askAiSticky ? 'max-w-32 opacity-100' : 'max-w-0 opacity-0'
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() => setAskAiOpen(true)}
-            className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity whitespace-nowrap"
-            aria-label="Ask AI about this story"
-          >
-            <span className="flex items-center gap-1.5 rounded-full bg-background px-3 py-1.5 text-xs font-semibold">
-              <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
-              <span>Ask AI</span>
+              <AnimatePresence mode="wait" initial={false}>
+                {shared ? (
+                  <motion.span
+                    key="copied"
+                    initial={{ scale: 0, rotate: -90, opacity: 0 }}
+                    animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                    exit={{ scale: 0, rotate: 90, opacity: 0 }}
+                    transition={{ duration: 0.2, ease: 'easeOut' }}
+                    className="flex items-center gap-1.5"
+                  >
+                    <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    <span>Copied!</span>
+                  </motion.span>
+                ) : (
+                  <motion.span
+                    key="share"
+                    initial={{ scale: 0, rotate: 90, opacity: 0 }}
+                    animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                    exit={{ scale: 0, rotate: -90, opacity: 0 }}
+                    transition={{ duration: 0.2, ease: 'easeOut' }}
+                    className="flex items-center gap-1.5"
+                  >
+                    <Share2 className="h-3.5 w-3.5 text-orange-500" />
+                    {/* Show "Share" on ALL viewports (mobile + desktop) */}
+                    <span>Share</span>
+                  </motion.span>
+                )}
+              </AnimatePresence>
             </span>
           </button>
         </div>
@@ -895,12 +921,20 @@ function SourceGroup({
         <span className="text-muted-foreground">({count})</span>
       </div>
       <div className="space-y-2">
-        {articles.map((a) => (
-          <a
+        {articles.map((a, i) => (
+          <motion.a
             key={a.id}
             href={a.link}
             target="_blank"
             rel="noopener noreferrer"
+            initial={{ opacity: 0, y: 8 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: '-20px' }}
+            transition={{
+              duration: 0.25,
+              delay: Math.min(i * 0.04, 0.32),
+              ease: 'easeOut',
+            }}
             className="block rounded-lg border p-3 transition-colors hover:bg-muted/50"
           >
             <div className="line-clamp-2 text-sm font-medium leading-snug">
@@ -915,7 +949,7 @@ function SourceGroup({
               {mounted ? formatTime(a.iso) : ""}
               <ExternalLink className="ml-auto h-2.5 w-2.5" />
             </div>
-          </a>
+          </motion.a>
         ))}
       </div>
     </div>
