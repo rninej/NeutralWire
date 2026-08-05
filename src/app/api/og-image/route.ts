@@ -181,21 +181,22 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // ── 5. Build the "NeutralWire" rectangle banner (bottom-right) ──
-    // A large rounded rectangle with dark background + white "NeutralWire"
+    // ── 5. Build the "NEUTRALWIRE" rectangle banner (bottom-right) ──
+    // A large rounded rectangle with dark background + white "NEUTRALWIRE"
     // text rendered as SVG paths. Positioned above the bias bar.
-    const bannerText = 'NeutralWire'
-    const bannerHeight = 44
-    const bannerCharHeight = 30
-    const bannerCharWidth = 100 * (bannerCharHeight / 140) * 0.55
+    // Uses uppercase letters because they render cleanly as vector paths.
+    const bannerText = 'NEUTRALWIRE'
+    const bannerHeight = 56
+    const bannerCharHeight = 40
+    const bannerCharWidth = 100 * (bannerCharHeight / 140) * 0.6
     const bannerTextWidth = bannerText.length * bannerCharWidth
-    const bannerWidth = bannerTextWidth + 32 // padding
+    const bannerWidth = bannerTextWidth + 48 // generous padding
     const bannerX = W - bannerWidth - 24
-    const bannerY = barY - bannerHeight - 12
-    const bannerRadius = 10
+    const bannerY = barY - bannerHeight - 16
+    const bannerRadius = 12
 
     const logoSvg = `
-      <rect x="${bannerX - 3}" y="${bannerY - 3}" width="${bannerWidth + 6}" height="${bannerHeight + 6}" rx="${bannerRadius + 3}" fill="#000" opacity="0.5"/>
+      <rect x="${bannerX - 4}" y="${bannerY - 4}" width="${bannerWidth + 8}" height="${bannerHeight + 8}" rx="${bannerRadius + 4}" fill="#000" opacity="0.5"/>
       <rect x="${bannerX}" y="${bannerY}" width="${bannerWidth}" height="${bannerHeight}" rx="${bannerRadius}" fill="#0a0a0a"/>
       ${renderTextAsPaths(bannerText, bannerX + bannerWidth / 2, bannerY + (bannerHeight - bannerCharHeight) / 2, bannerCharHeight, '#fff')}
     `
