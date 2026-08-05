@@ -252,15 +252,12 @@ async function handleBlindspots(
   offset: number,
   t0: number,
 ) {
-  // Read ALL cached categories in parallel — includes relevant, mycountry,
-  // and all the standard subtopics. This gives the widest pool of stories
-  // to find blindspots from.
+  // Read ALL cached categories in parallel. Each category is tracked so
+  // we know which section a blindspot topic belongs to.
   const catsToCheck: Category[] = [
     'top', 'world', 'politics', 'business', 'technology', 'science', 'health', 'sports',
   ]
-  // Also check the user's relevant + mycountry caches for common countries.
-  // These are virtual categories (country-specific), so we check a few
-  // common country codes.
+  // Also check virtual categories for common countries.
   const virtualCats: Array<{ cat: Category; country: string }> = [
     { cat: 'relevant', country: 'GB' },
     { cat: 'relevant', country: 'US' },
@@ -270,35 +267,54 @@ async function handleBlindspots(
     { cat: 'mycountry', country: 'IN' },
   ]
 
-  const cachedResults = await Promise.all([
-    ...catsToCheck.map((cat) => readCachedNews(cat, '').catch(() => null)),
-    ...virtualCats.map(({ cat, country }) => readCachedNews(cat, country).catch(() => null)),
-  ])
+  // Fetch all cached categories. Each result is tagged with its source
+  // category so we can group blindspots by section in the UI.
+  const allCached: Array<{ cat: Category; topics: TopicArticle[] }> = []
+  const rssResults = await Promise.all(
+    catsToCheck.map(async (cat) => {
+      const cached = await readCachedNews(cat, '').catch(() => null)
+      return { cat, topics: cached?.topics || [] }
+    }),
+  )
+  allCached.push(...rssResults)
 
-  // Merge all topics, dedup by topicId AND by normalized title (so the same
-  // story from different category caches doesn't appear twice)
+  const virtualResults = await Promise.all(
+    virtualCats.map(async ({ cat, country }) => {
+      const cached = await readCachedNews(cat, country).catch(() => null)
+      // Map virtual categories to their display category (relevant → top,
+      // mycountry → world as a fallback section, but we'll use 'mycountry'
+      // as its own section label)
+      return { cat, topics: cached?.topics || [] }
+    }),
+  )
+  // For virtual categories, only add topics not already seen (they overlap
+  // heavily with the RSS categories). Tag them with their virtual cat name.
+  allCached.push(...virtualResults)
+
+  // Build a map: topicId → source categories (a topic can appear in
+  // multiple category caches). We'll assign each topic to its FIRST
+  // (most relevant) category for sectioning.
+  const topicToCategory = new Map<string, Category>()
   const seenTopicIds = new Set<string>()
   const seenTitles = new Set<string>()
   const allTopics: TopicArticle[] = []
-  for (const cached of cachedResults) {
-    if (!cached || !Array.isArray(cached.topics)) continue
-    for (const t of cached.topics) {
+
+  // Process in priority order: RSS categories first (top, world, politics,
+  // etc.), then virtual (relevant, mycountry). This ensures a topic is
+  // assigned to its most specific category.
+  for (const { cat, topics } of allCached) {
+    for (const t of topics) {
       if (seenTopicIds.has(t.topicId)) continue
-      // Also dedup by normalized title (different topicId, same story
-      // from different aggregators)
       const normTitle = t.title.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
       if (normTitle && seenTitles.has(normTitle)) continue
       seenTopicIds.add(t.topicId)
       if (normTitle) seenTitles.add(normTitle)
       allTopics.push(t)
+      topicToCategory.set(t.topicId, cat)
     }
   }
 
   // Filter for blindspots: ≥80% of coverage from one side
-  // total = leanLeft + leanCenter + leanRight
-  // If leanLeft/total >= 0.8 → left blindspot (right isn't covering it)
-  // If leanRight/total >= 0.8 → right blindspot (left isn't covering it)
-  // Require at least 2 sources total (was 3 — lowered to show more stories)
   const BLINDSPOT_THRESHOLD = 0.8
   const MIN_TOTAL = 2
   const blindspots = allTopics
@@ -310,7 +326,7 @@ async function handleBlindspots(
       let pct = 0
       if (leftPct >= BLINDSPOT_THRESHOLD) {
         side = 'left'
-        pct = Math.round(rightPct * 100) // % from the OTHER side (low = blindspot)
+        pct = Math.round(rightPct * 100)
       } else if (rightPct >= BLINDSPOT_THRESHOLD) {
         side = 'right'
         pct = Math.round(leftPct * 100)
@@ -318,18 +334,33 @@ async function handleBlindspots(
       return { topic: t, side, pct, total }
     })
     .filter((entry) => entry.side !== null && entry.total >= MIN_TOTAL)
-    // Sort: most extreme blindspots first (lowest % from the other side),
-    // then by coverage (more sources = more important story)
     .sort((a, b) => {
       if (a.pct !== b.pct) return a.pct - b.pct
       return b.topic.coverage - a.topic.coverage
     })
 
+  // Group blindspots by their source category for sectioned display.
+  // Each category gets up to 7 topics (1 hero + 6 mini cards).
+  const MAX_PER_SECTION = 7
+  const sections: Record<string, TopicArticle[]> = {}
+  for (const entry of blindspots) {
+    const cat = topicToCategory.get(entry.topic.topicId) || 'top'
+    const sectionKey = cat
+    if (!sections[sectionKey]) sections[sectionKey] = []
+    if (sections[sectionKey].length >= MAX_PER_SECTION) continue
+    sections[sectionKey].push({
+      ...entry.topic,
+      blindspotSide: entry.side,
+      blindspotPct: entry.pct,
+      articles: slim ? [] : entry.topic.articles,
+    })
+  }
+
+  // Also build a flat list (for backward compat / infinite scroll)
   const result = blindspots
     .slice(offset, offset + limit)
     .map((entry) => ({
       ...entry.topic,
-      // Attach blindspot metadata so the UI can show the badge
       blindspotSide: entry.side,
       blindspotPct: entry.pct,
       articles: slim ? [] : entry.topic.articles,
@@ -340,6 +371,10 @@ async function handleBlindspots(
     country: '',
     countryName: '',
     topics: result,
+    // Sections: { world: [...], politics: [...], business: [...], ... }
+    // Each section has up to 7 blindspot topics. The client uses this to
+    // render a SectionedFeed-style layout with per-category sections.
+    sections,
     cached: true,
     fresh: true,
     sourceCount: new Set(allTopics.map((t) => t.articles?.[0]?.sourceId)).size,

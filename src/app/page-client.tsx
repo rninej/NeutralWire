@@ -145,6 +145,8 @@ interface NewsResponse {
   country?: string
   countryName?: string
   topics: TopicArticle[]
+  /** Blindspot sections grouped by source category (only for blindspots) */
+  sections?: Record<string, TopicArticle[]>
   cached: boolean
   fresh?: boolean
   staleMs?: number
@@ -346,6 +348,9 @@ export default function Home() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const sentinelRef = React.useRef<HTMLDivElement | null>(null)
+  // Blindspot sections (grouped by source category) — only set when
+  // category === 'blindspots'. Used by BlindspotSectionedFeed.
+  const [blindspotSections, setBlindspotSections] = useState<Record<string, TopicArticle[]>>({})
 
   // Reset infinite scroll when category/country changes
   useEffect(() => {
@@ -1170,6 +1175,8 @@ export default function Home() {
         setIsFresh(json.fresh !== false)
         setArticleCount(json.articleCount ?? 0)
         setLoadMs(json.ms ?? null)
+        // Store blindspot sections (if present) for sectioned display
+        setBlindspotSections(json.sections || {})
 
         // Append the rest after a 0ms timeout (lets browser paint first 5).
         if (allTopics.length > 5) {
@@ -1561,6 +1568,13 @@ export default function Home() {
                           engagement={engagement}
                           onSearchClick={() => setShowSearch(true)}
                         />
+                      ) : category === 'blindspots' ? (
+                        /* Blindspots: per-category sections showing top blindspot stories */
+                        <BlindspotSectionedFeed
+                          sections={blindspotSections}
+                          onOpenDetail={handleOpenDetail}
+                          onSearchClick={() => setShowSearch(true)}
+                        />
                       ) : (
                         <MobileTopicLayout
                           topics={filteredTopics}
@@ -1571,7 +1585,16 @@ export default function Home() {
                         />
                       )}
                     </div>
-                    {/* Desktop: simple grid layout */}
+                    {/* Desktop: simple grid layout (or sectioned for blindspots) */}
+                    {category === 'blindspots' ? (
+                      <div className="hidden lg:block">
+                        <BlindspotSectionedFeed
+                          sections={blindspotSections}
+                          onOpenDetail={handleOpenDetail}
+                          onSearchClick={() => setShowSearch(true)}
+                        />
+                      </div>
+                    ) : (
                     <div className="hidden lg:grid gap-4 lg:grid-cols-3 xl:grid-cols-4">
                       {featured && (
                         <TopicCard
@@ -1599,6 +1622,7 @@ export default function Home() {
                         />
                       ))}
                     </div>
+                    )}
                   </>
                 ) : (
                   /* Default grid for other categories / search */
@@ -2202,6 +2226,116 @@ function SectionedFeed({
                 </div>
               )}
               {/* Mini cards: 2x2 square grid on mobile, fill columns on desktop */}
+              {sectionTopics.slice(1, 7).map((t, i) => (
+                <TopicCard
+                  key={t.topicId}
+                  topic={t}
+                  variant="mini"
+                  onOpenDetail={onOpenDetail}
+                  index={i + 1}
+                />
+              ))}
+            </div>
+          </motion.section>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * BlindspotSectionedFeed — like SectionedFeed but for the Blindspots tab.
+ * Groups blindspot topics by their source category (World, Politics,
+ * Business, etc.) and shows each as a section. Each section shows the
+ * top blindspot stories from that category (most extreme first).
+ *
+ * Uses the same visual layout as SectionedFeed (1 hero + rest mini per
+ * section) for consistency.
+ */
+function BlindspotSectionedFeed({
+  sections,
+  onOpenDetail,
+  onSearchClick,
+}: {
+  sections: Record<string, TopicArticle[]>
+  onOpenDetail: (topic: TopicArticle) => void
+  onSearchClick: () => void
+}) {
+  // Define the order of sections (matching the category nav order).
+  // 'mycountry' and 'relevant' are mapped to friendlier labels.
+  const SECTION_ORDER: Array<{ key: string; label: string }> = [
+    { key: 'world', label: 'World' },
+    { key: 'politics', label: 'Politics' },
+    { key: 'top', label: 'Top Stories' },
+    { key: 'business', label: 'Business' },
+    { key: 'technology', label: 'Technology' },
+    { key: 'science', label: 'Science' },
+    { key: 'health', label: 'Health' },
+    { key: 'sports', label: 'Sports' },
+    { key: 'mycountry', label: 'My Country' },
+    { key: 'relevant', label: 'Relevant' },
+  ]
+
+  // Build sections in order, skipping empty ones
+  const allSections = SECTION_ORDER
+    .map(({ key, label }) => ({
+      key,
+      label,
+      topics: sections[key] || [],
+    }))
+    .filter((s) => s.topics.length > 0)
+
+  if (allSections.length === 0) return null
+
+  return (
+    <div className="space-y-8">
+      {allSections.map((section, sectionIdx) => {
+        const { key, label, topics: sectionTopics } = section
+        if (sectionTopics.length === 0) return null
+
+        return (
+          <motion.section
+            key={key}
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: '-40px' }}
+            transition={{
+              duration: 0.35,
+              delay: Math.min(sectionIdx * 0.06, 0.3),
+              ease: 'easeOut',
+            }}
+          >
+            <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
+              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight">
+                {label}
+                <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                  {sectionTopics.length} blindspot{sectionTopics.length !== 1 ? 's' : ''}
+                </span>
+              </h2>
+              <button
+                type="button"
+                onClick={onSearchClick}
+                className="lg:hidden inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-[11px] font-medium"
+                aria-label="Search"
+                title="Search news"
+              >
+                <Search className="h-3.5 w-3.5" />
+                <span>Search</span>
+              </button>
+            </div>
+            {/* Same layout as SectionedFeed: 1 hero + rest mini */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {sectionTopics[0] && (
+                <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
+                  <TopicCard
+                    key={sectionTopics[0].topicId}
+                    topic={sectionTopics[0]}
+                    variant="hero"
+                    onOpenDetail={onOpenDetail}
+                    index={0}
+                  />
+                </div>
+              )}
               {sectionTopics.slice(1, 7).map((t, i) => (
                 <TopicCard
                   key={t.topicId}
