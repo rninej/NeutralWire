@@ -259,7 +259,7 @@ export default function Home() {
   useEffect(() => {
     const validCategories: Category[] = [
       'relevant', 'mycountry', 'top', 'world', 'politics',
-      'business', 'technology', 'science', 'health', 'sports',
+      'business', 'technology', 'science', 'health', 'sports', 'blindspots',
     ]
     const readCategoryFromUrl = () => {
       // Click guard: if a click happened very recently, the URL was already
@@ -1544,6 +1544,22 @@ export default function Home() {
               <BiasColumns topics={filteredTopics} />
             ) : (
               <>
+                {/* Blindspots info banner — explains what this tab shows */}
+                {category === 'blindspots' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm"
+                  >
+                    <span className="font-semibold text-amber-600 dark:text-amber-400">
+                      Blindspots
+                    </span>{' '}
+                    <span className="text-muted-foreground">
+                      — stories where ≥80% of coverage comes from one side of the political spectrum. See what the other side isn't telling you.
+                    </span>
+                  </motion.div>
+                )}
                 {/* ── Mobile: sectioned layout for ALL tabs ── */}
                 {/* Desktop: simple grid layout (clean, fills space properly) */}
                 {!debouncedSearch ? (

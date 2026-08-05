@@ -87,6 +87,16 @@ export async function GET(req: NextRequest) {
   // filtering needed). All other categories use the RSS-based aggregator.
   const isMyCountry = category === 'mycountry'
 
+  // ── Blindspots: special category ──
+  // Not aggregated from RSS — instead, reads multiple cached categories
+  // (top, world, politics, etc.), filters for topics where ≥80% of
+  // coverage comes from ONE side (Left or Right), and returns those.
+  // This shows stories the other side is NOT covering — "blindspots".
+  const isBlindspots = category === 'blindspots'
+  if (isBlindspots) {
+    return handleBlindspots(req, limit, minCoverage, slim, offset, t0)
+  }
+
   const aggregate = async (): Promise<{
     topics: TopicArticle[]
     sourceCount: number
@@ -214,4 +224,102 @@ function applyFilters(
     return result.map((t) => ({ ...t, articles: [] }))
   }
   return result
+}
+
+/**
+ * Blindspots handler.
+ *
+ * Reads multiple cached categories (top, world, politics, business,
+ * technology, science, health), merges all topics, then filters for
+ * stories where ≥80% of coverage comes from ONE side (Left or Right).
+ *
+ * A "blindspot" is a story that one side of the political spectrum is
+ * covering heavily while the other side is mostly ignoring it. This helps
+ * users see what they might be missing based on their usual sources.
+ *
+ * For each blindspot topic, we add a `blindspotSide` field ('left' or
+ * 'right') and `blindspotPct` (the percentage of coverage from that side)
+ * so the UI can show a badge like "Only 8% Right" or "Only 12% Left".
+ *
+ * No RSS/GDELT aggregation is done — this purely filters existing cached
+ * data, so it's fast and adds zero CPU cost.
+ */
+async function handleBlindspots(
+  req: NextRequest,
+  limit: number,
+  minCoverage: number,
+  slim: boolean,
+  offset: number,
+  t0: number,
+) {
+  // Read multiple cached categories in parallel
+  const catsToCheck: Category[] = [
+    'top', 'world', 'politics', 'business', 'technology', 'science', 'health',
+  ]
+  const cachedResults = await Promise.all(
+    catsToCheck.map((cat) => readCachedNews(cat, '').catch(() => null)),
+  )
+
+  // Merge all topics, dedup by topicId
+  const seen = new Set<string>()
+  const allTopics: TopicArticle[] = []
+  for (const cached of cachedResults) {
+    if (!cached || !Array.isArray(cached.topics)) continue
+    for (const t of cached.topics) {
+      if (!seen.has(t.topicId)) {
+        seen.add(t.topicId)
+        allTopics.push(t)
+      }
+    }
+  }
+
+  // Filter for blindspots: ≥80% of coverage from one side
+  // total = leanLeft + leanCenter + leanRight
+  // If leanLeft/total >= 0.8 → left blindspot (right isn't covering it)
+  // If leanRight/total >= 0.8 → right blindspot (left isn't covering it)
+  // Require at least 3 sources total so it's a real story
+  const BLINDSPOT_THRESHOLD = 0.8
+  const MIN_TOTAL = 3
+  const blindspots = allTopics
+    .map((t) => {
+      const total = t.leanLeft + t.leanCenter + t.leanRight
+      const leftPct = total > 0 ? t.leanLeft / total : 0
+      const rightPct = total > 0 ? t.leanRight / total : 0
+      let side: 'left' | 'right' | null = null
+      let pct = 0
+      if (leftPct >= BLINDSPOT_THRESHOLD) {
+        side = 'left'
+        pct = Math.round(rightPct * 100) // % from the OTHER side (low = blindspot)
+      } else if (rightPct >= BLINDSPOT_THRESHOLD) {
+        side = 'right'
+        pct = Math.round(leftPct * 100)
+      }
+      return { topic: t, side, pct, total }
+    })
+    .filter((entry) => entry.side !== null && entry.total >= MIN_TOTAL)
+    // Sort: most extreme blindspots first (lowest % from the other side)
+    .sort((a, b) => a.pct - b.pct)
+
+  const result = blindspots
+    .slice(offset, offset + limit)
+    .map((entry) => ({
+      ...entry.topic,
+      // Attach blindspot metadata so the UI can show the badge
+      blindspotSide: entry.side,
+      blindspotPct: entry.pct,
+      articles: slim ? [] : entry.topic.articles,
+    }))
+
+  return NextResponse.json({
+    category: 'blindspots',
+    country: '',
+    countryName: '',
+    topics: result,
+    cached: true,
+    fresh: true,
+    sourceCount: new Set(allTopics.map((t) => t.articles?.[0]?.sourceId)).size,
+    articleCount: allTopics.length,
+    fetchedAt: new Date().toISOString(),
+    ms: Date.now() - t0,
+  })
 }

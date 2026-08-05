@@ -46,6 +46,9 @@ export interface TopicArticle {
   articles: FeedArticle[]
   /** How many articles in this topic are from the visitor's local sources. */
   localCoverage?: number
+  /** Blindspot metadata (only set for /api/news?category=blindspots) */
+  blindspotSide?: 'left' | 'right'
+  blindspotPct?: number
 }
 
 export interface CategoryCachePayload {

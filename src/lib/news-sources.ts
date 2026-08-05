@@ -49,6 +49,7 @@ export const CATEGORIES = [
   'science',
   'health',
   'sports',
+  'blindspots',
 ] as const
 
 export type Category = (typeof CATEGORIES)[number]
@@ -64,6 +65,7 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   science: 'Science',
   health: 'Health',
   sports: 'Sports',
+  blindspots: 'Blindspots',
 }
 
 /**
@@ -80,6 +82,7 @@ export const SECONDARY_CATEGORIES: Category[] = [
   'science',
   'health',
   'sports',
+  'blindspots',
 ]
 
 export const NEWS_SOURCES: NewsSource[] = [

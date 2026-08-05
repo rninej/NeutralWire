@@ -183,6 +183,23 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
           <Badge variant="secondary" className="text-[10px]">
             {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
           </Badge>
+          {/* Blindspot badge — only shown for blindspot topics.
+              Shows which side is NOT covering the story and at what %.
+              Red badge = right-leaning blindspot (left isn't covering).
+              Blue badge = left-leaning blindspot (right isn't covering). */}
+          {topic.blindspotSide && (
+            <Badge
+              className={cn(
+                'text-[9px] font-bold',
+                topic.blindspotSide === 'left'
+                  ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30'
+                  : 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30',
+              )}
+              variant="outline"
+            >
+              Only {topic.blindspotPct}% {topic.blindspotSide === 'left' ? 'Right' : 'Left'}
+            </Badge>
+          )}
           <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
             <Clock className="h-3 w-3" />
             {mounted ? formatTime(topic.latestSeen) : ''}

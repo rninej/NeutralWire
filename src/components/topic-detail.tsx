@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { getDeviceId } from '@/lib/referral'
 import { bumpEngagementForTopic } from '@/lib/user-interests'
+import { getRating } from '@/lib/source-ratings'
 
 interface TopicDetailProps {
   topic: TopicArticle
@@ -942,7 +943,9 @@ function SourceGroup({
             </div>
             <div className="mt-1.5 flex items-center gap-1 text-[10px] text-muted-foreground">
               <Globe className="h-2.5 w-2.5" />
-              {a.sourceName}
+              {/* Source name — clickable to show factuality rating popover.
+                  Uses stopPropagation so clicking it doesn't open the article. */}
+              <SourceNameWithRating sourceName={a.sourceName} sourceId={a.sourceId} />
               <span className="opacity-50">·</span>
               {a.country}
               <span className="opacity-50">·</span>
@@ -952,6 +955,109 @@ function SourceGroup({
           </motion.a>
         ))}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Source name with a factuality rating popover.
+ * Clicking the source name opens a small popover showing the MBFC
+ * factuality score, ownership info, and a one-line explanation.
+ * If the source isn't rated, shows "Unrated".
+ *
+ * Uses stopPropagation so the click doesn't trigger the parent <a> link.
+ */
+function SourceNameWithRating({
+  sourceName,
+  sourceId,
+}: {
+  sourceName: string
+  sourceId: string
+}) {
+  const [open, setOpen] = React.useState(false)
+  const popoverRef = React.useRef<HTMLDivElement | null>(null)
+
+  // Close on outside click
+  React.useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  // Look up the rating (client-side, from the static data file)
+  const rating = React.useMemo(() => {
+    // sourceId is the short name (e.g. "theguardian", "bbc")
+    // sourceName is the display name (e.g. "The Guardian", "BBC")
+    return getRating(sourceId) || getRating(sourceName)
+  }, [sourceId, sourceName])
+
+  return (
+    <div ref={popoverRef} className="relative inline-block">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setOpen((v) => !v)
+        }}
+        className="font-medium text-foreground/80 hover:text-foreground hover:underline cursor-pointer"
+      >
+        {sourceName}
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.96 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            className="absolute bottom-full left-0 z-20 mb-2 w-64 rounded-lg border bg-popover p-3 shadow-lg"
+          >
+            <div className="mb-1.5 text-xs font-bold">{sourceName}</div>
+            {rating ? (
+              <>
+                <div className="mb-1.5 flex items-center gap-1.5">
+                  <span className="text-[10px] text-muted-foreground">Factuality:</span>
+                  <span className={cn(
+                    'rounded px-1.5 py-0.5 text-[10px] font-bold border',
+                    // Inline color logic (avoids extra import)
+                    rating.factuality === 'Very High' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                    : rating.factuality === 'High' ? 'bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30'
+                    : rating.factuality === 'Mostly Factual' ? 'bg-lime-500/15 text-lime-600 dark:text-lime-400 border-lime-500/30'
+                    : rating.factuality === 'Mixed' ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                    : rating.factuality === 'Low' ? 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30'
+                    : 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30'
+                  )}>
+                    {rating.factuality}
+                  </span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {rating.explanation}
+                </p>
+                {rating.ownership && (
+                  <p className="mt-1.5 text-[10px] text-muted-foreground">
+                    <span className="font-medium">Ownership:</span> {rating.ownership}
+                  </p>
+                )}
+                <p className="mt-1.5 text-[9px] text-muted-foreground/60">
+                  Source: Media Bias/Fact Check
+                </p>
+              </>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                <span className="font-medium text-amber-600 dark:text-amber-400">Unrated</span>
+                <br />
+                No factuality data available for this source.
+              </p>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
