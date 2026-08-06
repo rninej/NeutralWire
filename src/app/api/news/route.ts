@@ -186,7 +186,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({
+  // Add CDN cache headers so repeated requests (bots, SW, multiple users)
+  // are served from the Vercel CDN edge cache WITHOUT running the function.
+  // s-maxage=300 (5 min CDN cache), stale-while-revalidate=600 (serve
+  // stale for up to 10 min while revalidating). This cuts function CPU
+  // dramatically — most requests never hit the function.
+  const response = NextResponse.json({
     category,
     country,
     countryName,
@@ -200,6 +205,8 @@ export async function GET(req: NextRequest) {
     cacheTtlMs: CACHE_CONSTANTS.STALE_MS,
     ms: Date.now() - t0,
   })
+  response.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600')
+  return response
 }
 
 function applyFilters(

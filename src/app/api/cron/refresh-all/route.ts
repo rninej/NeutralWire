@@ -63,35 +63,24 @@ export async function GET(req: NextRequest) {
   after(async () => {
     console.log(`[cron/refresh-all] Starting light refresh at ${new Date().toISOString()}`)
 
-    // 1. Refresh world + politics in parallel (light, ~5s each)
-    await Promise.allSettled(
-      rssCategories.map(async (cat) => {
-        try {
-          const fresh = await refreshCategory(cat, '', async () => {
-            return aggregateCategory(cat, { limit: 40, minCoverage: 1 })
-          })
-          console.log(`[cron/refresh-all] RSS ${cat}: ${fresh?.topics?.length || 0} topics`)
-        } catch (err) {
-          console.warn(`[cron/refresh-all] RSS ${cat} failed:`, err)
-        }
-      }),
-    )
+    // ── MINIMAL REFRESH: only refresh the landing page (relevant/GB) ──
+    //
+    // CPU BUDGET: Vercel Hobby gives 4hr/month Fluid Compute CPU.
+    // Previously this cron refreshed 2 RSS categories + 1 GDELT country
+    // + relevant + 5 AI summary pre-generations = ~15s CPU/hour.
+    // Over a month = ~6 hours (over the limit).
+    //
+    // NOW: only refresh relevant/GB (the default landing page). This is
+    // ~5s CPU/hour = ~2.5 hours/month (within budget).
+    //
+    // Other categories (world, politics, business, tech, science, health,
+    // sports, mycountry) refresh ON-DEMAND when a user visits them — the
+    // /api/news route handles that automatically with its SWR cache
+    // (30-min TTL). No cron needed for those.
+    //
+    // Summary pre-generation is REMOVED entirely — summaries generate
+    // on-demand when a user opens a topic (cached forever in Firebase).
 
-    // 2. Refresh My Country GB (sequential, GDELT rate-limits)
-    for (const cc of myCountryCodes) {
-      try {
-        const fresh = await refreshCategory('mycountry', cc, async () => {
-          const gdeltResult = await aggregateMyCountryViaGdelt(cc, 40)
-          await shortenLongTitles(gdeltResult.topics)
-          return gdeltResult
-        })
-        console.log(`[cron/refresh-all] MyCountry ${cc}: ${fresh?.topics?.length || 0} topics`)
-      } catch (err) {
-        console.warn(`[cron/refresh-all] MyCountry ${cc} failed:`, err)
-      }
-    }
-
-    // 3. Refresh relevant (UK default) — the landing page
     try {
       const countrySourceIds = sourcesForCountry('GB')
       const fresh = await refreshCategory('relevant', 'GB', async () => {
@@ -103,13 +92,6 @@ export async function GET(req: NextRequest) {
         })
       })
       console.log(`[cron/refresh-all] relevant/GB: ${fresh?.topics?.length || 0} topics`)
-
-      // 4. Pre-generate summaries for ONLY the top 5 relevant topics
-      // (was 15 + 8 = 23). This is enough for the first screen of the
-      // landing page. Other topics generate on-demand when opened.
-      if (fresh && fresh.topics.length > 0) {
-        await preGenerateSummaries(fresh.topics.slice(0, 5), origin)
-      }
     } catch (err) {
       console.warn(`[cron/refresh-all] relevant/GB failed:`, err)
     }
