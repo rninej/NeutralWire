@@ -1671,48 +1671,26 @@ export default function Home() {
                         />
                       )}
                     </div>
-                    {/* Desktop: simple grid layout (or sectioned for blindspots) */}
-                    {category === 'blindspots' ? (
-                      <div className="hidden lg:block">
+                    {/* Desktop: magazine-style layout */}
+                    <div className="hidden lg:block">
+                      {category === 'blindspots' ? (
                         <BlindspotSectionedFeed
                           sections={blindspotSections}
                           onOpenDetail={handleOpenDetail}
                           onDismiss={handleDismissTopic}
                           onSearchClick={() => setShowSearch(true)}
                         />
-                      </div>
-                    ) : (
-                    <div className="hidden lg:grid gap-4 lg:grid-cols-3 xl:grid-cols-4">
-                      {featured && (
-                        <TopicCard
-                          key={featured.topicId + (featured.imageUrl || '')}
-                          topic={featured}
-                          variant="featured"
+                      ) : (
+                        <DesktopMagazineLayout
+                          topics={filteredTopics}
+                          olderTopics={olderTopics}
                           onOpenDetail={handleOpenDetail}
                           onDismiss={handleDismissTopic}
-                          index={0}
+                          label={CATEGORY_LABELS[category] || category}
+                          onSearchClick={() => setShowSearch(true)}
                         />
                       )}
-                      {rest.map((t, i) => (
-                        <TopicCard
-                          key={t.topicId + (t.imageUrl || '')}
-                          topic={t}
-                          onOpenDetail={handleOpenDetail}
-                          onDismiss={handleDismissTopic}
-                          index={i + 1}
-                        />
-                      ))}
-                      {olderTopics.map((t, i) => (
-                        <TopicCard
-                          key={t.topicId + (t.imageUrl || '')}
-                          topic={t}
-                          onOpenDetail={handleOpenDetail}
-                          onDismiss={handleDismissTopic}
-                          index={rest.length + 1 + i}
-                        />
-                      ))}
                     </div>
-                    )}
                   </>
                 ) : (
                   /* Default grid for other categories / search */
@@ -2210,11 +2188,23 @@ function SectionedFeed({
       .sort((a, b) => b.score - a.score)
     headlines = scored.slice(0, 5).map((s) => s.topic)
   }
-  // Guarantee the FIRST headline has an image (hero card needs one)
+  // Guarantee the FIRST headline has an image (hero card needs one).
+  // If the top story has no image, swap it with the first story that
+  // DOES have an image. The imageless story moves to position 2 (not
+  // buried at the bottom) so important news without images still gets
+  // high visibility.
   if (headlines.length > 0 && !headlines[0].imageUrl) {
-    const firstWithImage = headlines.find((t, i) => i >= 1 && t.imageUrl)
-    if (firstWithImage) {
-      headlines = [firstWithImage, ...headlines.filter((t) => t.topicId !== firstWithImage.topicId)]
+    const firstWithImageIdx = headlines.findIndex((t, i) => i >= 1 && t.imageUrl)
+    if (firstWithImageIdx > 0) {
+      const imageTopic = headlines[firstWithImageIdx]
+      // Remove the image topic from its position, then place it first.
+      // The original first topic (imageless, important) goes to position 2.
+      headlines = [
+        imageTopic,           // position 1: has image (hero)
+        headlines[0],         // position 2: the important imageless story
+        ...headlines.slice(1, firstWithImageIdx),
+        ...headlines.slice(firstWithImageIdx + 1),
+      ]
     }
   }
 
@@ -2532,6 +2522,137 @@ function BlindspotSectionedFeed({
 }
 
 /**
+ * DesktopMagazineLayout — a newspaper-style layout for desktop screens.
+ *
+ * Layout:
+ *   ┌──────────────────────┬──────────────┐
+ *   │                      │              │
+ *   │   HERO (large)       │  Sidebar     │
+ *   │   2 cols wide        │  (compact    │
+ *   │   with image         │   cards)     │
+ *   │                      │              │
+ *   ├─────────┬────────────┤              │
+ *   │  Card   │  Card      │              │
+ *   ├─────────┼────────────┤              │
+ *   │  Card   │  Card      │              │
+ *   └─────────┴────────────┴──────────────┘
+ *
+ * - Hero: first topic (large, spans 2 columns, must have image)
+ * - Below hero: 2-column grid of medium cards
+ * - Right sidebar: compact cards (headline + source count only)
+ * - Ensures the top news always has an image
+ */
+function DesktopMagazineLayout({
+  topics,
+  olderTopics,
+  onOpenDetail,
+  onDismiss,
+  label,
+  onSearchClick,
+}: {
+  topics: TopicArticle[]
+  olderTopics: TopicArticle[]
+  onOpenDetail: (topic: TopicArticle) => void
+  onDismiss?: (topic: TopicArticle) => void
+  label: string
+  onSearchClick: () => void
+}) {
+  const allTopics = [...topics, ...olderTopics]
+  if (allTopics.length === 0) return null
+
+  // ── Ensure the first (hero) topic has an image ──
+  // Find the first topic WITH an image to use as hero.
+  // The most important imageless story comes second.
+  let hero = allTopics[0]
+  let rest = allTopics.slice(1)
+  if (!hero.imageUrl) {
+    const firstWithImage = allTopics.findIndex((t) => t.imageUrl)
+    if (firstWithImage > 0) {
+      // Swap: image topic becomes hero, original first topic goes to position 2
+      hero = allTopics[firstWithImage]
+      rest = [
+        allTopics[0], // the important imageless story goes second
+        ...allTopics.slice(1, firstWithImage),
+        ...allTopics.slice(firstWithImage + 1),
+      ]
+    }
+  }
+
+  // Split into main grid (hero + medium cards) and sidebar
+  const mainCount = Math.min(rest.length, 6)
+  const mainCards = rest.slice(0, mainCount)
+  const sidebarCards = rest.slice(mainCount, mainCount + 8)
+
+  return (
+    <div className="space-y-4">
+      {/* Section header */}
+      <div className="flex items-center justify-between border-b-2 border-foreground/10 pb-2">
+        <h2 className="text-xl font-bold tracking-tight">{label}</h2>
+        <button
+          type="button"
+          onClick={onSearchClick}
+          className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-xs font-medium"
+          aria-label="Search"
+        >
+          <Search className="h-3.5 w-3.5" />
+          <span>Search</span>
+        </button>
+      </div>
+
+      {/* Main layout: 3-column grid → hero spans 2 cols, sidebar 1 col */}
+      <div className="grid grid-cols-3 gap-4">
+        {/* Left: hero + medium cards (spans 2 columns) */}
+        <div className="col-span-2 space-y-4">
+          {/* Hero card */}
+          {hero && (
+            <TopicCard
+              key={hero.topicId}
+              topic={hero}
+              variant="hero"
+              onOpenDetail={onOpenDetail}
+              onDismiss={onDismiss}
+              index={0}
+            />
+          )}
+          {/* Medium cards in 2-column grid */}
+          {mainCards.length > 0 && (
+            <div className="grid grid-cols-2 gap-4">
+              {mainCards.map((t, i) => (
+                <TopicCard
+                  key={t.topicId}
+                  topic={t}
+                  variant="default"
+                  onOpenDetail={onOpenDetail}
+                  onDismiss={onDismiss}
+                  index={i + 1}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Right: sidebar with compact cards */}
+        {sidebarCards.length > 0 && (
+          <div className="col-span-1 space-y-3">
+            <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">More Stories</h3>
+            {sidebarCards.map((t, i) => (
+              <TopicCard
+                key={t.topicId}
+                topic={t}
+                variant="compact"
+                onOpenDetail={onOpenDetail}
+                onDismiss={onDismiss}
+                index={mainCount + i + 1}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
  * MobileTopicLayout — same 1-large + rest-mini format as SectionedFeed, but
  * WITHOUT sector grouping. Used for non-Relevant tabs (World, Politics,
  * Business, etc.) so each tab shows ONLY its own topics in the same visual
@@ -2556,13 +2677,21 @@ function MobileTopicLayout({
   const allTopics = [...topics, ...olderTopics]
   if (allTopics.length === 0) return null
 
-  // Guarantee the first topic has an image (hero card needs one)
+  // Guarantee the first topic has an image (hero card needs one).
+  // If the top story has no image, swap it with the first story that
+  // DOES have an image. The imageless story goes to position 2 (not
+  // buried at the bottom) so important news without images still shows.
   let sorted = [...allTopics]
   if (sorted.length > 0 && !sorted[0].imageUrl) {
-    const firstWithImage = sorted.findIndex((t, i) => i >= 1 && t.imageUrl)
-    if (firstWithImage >= 0) {
-      const [imgTopic] = sorted.splice(firstWithImage, 1)
-      sorted.unshift(imgTopic)
+    const firstWithImageIdx = sorted.findIndex((t, i) => i >= 1 && t.imageUrl)
+    if (firstWithImageIdx > 0) {
+      const imageTopic = sorted[firstWithImageIdx]
+      sorted = [
+        imageTopic,           // position 1: has image (hero)
+        sorted[0],           // position 2: the important imageless story
+        ...sorted.slice(1, firstWithImageIdx),
+        ...sorted.slice(firstWithImageIdx + 1),
+      ]
     }
   }
 

@@ -1185,3 +1185,72 @@ Summary of the 9 requirements — all completed:
 8. ✅ NOT draggable vertically — `drag="x"` (x-axis only) + `dragDirectionLock` locks the drag to horizontal once it starts.
 9. ✅ Smooth exit animation — card slides off-screen + fades out (250ms) BEFORE onDismiss unmounts it.
 - ✅ Existing click-to-open behavior preserved — `dragHappenedRef` suppresses the click event that fires after a swipe; a tap (no drag) opens the detail as before.
+
+---
+Task ID: 2
+Agent: full-stack-developer
+Task: Fix PWA install popup to work reliably, detect Samsung Internet browser, and avoid "unsafe app" popup warnings.
+
+Work Log:
+- Read existing `src/components/pwa-install-prompt.tsx`, `src/app/page-client.tsx`, `public/manifest.json`, and `src/app/layout.tsx` to understand current PWA install flow.
+- Identified root causes of "unsafe app" warning:
+  1. Samsung Internet was not detected — its `beforeinstallprompt` implementation can trigger the warning when `prompt()` is called.
+  2. The `prompt()` call was already inside an onClick handler (user gesture), but the banner could show with a disabled "Loading…" button when `beforeinstallprompt` hadn't fired yet (bad UX, could lead users to think install was broken).
+  3. No scroll-based engagement trigger existed.
+
+- Rewrote `src/components/pwa-install-prompt.tsx` with the following changes:
+
+  **Browser detection (3 modes):**
+  - `samsung` mode: `navigator.userAgent.includes('SamsungBrowser')` → shows instruction modal (Menu ☰ → "Add to Home screen" → Install). IGNORES `beforeinstallprompt` entirely (never calls `prompt()`), eliminating the "unsafe app" warning on Samsung Internet.
+  - `ios` mode: `(iPhone || iPad) && !CriOS` → shows instruction modal (Share ⎋ → "Add to Home Screen" → Add). iOS doesn't fire `beforeinstallprompt`, so instructions are the only option.
+  - `native` mode: Chrome/Edge/Firefox on Android → uses `beforeinstallprompt`. Stores the deferred event, shows banner with "Install" button, calls `prompt()` ONLY inside the button's onClick handler (user gesture — satisfies browser activation requirement).
+  - Desktop browsers: skipped entirely (no install prompt).
+
+  **High-conversion triggers (4 moments):**
+  1. `?topic=` URL param (shared story link — highest intent) → 800ms delay then show.
+  2. `neutralwire:topic-opened` event (user tapped a story card) → 1500ms delay then show.
+  3. Scroll past 400px (engagement signal) → show immediately, then remove the scroll listener.
+  4. Samsung/iOS home page → 3s gentle nudge (native mode waits for `beforeinstallprompt` instead).
+
+  **"Unsafe app" warning prevention:**
+  - Samsung Internet: `beforeInstallHandler` returns early (`if (modeRef.current !== 'native') return`) — the event is completely ignored, so `prompt()` is never called.
+  - Native mode: `prompt()` is called ONLY inside `handleNativeInstall`, which is the button's onClick handler (a real user gesture). No setTimeout/setInterval calls `prompt()`.
+  - Native mode: `showIfAllowed()` checks `deferredPromptRef.current` before showing the banner — if `beforeinstallprompt` hasn't fired yet, the banner stays hidden (prevents the "disabled Loading… button" state).
+
+  **After install:**
+  - `appinstalled` event → sets `INSTALLED_KEY='true'` in localStorage, hides banner, clears `deferredPrompt`, shows "Installed!" confirmation toast for 6s.
+  - `handleNativeInstall` (accept) → sets `INSTALLED_KEY='true'` immediately (covers the race between user accepting and `appinstalled` firing).
+  - `handleNativeInstall` (dismiss) → sets `DISMISS_KEY` (24h cooldown).
+  - On next page load: `standalone` check OR `INSTALLED_KEY` check → component returns null (no re-prompting).
+
+  **Ref-based state mirroring:**
+  - `deferredPromptRef`, `modeRef`, `installedRef`, `shownRef` mirror their state counterparts so async callbacks (setTimeout, event listeners) read the latest values without re-subscribing. `shownRef` prevents the banner from being shown multiple times in one session (e.g., scroll + topic-opened firing close together).
+
+  **Reusable `InstallInstructionsModal` component:**
+  - Centered overlay with step-by-step instructions.
+  - Used for both Samsung Internet (Menu → Add to Home screen) and iOS Safari (Share → Add to Home Screen) flows.
+  - Backdrop click or X button dismisses with 24h cooldown.
+  - Proper ARIA attributes (`role="dialog"`, `aria-modal`, `aria-label`).
+
+  **Z-index layering:**
+  - Native banner: `z-[60]` (above TopicDetail `z-50`).
+  - Instruction modal: `z-[70]` (above TopicDetail and PwaOnboarding `z-[60]`).
+  - Installed toast: `z-[70]`.
+
+- Did NOT modify `src/app/page-client.tsx` — its `appinstalled` listener (reports to `/api/pwa-installed` + reloads page into standalone mode) coexists fine with the new PwaInstallPrompt listener. Both fire on the same event; no conflict.
+- Did NOT modify `public/manifest.json` — already correctly configured with standalone display, icons, and shortcuts.
+- Did NOT modify `src/app/layout.tsx` — already has manifest link, apple-mobile-web-app-capable meta tags, and SW registration.
+
+- Ran `bun run lint` — passed with zero errors.
+- Did NOT change dev server port or run build (per instructions).
+
+Files changed:
+- `src/components/pwa-install-prompt.tsx` — complete rewrite (286 → 545 lines)
+
+Summary of behavioral changes:
+1. Samsung Internet users now see a "Menu → Add to Home screen" instruction modal instead of a native install prompt (fixes "unsafe app" warning).
+2. iOS Safari users see a "Share → Add to Home Screen" instruction modal (unchanged flow, now in a cleaner centered modal instead of a bottom banner).
+3. Chrome/Edge/Firefox Android users see the native install banner — but ONLY after `beforeinstallprompt` has fired (no more "disabled Loading…" button).
+4. Install prompt now triggers on scroll past 400px (new high-conversion moment).
+5. 24h dismiss cooldown now applies to BOTH the "Maybe later" button AND the native prompt's "dismissed" outcome.
+6. New `INSTALLED_KEY` localStorage flag prevents re-prompting in the race between user accepting and `appinstalled` firing.
