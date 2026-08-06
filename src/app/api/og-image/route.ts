@@ -170,44 +170,60 @@ export async function GET(req: NextRequest) {
       }
       biasBarSvg += `</g>`
 
-      // Percentages (drawn as <text> elements with sans-serif font).
-      // We use font-family="sans-serif" (the generic family) which
-      // sharp's SVG renderer (librsvg) supports. Specific fonts like
-      // "Arial" don't work and render as tofu boxes.
+      // Percentages drawn as SVG paths (NOT <text> — sans-serif font
+      // doesn't work on Vercel production, shows tofu boxes).
+      // Using the 7-segment style digit paths that previously worked.
       const lPct = Math.round((leanLeft / total) * 100)
       const cPct = Math.round((leanCenter / total) * 100)
       const rPct = Math.round((leanRight / total) * 100)
-      const textY = barY + barHeight / 2 + 12 // vertically centered (font baseline)
       if (leftW > 35) {
-        biasBarSvg += `<text x="${barX + leftW / 2}" y="${textY}" font-family="sans-serif" font-size="28" font-weight="bold" fill="#fff" text-anchor="middle">${lPct}</text>`
+        biasBarSvg += renderTextAsPaths(
+          String(lPct),
+          barX + leftW / 2,
+          barY + (barHeight - 34) / 2,
+          34,
+          '#fff',
+        )
       }
       if (centerW > 35) {
-        biasBarSvg += `<text x="${barX + leftW + centerW / 2}" y="${textY}" font-family="sans-serif" font-size="28" font-weight="bold" fill="#fff" text-anchor="middle">${cPct}</text>`
+        biasBarSvg += renderTextAsPaths(
+          String(cPct),
+          barX + leftW + centerW / 2,
+          barY + (barHeight - 34) / 2,
+          34,
+          '#fff',
+        )
       }
       if (rightW > 35) {
         const rightX = barX + leftW + centerW
-        biasBarSvg += `<text x="${rightX + rightW / 2}" y="${textY}" font-family="sans-serif" font-size="28" font-weight="bold" fill="#fff" text-anchor="middle">${rPct}</text>`
+        biasBarSvg += renderTextAsPaths(
+          String(rPct),
+          rightX + rightW / 2,
+          barY + (barHeight - 34) / 2,
+          34,
+          '#fff',
+        )
       }
     }
 
     // ── 5. Build the "NEUTRALWIRE" rectangle banner (bottom-right) ──
-    // Uses <text> with font-family="sans-serif" (works in sharp's renderer)
-    // and letter-spacing for readability.
+    // Uses SVG path-based text (renderTextAsPathsSpaced) — NOT <text>
+    // elements, because sans-serif font doesn't work on Vercel production.
     const bannerText = 'NEUTRALWIRE'
-    const bannerHeight = 60
-    const bannerFontSize = 32
-    // Approximate text width: char_count * font_size * 0.65 + letter_spacing
-    const letterSp = 4
-    const bannerTextWidth = bannerText.length * bannerFontSize * 0.65 + (bannerText.length - 1) * letterSp
-    const bannerWidth = bannerTextWidth + 48
+    const bannerHeight = 72
+    const bannerCharHeight = 50
+    const letterSpacing = 12
+    const bannerCharWidth = 100 * (bannerCharHeight / 140) * 0.6
+    const bannerTextWidth = bannerText.length * bannerCharWidth + (bannerText.length - 1) * letterSpacing
+    const bannerWidth = bannerTextWidth + 56
     const bannerX = W - bannerWidth - 24
     const bannerY = barY - bannerHeight - 16
-    const bannerRadius = 12
+    const bannerRadius = 14
 
     const logoSvg = `
       <rect x="${bannerX - 4}" y="${bannerY - 4}" width="${bannerWidth + 8}" height="${bannerHeight + 8}" rx="${bannerRadius + 4}" fill="#000" opacity="0.5"/>
       <rect x="${bannerX}" y="${bannerY}" width="${bannerWidth}" height="${bannerHeight}" rx="${bannerRadius}" fill="#0a0a0a"/>
-      <text x="${bannerX + bannerWidth / 2}" y="${bannerY + bannerHeight / 2 + 11}" font-family="sans-serif" font-size="${bannerFontSize}" font-weight="bold" fill="#fff" text-anchor="middle" letter-spacing="${letterSp}">${bannerText}</text>
+      ${renderTextAsPathsSpaced(bannerText, bannerX + bannerWidth / 2, bannerY + (bannerHeight - bannerCharHeight) / 2, bannerCharHeight, '#fff', letterSpacing)}
     `
 
     // ── 6. Composite everything ──
