@@ -417,9 +417,15 @@ export function PwaInstallPrompt() {
     <div className="fixed bottom-4 left-4 right-4 z-[60] mx-auto max-w-sm rounded-xl border-2 border-transparent bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 p-[2px] shadow-lg">
       <div className="rounded-[10px] bg-background p-4">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
+          {/* Install icon — clickable, also triggers install */}
+          <button
+            onClick={handleNativeInstall}
+            disabled={!deferredPrompt}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-foreground text-background hover:opacity-80 transition-opacity disabled:opacity-50 cursor-pointer"
+            aria-label="Install NeutralWire app"
+          >
             <Download className="h-5 w-5" />
-          </div>
+          </button>
           <div className="flex-1">
             <div className="font-semibold text-sm">Install NeutralWire</div>
             {/* Bullet points — selling points */}

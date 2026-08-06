@@ -11,6 +11,8 @@ import {
 import { getDeviceId } from '@/lib/referral'
 
 const ONBOARDED_KEY = 'neutralwire:onboarded'
+const ONBOARDING_DISMISSED_KEY = 'neutralwire:onboarding-dismissed-at'
+const ONBOARDING_DISMISS_DURATION = 1 * 60 * 60 * 1000 // 1 hour — popup re-appears after 1hr
 const ARTICLES_OPENED_KEY = 'neutralwire:articles-opened'
 const DONATE_SHOWN_KEY = 'neutralwire:donate-shown-at'
 const DONATE_NEXT_KEY = 'neutralwire:donate-next-threshold'
@@ -48,9 +50,11 @@ export function PwaOnboarding() {
       (window.navigator as Navigator & { standalone?: boolean }).standalone === true
     if (!isStandalone) return
 
-    // Check if onboarded
+    // Check if onboarded (completed the quiz) OR recently dismissed
     const onboarded = localStorage.getItem(ONBOARDED_KEY)
-    if (!onboarded) {
+    const dismissedAt = localStorage.getItem(ONBOARDING_DISMISSED_KEY)
+    const dismissedRecently = dismissedAt && (Date.now() - parseInt(dismissedAt, 10) < ONBOARDING_DISMISS_DURATION)
+    if (!onboarded && !dismissedRecently) {
       setTimeout(() => setShowOnboarding(true), 1500)
     }
 
@@ -157,7 +161,7 @@ export function PwaOnboarding() {
             <>
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-bold">Welcome to NeutralWire</h2>
-                <button onClick={() => { setShowOnboarding(false); localStorage.setItem(ONBOARDED_KEY, 'true') }} className="text-muted-foreground hover:text-foreground">
+                <button onClick={() => { setShowOnboarding(false); localStorage.setItem(ONBOARDING_DISMISSED_KEY, String(Date.now())) }} className="text-muted-foreground hover:text-foreground">
                   <X className="h-5 w-5" />
                 </button>
               </div>
