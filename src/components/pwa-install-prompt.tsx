@@ -6,10 +6,9 @@ import { Button } from '@/components/ui/button'
 
 const DISMISS_KEY = 'neutralwire:pwa-install-dismissed'
 const INSTALLED_KEY = 'neutralwire:pwa-installed-flag'
-// 24h dismiss cooldown. Applied to both the "Maybe later" button AND the
-// native prompt's "dismissed" outcome (so a user who dismisses the Chrome
-// install dialog won't be re-prompted for 24h).
-const DISMISS_DURATION = 24 * 60 * 60 * 1000
+// 1 hour dismiss cooldown. The popup re-appears after 1 hour OR when the
+// site is reopened (no cross-session persistence of the dismiss).
+const DISMISS_DURATION = 1 * 60 * 60 * 1000 // 1 hour (was 24h)
 
 // Scroll threshold (px) — after the user scrolls this far down the feed,
 // we consider them "engaged" and show the install prompt (high-conversion
@@ -237,7 +236,9 @@ export function PwaInstallPrompt() {
   }, [])
 
   const handleDismiss = () => {
-    // Set the 24h dismiss cooldown.
+    // Set the 1-hour dismiss cooldown. The popup will re-appear after
+    // 1 hour OR when the site is reopened (the dismiss timestamp is
+    // checked on mount against the current time).
     localStorage.setItem(DISMISS_KEY, String(Date.now()))
     setShowBanner(false)
   }
@@ -421,10 +422,21 @@ export function PwaInstallPrompt() {
           </div>
           <div className="flex-1">
             <div className="font-semibold text-sm">Install NeutralWire</div>
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              Add to your home screen for quick access to neutral news and
-              daily notifications.
-            </div>
+            {/* Bullet points — selling points */}
+            <ul className="mt-2 space-y-1">
+              <li className="flex items-center gap-1.5 text-xs text-foreground/80">
+                <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
+                Free forever
+              </li>
+              <li className="flex items-center gap-1.5 text-xs text-foreground/80">
+                <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
+                Neutral and unbiased news
+              </li>
+              <li className="flex items-center gap-1.5 text-xs text-foreground/80">
+                <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
+                3 news briefings every day
+              </li>
+            </ul>
             <div className="mt-3 flex gap-2">
               <Button
                 size="sm"
@@ -444,13 +456,6 @@ export function PwaInstallPrompt() {
               </Button>
             </div>
           </div>
-          <button
-            onClick={handleDismiss}
-            className="text-muted-foreground hover:text-foreground"
-            aria-label="Dismiss"
-          >
-            <X className="h-4 w-4" />
-          </button>
         </div>
       </div>
     </div>
@@ -493,21 +498,28 @@ function InstallInstructionsModal({
         </div>
 
         <div className="px-4 pb-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background">
-                <Download className="h-4 w-4" />
-              </div>
-              <h2 className="text-base font-bold">{title}</h2>
+          <div className="mb-3 flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background">
+              <Download className="h-4 w-4" />
             </div>
-            <button
-              onClick={onDismiss}
-              className="text-muted-foreground hover:text-foreground p-1"
-              aria-label="Dismiss"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <h2 className="text-base font-bold">{title}</h2>
           </div>
+
+          {/* Bullet points — selling points */}
+          <ul className="mb-3 space-y-1">
+            <li className="flex items-center gap-1.5 text-xs text-foreground/80">
+              <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
+              Free forever
+            </li>
+            <li className="flex items-center gap-1.5 text-xs text-foreground/80">
+              <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
+              Neutral and unbiased news
+            </li>
+            <li className="flex items-center gap-1.5 text-xs text-foreground/80">
+              <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
+              3 news briefings every day
+            </li>
+          </ul>
 
           <div className="space-y-2">
             {steps.map((step) => (
@@ -535,7 +547,7 @@ function InstallInstructionsModal({
             className="mt-3 w-full rounded-lg bg-foreground py-2.5 text-xs font-semibold text-background hover:opacity-90 transition-opacity"
             onClick={onDismiss}
           >
-            Got it — maybe later
+            Not now
           </button>
         </div>
       </div>
