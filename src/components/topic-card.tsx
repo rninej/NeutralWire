@@ -400,6 +400,14 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             <Clock className="h-3 w-3" />
             {mounted ? formatTime(topic.latestSeen) : ''}
           </span>
+          {/* View sources button — on the RIGHT of the date/time */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowSources(true) }}
+            className="ml-auto text-xs font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            View sources
+          </button>
         </div>
         <h3
           className={cn(
@@ -439,37 +447,20 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         </div>
       )}
 
-      {/* ── HERO: compact bias bar + view sources button at the bottom ── */}
+      {/* ── HERO: compact bias bar at the bottom ── */}
       {isHero && (
         <div className="mt-auto px-4 pb-3 pt-2">
           <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowSources(true) }}
-            className="mt-1.5 text-xs font-medium text-foreground/70 underline-offset-2 hover:underline"
-          >
-            View sources
-          </button>
         </div>
       )}
 
-      {/* ── DEFAULT + COMPACT: full bias bar + sources button ── */}
+      {/* ── DEFAULT + COMPACT: full bias bar ── */}
       {!isHero && (
         <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
           <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
-
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] text-muted-foreground">
-              {total} {total === 1 ? 'article' : 'articles'} across the spectrum
-            </span>
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); setShowSources(true) }}
-              className="text-xs font-medium text-foreground underline-offset-2 hover:underline"
-            >
-              View sources
-            </button>
-          </div>
+          <span className="text-[11px] text-muted-foreground">
+            {total} {total === 1 ? 'article' : 'articles'} across the spectrum
+          </span>
         </div>
       )}
     </Card>,
