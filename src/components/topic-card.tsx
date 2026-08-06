@@ -223,14 +223,14 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
     // original behavior for any TopicCard used outside the main feed.
     if (!onDismiss) {
       return (
-        <motion.div {...cardMotion} className="group h-full">
+        <motion.div {...cardMotion} className="group">
           {content}
         </motion.div>
       )
     }
     return (
-      <motion.div {...cardMotion} className="group h-full">
-        <div className="relative h-full">
+      <motion.div {...cardMotion} className="group">
+        <div className="relative">
           {/* Red glow background — intensifies with swipe distance.
               Uses bg-red-500 (a solid red) with a motion-driven opacity
               (0 → 1) so the glow "fills in" as the card slides away. */}

@@ -2599,8 +2599,10 @@ function DesktopMagazineLayout({
         </button>
       </div>
 
-      {/* Main layout: 3-column grid → hero spans 2 cols, sidebar 1 col */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* Main layout: 3-column grid → hero spans 2 cols, sidebar 1 col.
+          items-start prevents columns from stretching to equal height
+          (which caused the large white space below shorter columns). */}
+      <div className="grid grid-cols-3 gap-4 items-start">
         {/* Left: hero + medium cards (spans 2 columns) */}
         <div className="col-span-2 space-y-4">
           {/* Hero card */}
@@ -2614,9 +2616,11 @@ function DesktopMagazineLayout({
               index={0}
             />
           )}
-          {/* Medium cards in 2-column grid */}
+          {/* Medium cards in 2-column grid.
+              items-start prevents cards from stretching to match the
+              tallest card in the row (which caused white space). */}
           {mainCards.length > 0 && (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 items-start">
               {mainCards.map((t, i) => (
                 <TopicCard
                   key={t.topicId}
