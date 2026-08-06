@@ -193,11 +193,20 @@ export async function GET(req: NextRequest) {
       // Skip browser tabs (only PWA gets notifications)
       if (device.pushIsStandalone === false) { skipNotStandalone++; continue }
 
-      // Skip devices with no timezone (can't determine local time)
-      if (!device.timezone) { skipNoTimezone++; continue }
+      // ── Timezone handling ──
+      // Devices with OLDER PWA installs (before timezone tracking was added)
+      // don't have a timezone stored. Instead of skipping them (which would
+      // mean they NEVER get notifications), fall back to UTC. This ensures
+      // ALL subscribed devices get notifications — the timezone is an
+      // optimization for correct local-time delivery, not a requirement.
+      const deviceTimezone = device.timezone || 'UTC'
+      if (!device.timezone) {
+        // Log for diagnostics but DON'T skip
+        skipNoTimezone++ // counts how many are falling back to UTC
+      }
 
       // Check if it's time for a briefing in this device's timezone
-      const slotInfo = getSlotForLocalTime(device.timezone)
+      const slotInfo = getSlotForLocalTime(deviceTimezone)
       if (!slotInfo) { skipNotInWindow++; continue }
 
       const { slot, dateKey } = slotInfo
@@ -216,7 +225,7 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    console.log(`[trigger-tz] ${toNotify.length} device(s) to notify (out of ${totalDevices} total. Skipped: noSub=${skipNoSub} notStandalone=${skipNotStandalone} noTz=${skipNoTimezone} notInWindow=${skipNotInWindow} alreadySent=${skipAlreadySent})`)
+    console.log(`[trigger-tz] ${toNotify.length} device(s) to notify (out of ${totalDevices} total. noSub=${skipNoSub} notStandalone=${skipNotStandalone} noTz(fallbackUTC)=${skipNoTimezone} notInWindow=${skipNotInWindow} alreadySent=${skipAlreadySent})`)
 
     if (toNotify.length === 0) {
       console.log('[trigger-tz] No devices need notifications right now')

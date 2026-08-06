@@ -757,13 +757,27 @@ export default function Home() {
       body: JSON.stringify({ deviceId, referralCode: refCode }),
     }).catch(() => {})
 
+    // ── Send timezone IMMEDIATELY on page load ──
+    // This ensures even first-time visitors get their timezone stored in
+    // Firebase right away, so the notification cron can send them briefings
+    // at the correct local time. Without this, the timezone is only sent
+    // during the 2-minute session ping — which means a user who opens the
+    // app and closes it within 2 minutes never gets their timezone stored.
+    const userTimezone = typeof Intl !== 'undefined'
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+      : ''
+    if (userTimezone) {
+      fetch('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, seconds: 1, referralCode: refCode, tz: userTimezone }),
+      }).catch(() => {})
+    }
+
     // Track session activity every 2 MINUTES (was 15 seconds — was causing
     // excessive Firebase reads/writes. 2 minutes is enough for streak tracking).
     // Also sends the user's IANA timezone so notifications can be scheduled
     // at the correct local time (morning/lunch/evening per timezone).
-    const userTimezone = typeof Intl !== 'undefined'
-      ? Intl.DateTimeFormat().resolvedOptions().timeZone || ''
-      : ''
     let sessionInterval: ReturnType<typeof setInterval>
     const startSessionTracking = () => {
       sessionInterval = setInterval(() => {
