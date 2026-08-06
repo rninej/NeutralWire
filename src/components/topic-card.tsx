@@ -1,8 +1,13 @@
 'use client'
 
 import * as React from 'react'
-import { motion } from 'framer-motion'
-import { Clock, ExternalLink, Globe } from 'lucide-react'
+import {
+  motion,
+  useMotionValue,
+  useTransform,
+  useAnimationControls,
+} from 'framer-motion'
+import { Clock, ExternalLink, Globe, ThumbsDown } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -14,6 +19,12 @@ interface TopicCardProps {
   variant?: 'default' | 'featured' | 'compact' | 'hero' | 'mini'
   defaultOpen?: boolean
   onOpenDetail?: (topic: TopicArticle) => void
+  /** Called when the user swipes the card LEFT past the dismiss threshold
+   *  (50% of the card width). When provided, enables horizontal
+   *  drag-to-dismiss with a red glow + thumbs-down indicator behind the
+   *  card. When undefined, the card is not draggable (used anywhere swipe
+   *  isn't wanted, e.g. inside the topic detail overlay). */
+  onDismiss?: (topic: TopicArticle) => void
   /** Index within its parent list — used to stagger entrance animations.
    *  Capped internally so long lists don't get a giant delay. */
   index?: number
@@ -63,7 +74,7 @@ function proxyImage(url: string): string {
   return `/api/img?url=${encodeURIComponent(url)}`
 }
 
-export function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDetail, index = 0 }: TopicCardProps) {
+export function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDetail, onDismiss, index = 0 }: TopicCardProps) {
   // Sources are HIDDEN by default on ALL cards (including the featured
   // first card). Users tap "View sources" to expand. Previously the featured
   // card auto-opened its source list, which made the first news story look
@@ -82,11 +93,97 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
   const showImage = imageUrl && !imgError
 
+  // ── Swipe-to-dismiss state ──
+  // dragHappenedRef is set to true in onDragStart and reset (after a short
+  // timeout) in onDragEnd. The card's onClick handler checks this ref so a
+  // swipe doesn't also open the topic detail (the click event fires after
+  // pointerup → dragend in the browser).
+  const dragHappenedRef = React.useRef(false)
+  // Live drag x position — drives the red glow opacity + thumbs-down scale.
+  const dragX = useMotionValue(0)
+  // Animation controls for the dismiss (slide off-screen) + snap-back spring.
+  const dragControls = useAnimationControls()
+  // Ref to the draggable card element — used to measure its width so the
+  // 50% dismiss threshold is computed from the ACTUAL card width, not a guess.
+  const dragCardRef = React.useRef<HTMLDivElement>(null)
+  const cardWidthRef = React.useRef(0)
+
+  // Glow opacity + thumbs-down opacity: 0 at rest → 1 at the dismiss
+  // threshold (50% of card width). Capped at 1 so it doesn't keep growing
+  // past the threshold.
+  const glowOpacity = useTransform(dragX, (v) => {
+    const threshold = (cardWidthRef.current || 300) * 0.5
+    if (threshold <= 0) return 0
+    return Math.min(Math.abs(v) / threshold, 1)
+  })
+  // Thumbs-down scale: 0.6 (small, just appearing) → 1.2 (full-size, popped)
+  // as the user swipes from 0 to the threshold.
+  const thumbScale = useTransform(dragX, (v) => {
+    const threshold = (cardWidthRef.current || 300) * 0.5
+    if (threshold <= 0) return 0.6
+    const progress = Math.min(Math.abs(v) / threshold, 1)
+    return 0.6 + progress * 0.6
+  })
+
   const handleCardClick = (e: React.MouseEvent) => {
     // Don't open detail if the user clicked a link or button inside the card.
     const target = e.target as HTMLElement
     if (target.closest('a, button')) return
+    // Don't open detail if this click came right after a drag (swipe).
+    // The browser fires a click event after pointerup even when the user
+    // was dragging — we suppress it so a swipe doesn't also open the detail.
+    if (dragHappenedRef.current) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     onOpenDetail?.(topic)
+  }
+
+  const handleDragStart = () => {
+    dragHappenedRef.current = true
+    // Measure the card width NOW (lazily) so the threshold is based on the
+    // actual rendered width, not a hardcoded guess. This matters because
+    // cards have different widths (mini vs hero vs featured).
+    if (dragCardRef.current) {
+      cardWidthRef.current = dragCardRef.current.offsetWidth
+    }
+  }
+
+  const handleDragEnd = async () => {
+    const cardWidth = cardWidthRef.current || 300
+    // HALF-SWIPE THRESHOLD: the user must drag the card at least 50% of its
+    // width before the dismiss triggers. Before that, the card snaps back.
+    // This prevents accidental swipes and card jitter on small movements.
+    const threshold = cardWidth * 0.5
+    const currentX = dragX.get()
+
+    if (currentX < -threshold) {
+      // Past threshold — animate the card off-screen to the left + fade out,
+      // THEN call onDismiss. The await ensures the animation completes
+      // before the parent removes the topic from state (which unmounts the
+      // card). This gives a smooth exit animation rather than a sudden pop.
+      await dragControls.start({
+        x: -(cardWidth + 100),
+        opacity: 0,
+        transition: { duration: 0.25, ease: [0.4, 0, 1, 1] },
+      })
+      onDismiss?.(topic)
+    } else {
+      // Not past threshold — spring back to origin. The spring is stiffer
+      // than the default so the snap-back feels snappy, not sluggish.
+      dragControls.start({
+        x: 0,
+        transition: { type: 'spring', stiffness: 500, damping: 35 },
+      })
+    }
+    // Reset the drag flag after a short delay — the click event fires
+    // synchronously after dragend, so by the time this timeout runs, the
+    // click has already been checked (and suppressed). 100ms is enough for
+    // the browser to flush the click event.
+    setTimeout(() => {
+      dragHappenedRef.current = false
+    }, 100)
   }
 
   // Stagger delay: cap so the last card in a long list isn't waiting seconds.
@@ -99,14 +196,105 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
     whileTap: onOpenDetail ? { scale: 0.98 } : undefined,
   }
 
+  /**
+   * Wraps the card content with the swipe-to-dismiss UI.
+   *
+   * When `onDismiss` is undefined (e.g. inside the topic detail overlay),
+   * this just renders the card in a plain motion.div — no drag, no glow,
+   * no thumbs-down. The existing click-to-open behavior is fully preserved.
+   *
+   * When `onDismiss` is provided, the structure is:
+   *   <motion.div>            ← outer grid item (entrance animation)
+   *     <div class="relative"> ← positioning context for glow + icon
+   *       <motion.div>         ← red glow background (opacity = swipe progress)
+   *       <motion.div>         ← thumbs-down icon overlay (opacity = progress)
+   *       <motion.div drag="x"> ← the draggable card itself
+   *         {children}
+   *       </motion.div>
+   *     </div>
+   *   </motion.div>
+   *
+   * The glow + thumbs-down are absolutely positioned BEHIND the card. As the
+   * card slides left, the area to its right (previously covered) becomes
+   * visible, revealing the red glow + thumbs-down.
+   */
+  const wrapWithSwipe = (content: React.ReactNode): React.ReactNode => {
+    // No onDismiss → no swipe. Plain card, plain click. This preserves the
+    // original behavior for any TopicCard used outside the main feed.
+    if (!onDismiss) {
+      return (
+        <motion.div {...cardMotion} className="group h-full">
+          {content}
+        </motion.div>
+      )
+    }
+    return (
+      <motion.div {...cardMotion} className="group h-full">
+        <div className="relative h-full">
+          {/* Red glow background — intensifies with swipe distance.
+              Uses bg-red-500 (a solid red) with a motion-driven opacity
+              (0 → 1) so the glow "fills in" as the card slides away. */}
+          <motion.div
+            className="absolute inset-0 rounded-lg bg-red-500 pointer-events-none"
+            style={{ opacity: glowOpacity }}
+            aria-hidden
+          />
+          {/* Thumbs-down icon — centered, grows in opacity + scale with the
+              swipe. The inner motion.div handles the scale (0.6 → 1.2); the
+              outer motion.div handles the opacity (0 → 1). Splitting them
+              lets us animate opacity + scale independently. */}
+          <motion.div
+            className="absolute inset-0 flex items-center justify-center pointer-events-none"
+            style={{ opacity: glowOpacity }}
+            aria-hidden
+          >
+            <motion.div
+              style={{ scale: thumbScale }}
+              className="rounded-full bg-red-500/25 p-3 backdrop-blur-sm ring-2 ring-red-400/40"
+            >
+              <ThumbsDown className="h-10 w-10 text-white" strokeWidth={2.5} />
+            </motion.div>
+          </motion.div>
+          {/* The draggable card.
+              - drag="x" + dragDirectionLock: only horizontal drag is allowed.
+                dragDirectionLock means once the drag starts moving
+                horizontally, it won't accidentally catch vertical scroll.
+              - dragConstraints={{ left: -300, right: 0 }}: the card can only
+                move LEFT (right is clamped at 0). -300 is the max drag.
+              - dragElastic={0.6}: allows the card to move slightly beyond
+                the constraints with 60% elasticity, for a natural feel.
+              - style={{ x: dragX }}: uses our motion value as the x
+                position, so useTransform can derive glowOpacity + thumbScale
+                from it in real time.
+              - animate={dragControls}: programmatic animations for the
+                dismiss (slide off-screen) + snap-back (spring to 0).
+              - z-10: above the glow + thumbs-down so the card sits on top. */}
+          <motion.div
+            ref={dragCardRef}
+            drag="x"
+            dragDirectionLock
+            dragConstraints={{ left: -300, right: 0 }}
+            dragElastic={0.6}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            animate={dragControls}
+            style={{ x: dragX }}
+            className="relative z-10 h-full"
+          >
+            {content}
+          </motion.div>
+        </div>
+      </motion.div>
+    )
+  }
+
   // ── MINI variant: compact horizontal card (thumbnail left, title right) ──
   // Used in dense lists where 4+ stories should be visible at once on mobile.
   // Includes a compact bias bar so every card shows the red/blue/grey spectrum.
   // When no image: uses a colored left border accent instead of a blank space
   // so the card looks intentional and pleasant next to image cards.
   if (variant === 'mini') {
-    return (
-      <motion.div {...cardMotion} className="group h-full">
+    return wrapWithSwipe(
       <Card
         className={cn(
           'h-full overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
@@ -143,8 +331,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
           </div>
         </div>
-      </Card>
-      </motion.div>
+      </Card>,
     )
   }
 
@@ -152,8 +339,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   // Used for the top story in each section. Full-width on mobile.
   const isHero = variant === 'hero'
 
-  return (
-    <motion.div {...cardMotion} className="group h-full">
+  return wrapWithSwipe(
     <Card
       className={cn(
         'h-full overflow-hidden p-0 gap-0 flex flex-col',
@@ -308,8 +494,6 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         )}
         </div>
       )}
-    </Card>
-    </motion.div>
+    </Card>,
   )
 }
-

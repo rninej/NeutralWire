@@ -49,6 +49,12 @@ export interface TopicArticle {
   /** Blindspot metadata (only set for /api/news?category=blindspots) */
   blindspotSide?: 'left' | 'right'
   blindspotPct?: number
+  /** Total articles found by GDELT for this country query (not just this
+   * topic). Shown as "312 articles" in the topic detail. */
+  totalArticles?: number
+  /** Total distinct newsrooms (domains) found by GDELT for this country
+   * query. Shown as "14 distinct newsrooms" in the topic detail. */
+  totalNewsrooms?: number
 }
 
 export interface CategoryCachePayload {

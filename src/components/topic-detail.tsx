@@ -495,6 +495,13 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           <Badge variant="secondary" className="text-[10px]">
             {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
           </Badge>
+          {/* Total articles + distinct newsrooms (like Ground News).
+              Only shown for GDELT-sourced topics (mycountry). */}
+          {topic.totalArticles && topic.totalArticles > 0 && (
+            <span className="text-[11px] text-muted-foreground">
+              {topic.totalArticles} articles · {topic.totalNewsrooms} distinct newsrooms
+            </span>
+          )}
           <span className="inline-flex items-center gap-1 text-sm font-medium text-foreground">
             <Clock className="h-3.5 w-3.5 text-muted-foreground" />
             {mounted ? formatTime(topic.latestSeen) : ""}

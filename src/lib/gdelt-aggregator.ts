@@ -1611,6 +1611,16 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
   // ── Slice to limit ──
   const result = ranked.slice(0, limit)
 
+  // Attach total article + newsroom counts to each topic so the topic
+  // detail can show "312 articles, 14 distinct newsrooms" (like Ground News).
+  // These are the TOTAL counts from the GDELT query, not per-topic.
+  const totalArticles = raw.length
+  const totalNewsrooms = new Set(raw.map((a) => a.domain)).size
+  for (const topic of result) {
+    topic.totalArticles = totalArticles
+    topic.totalNewsrooms = totalNewsrooms
+  }
+
   console.log(`[gdelt] ${cc}: fetched ${raw.length} articles → ${articles.length} after filter → ${topics.length} topics → ${result.length} returned (AI-ranked)`)
 
   return {

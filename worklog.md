@@ -1085,3 +1085,103 @@ Summary of the 10 requested animation areas — all completed:
 8. ✅ Offline banner slide (AnimatePresence y:-40→0, 250ms)
 9. ✅ Loading spinner pulse (opacity keyframes 0.55→1→0.55, 1.8s loop)
 10. ✅ Header logo hover (motion.img whileHover scale 1.15, spring bounce)
+
+---
+Task ID: 7
+Agent: full-stack-developer
+Task: Add swipe-to-dismiss functionality to news cards in the NeutralWire PWA. Swipe left shows a red glow + thumbs-down icon; past 50% threshold the card dismisses + globally dislikes the topic (same as clicking dislike in topic detail).
+
+Work Log:
+- Read previous worklog (Tasks 1-16) to understand existing structure. Read target files: src/components/topic-card.tsx, src/app/page-client.tsx, src/components/topic-detail.tsx (for the dislike handler pattern to replicate), src/lib/user-interests.ts (for bumpEngagementForTopic signature).
+- Confirmed `framer-motion` ^12.26.2 is installed (per Task 5 worklog). The hooks I needed (useMotionValue, useTransform, useAnimationControls) are all part of framer-motion's core API.
+
+Changes Made:
+
+1. `src/components/topic-card.tsx` — swipe-to-dismiss wrapper
+   - Added `onDismiss?: (topic: TopicArticle) => void` to `TopicCardProps`. When undefined, the card is NOT draggable (preserves original behavior everywhere swipe isn't wanted — e.g. the topic detail overlay doesn't use TopicCard at all, but this makes the contract explicit).
+   - Imported `useMotionValue`, `useTransform`, `useAnimationControls` from framer-motion + `ThumbsDown` from lucide-react.
+   - Added swipe state inside `TopicCard`:
+     * `dragHappenedRef` — set true in onDragStart, reset (after 100ms timeout) in onDragEnd. Used by `handleCardClick` to suppress the click event that fires after a swipe (browser fires click after pointerup → dragend). This is what preserves the existing tap-to-open behavior: a tap (no drag) never sets the ref, so the click opens the detail; a swipe sets the ref, so the subsequent click is suppressed.
+     * `dragX = useMotionValue(0)` — the live drag x position. Passed as `style={{ x: dragX }}` so framer-motion uses it for drag tracking AND we can derive the glow opacity + thumbs-down scale from it via `useTransform`.
+     * `dragControls = useAnimationControls()` — for the dismiss (slide off-screen) + snap-back (spring to 0) animations.
+     * `dragCardRef` + `cardWidthRef` — measures the card's actual rendered width on drag start, so the 50% threshold is computed from the REAL width (not a hardcoded guess). This matters because mini / hero / featured cards have different widths.
+   - Added `glowOpacity` and `thumbScale` motion transforms derived from `dragX`:
+     * glowOpacity: 0 at rest → 1 at the 50%-width threshold (capped at 1). Drives both the red glow background AND the thumbs-down icon opacity.
+     * thumbScale: 0.6 → 1.2 across the same range, so the thumbs-down "pops" as the user swipes.
+   - `handleDragStart`: sets `dragHappenedRef = true` + measures card width into `cardWidthRef`.
+   - `handleDragEnd` (async): the core threshold logic.
+     * Reads `dragX.get()` and compares to `cardWidth * 0.5` (the HALF-SWIPE THRESHOLD).
+     * If past threshold (x < -threshold): awaits `dragControls.start({ x: -(cardWidth+100), opacity: 0, ... })` to slide the card off-screen left + fade out, THEN calls `onDismiss(topic)`. The await ensures the exit animation completes BEFORE the parent removes the topic from state (which unmounts the card) — this is what gives a smooth exit instead of a sudden pop.
+     * If not past threshold: spring back to x=0 with stiffness 500 / damping 35 (snappy, not sluggish).
+     * Resets `dragHappenedRef` after a 100ms timeout (the click event fires synchronously after dragend, so by then the click has already been checked + suppressed).
+   - Added a `wrapWithSwipe(content)` helper inside `TopicCard` that wraps the card content:
+     * If `onDismiss` is undefined → renders `<motion.div {...cardMotion}>{content}</motion.div>` (plain, no drag, no glow). Original behavior fully preserved.
+     * If `onDismiss` is defined → renders the structured wrapper:
+       ```
+       <motion.div {...cardMotion}>           ← outer grid item (entrance animation)
+         <div className="relative h-full">    ← positioning context
+           <motion.div style={{opacity: glowOpacity}} className="bg-red-500 ..." />  ← red glow
+           <motion.div style={{opacity: glowOpacity}}>                                ← thumbs-down wrapper
+             <motion.div style={{scale: thumbScale}}>
+               <ThumbsDown className="h-10 w-10 text-white" />
+             </motion.div>
+           </motion.div>
+           <motion.div drag="x" dragDirectionLock
+             dragConstraints={{ left: -300, right: 0 }}
+             dragElastic={0.6}
+             onDragStart={...} onDragEnd={...}
+             animate={dragControls} style={{ x: dragX }}
+             className="relative z-10 h-full">    ← draggable card (on top)
+             {content}
+           </motion.div>
+         </div>
+       </motion.div>
+       ```
+     * The glow + thumbs-down are absolutely positioned BEHIND the card (z-0 implicit, card is z-10). As the card slides left, the area to its right (previously covered) becomes visible, revealing the red glow + thumbs-down.
+   - Wrapped BOTH return paths (the 'mini' variant early return + the default/hero/featured/compact variant) in `wrapWithSwipe(...)`. All existing card content, click handlers, image error handling, bias bars, source lists, and entrance animations are untouched.
+   - `drag="x"` + `dragDirectionLock` ensures ONLY horizontal drag (no vertical). `dragConstraints={{ right: 0 }}` prevents rightward drag.
+
+2. `src/app/page-client.tsx` — handleDismissTopic + prop wiring
+   - Added `handleDismissTopic` callback (right after `handleOpenDetail`). This performs the EXACT SAME actions as clicking the dislike button in topic-detail.tsx:
+     1. `localStorage.setItem('neutralwire:vote:${topicId}', 'disliked')` — persists the vote locally (matches topic-detail.tsx saveVote).
+     2. `bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'dislike')` — bumps −15 per matched sector (strong negative personalization signal).
+     3. `POST /api/engagement` with `{ type: 'topicVote', deviceId, topicId, vote: 'disliked' }` — syncs the per-topic vote to Firebase (cross-device sync).
+     4. Removes the topic from ALL local feed state: `setTopics`, `setOlderTopics`, `setMyCountryTopics`, `setBlindspotSections` — filters by topicId. A topic can appear in multiple arrays simultaneously (e.g. in `topics` AND in SectionedFeed's fetched categoryTopics), so filtering every array is necessary.
+     5. Refreshes engagement state after 200ms + dispatches `neutralwire:engagement-changed` event so the personalization boost takes effect on the next render.
+   - Passed `onDismiss={handleDismissTopic}` to all 6 desktop-grid TopicCard usages (2 grids × [featured + rest + olderTopics]).
+   - Passed `onDismiss={handleDismissTopic}` to all 3 mobile layout component calls (SectionedFeed, BlindspotSectionedFeed, MobileTopicLayout) + the desktop BlindspotSectionedFeed call.
+   - Updated the 3 layout component definitions to accept + forward `onDismiss`:
+     * `SectionedFeed`: added `onDismiss?: (topic) => void` to props. Added an internal `handleDismissInSection` that ALSO filters the component's own `categoryTopics` state (SectionedFeed fetches its OWN topics per subtopic category into local state — these aren't in the parent's `topics` array, so the parent's filter wouldn't remove them). The wrapped handler filters categoryTopics THEN calls the parent's onDismiss.
+     * `BlindspotSectionedFeed`: added `onDismiss?` to props. Its `sections` come from the parent's `blindspotSections` state, which the parent's handleDismissTopic already filters — so no internal state update needed, just forward `onDismiss` to the 2 TopicCard usages.
+     * `MobileTopicLayout`: added `onDismiss?` to props. Its topics come from the parent's `topics`/`olderTopics` props, which the parent already filters — just forward `onDismiss` to the 2 TopicCard usages.
+   - All 12 TopicCard instances in the feed now have `onDismiss` wired up (6 desktop grid + 2 SectionedFeed + 2 BlindspotSectionedFeed + 2 MobileTopicLayout).
+
+Key design decisions:
+- The 50% threshold is computed from the card's ACTUAL measured width (`cardWidthRef.current = dragCardRef.current.offsetWidth` in onDragStart), not a hardcoded value. This ensures the threshold is correct for mini (narrow) vs hero (wide) cards.
+- The exit animation (slide off-screen + fade) completes BEFORE onDismiss is called (via `await dragControls.start(...)`). This means the parent's state update (which unmounts the card) happens AFTER the card is already off-screen + invisible — no jarring pop.
+- The click-vs-swipe distinction uses a `dragHappenedRef` rather than framer-motion's `onTap` because the existing click handler is on the inner Card component (not a motion component). The ref is set in onDragStart and reset after a 100ms timeout (long enough for the browser to flush the click event that fires after pointerup).
+- `dragConstraints={{ left: -300, right: 0 }}` follows the task spec exactly. For the typical card widths in this app (mobile ~350px, desktop grid ~300px, hero ~350px), 50% is 150-175px — well within the -300 constraint. `dragElastic={0.6}` allows a slight overshoot for a natural feel.
+- The red glow uses `bg-red-500` (solid red) with a motion-driven opacity (0→1). This gives a clear "danger" visual as the card slides away. The thumbs-down icon is wrapped in a translucent red circle (`bg-red-500/25 ring-2 ring-red-400/40 backdrop-blur-sm`) so it reads clearly against any card content.
+- The swipe is ONLY enabled when `onDismiss` is passed. The topic detail overlay (`TopicDetail` component) doesn't use `TopicCard` at all, so swipe is impossible there by construction.
+
+Verification:
+- `bun run lint` → PASS (0 errors, 0 warnings, exit 0).
+- Dev server recompiled successfully (dev.log shows "✓ Compiled in 927ms" after the file changes). `curl http://localhost:3000/` → HTTP 200.
+- Filtered dev.log for errors (excluding known AI/gdelt/502-img noise) → 0 matching lines. No runtime errors from the new code.
+- Did NOT change the dev server port (3000), did NOT run `bun run build`.
+
+Files modified:
+- `src/components/topic-card.tsx` — added onDismiss prop, swipe state (dragX, dragControls, glowOpacity, thumbScale, dragHappenedRef), handleDragStart/handleDragEnd, wrapWithSwipe helper. Both mini + default variants now wrapped via wrapWithSwipe.
+- `src/app/page-client.tsx` — added handleDismissTopic callback (dislike vote + engagement bump + API call + state removal). Wired onDismiss={handleDismissTopic} to all 6 desktop-grid TopicCards + 4 layout component calls. Updated SectionedFeed/BlindspotSectionedFeed/MobileTopicLayout signatures to accept + forward onDismiss (SectionedFeed also filters its internal categoryTopics state on dismiss).
+
+Summary of the 9 requirements — all completed:
+1. ✅ HALF SWIPE (50% of card width) threshold — measured from actual card width in onDragStart; before threshold the card springs back to x=0 (stiffness 500 / damping 35).
+2. ✅ RED GLOW background behind the card, intensifying with swipe distance — `bg-red-500` with `useTransform`-driven opacity 0→1.
+3. ✅ THUMBS DOWN icon (lucide-react) in the center, growing in opacity with swipe distance — opacity 0→1 + scale 0.6→1.2 via useTransform.
+4. ✅ Past threshold + released → card animates off-screen left (`dragControls.start({ x: -(cardWidth+100), opacity: 0 })`, 250ms ease-in).
+5. ✅ On dismiss: calls `bumpEngagementForTopic(deviceId, topic.title, topic.summary, 'dislike')` + POSTs `/api/engagement` with `{ type: 'topicVote', deviceId, topicId, vote: 'disliked' }` + removes from local feed state (topics, olderTopics, myCountryTopics, blindspotSections).
+6. ✅ Swipe ONLY on main feed cards — enabled by passing `onDismiss` prop; topic detail overlay doesn't use TopicCard.
+7. ✅ Framer Motion `drag="x"` + `dragConstraints={{ left: -300, right: 0 }}` + `onDragEnd` handler. Also `dragDirectionLock` + `dragElastic={0.6}`.
+8. ✅ NOT draggable vertically — `drag="x"` (x-axis only) + `dragDirectionLock` locks the drag to horizontal once it starts.
+9. ✅ Smooth exit animation — card slides off-screen + fades out (250ms) BEFORE onDismiss unmounts it.
+- ✅ Existing click-to-open behavior preserved — `dragHappenedRef` suppresses the click event that fires after a swipe; a tap (no drag) opens the detail as before.

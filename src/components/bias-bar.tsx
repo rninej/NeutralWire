@@ -17,18 +17,19 @@ const SEGMENT_TRANSITION = { duration: 0.6, ease: 'easeOut' as const }
 
 export function BiasBar({ left, center, right, showLabels = true, className }: BiasBarProps) {
   const total = left + center + right
-  const lPct = total === 0 ? 0 : (left / total) * 100
-  const cPct = total === 0 ? 0 : (center / total) * 100
-  const rPct = total === 0 ? 0 : (right / total) * 100
+  const lPct = total === 0 ? 0 : Math.round((left / total) * 100)
+  const cPct = total === 0 ? 0 : Math.round((center / total) * 100)
+  const rPct = total === 0 ? 0 : Math.round((right / total) * 100)
 
   return (
     <div className={cn('w-full', className)}>
-      {/* Labels overlaid INSIDE the thin bar to save vertical space. */}
+      {/* Labels overlaid INSIDE the thin bar to save vertical space.
+          Shows PERCENTAGES (e.g. L42%) instead of raw source counts. */}
       {showLabels ? (
         <div
           className="flex h-3.5 w-full overflow-hidden rounded-full bg-muted"
           role="img"
-          aria-label={`Coverage: ${left} left, ${center} center, ${right} right`}
+          aria-label={`Coverage: ${lPct}% left, ${cPct}% center, ${rPct}% right`}
         >
           {lPct > 0 && (
             <motion.div
@@ -36,10 +37,10 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               initial={{ width: 0 }}
               animate={{ width: `${lPct}%` }}
               transition={SEGMENT_TRANSITION}
-              title={`Left: ${left}`}
+              title={`Left: ${lPct}% (${left} sources)`}
             >
               {lPct > 10 && (
-                <span className="text-[8px] font-bold text-white leading-none">L{left}</span>
+                <span className="text-[8px] font-bold text-white leading-none">L{lPct}%</span>
               )}
             </motion.div>
           )}
@@ -49,10 +50,10 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               initial={{ width: 0 }}
               animate={{ width: `${cPct}%` }}
               transition={SEGMENT_TRANSITION}
-              title={`Center: ${center}`}
+              title={`Center: ${cPct}% (${center} sources)`}
             >
               {cPct > 10 && (
-                <span className="text-[8px] font-bold text-white leading-none">C{center}</span>
+                <span className="text-[8px] font-bold text-white leading-none">C{cPct}%</span>
               )}
             </motion.div>
           )}
@@ -62,10 +63,10 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               initial={{ width: 0 }}
               animate={{ width: `${rPct}%` }}
               transition={SEGMENT_TRANSITION}
-              title={`Right: ${right}`}
+              title={`Right: ${rPct}% (${right} sources)`}
             >
               {rPct > 10 && (
-                <span className="text-[8px] font-bold text-white leading-none">R{right}</span>
+                <span className="text-[8px] font-bold text-white leading-none">R{rPct}%</span>
               )}
             </motion.div>
           )}
@@ -74,7 +75,7 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
         <div
           className="flex h-2 w-full overflow-hidden rounded-full bg-muted"
           role="img"
-          aria-label={`Coverage: ${left} left, ${center} center, ${right} right`}
+          aria-label={`Coverage: ${lPct}% left, ${cPct}% center, ${rPct}% right`}
         >
           {lPct > 0 && (
             <motion.div
@@ -82,7 +83,7 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               initial={{ width: 0 }}
               animate={{ width: `${lPct}%` }}
               transition={SEGMENT_TRANSITION}
-              title={`Left: ${left}`}
+              title={`Left: ${lPct}% (${left} sources)`}
             />
           )}
           {cPct > 0 && (
@@ -91,7 +92,7 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               initial={{ width: 0 }}
               animate={{ width: `${cPct}%` }}
               transition={SEGMENT_TRANSITION}
-              title={`Center: ${center}`}
+              title={`Center: ${cPct}% (${center} sources)`}
             />
           )}
           {rPct > 0 && (
@@ -100,7 +101,7 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               initial={{ width: 0 }}
               animate={{ width: `${rPct}%` }}
               transition={SEGMENT_TRANSITION}
-              title={`Right: ${right}`}
+              title={`Right: ${rPct}% (${right} sources)`}
             />
           )}
         </div>

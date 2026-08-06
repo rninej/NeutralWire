@@ -500,6 +500,84 @@ export default function Home() {
     handleOpenDetailRef.current = handleOpenDetail
   }, [handleOpenDetail])
 
+  // ── Swipe-to-dismiss handler ──
+  // Called when a user swipes a feed card to the left past the 50% threshold.
+  // This performs the SAME actions as clicking the dislike (thumbs-down)
+  // button in the topic detail overlay:
+  //   1. Saves the dislike vote to localStorage (so it persists + syncs)
+  //   2. Calls bumpEngagementForTopic with 'dislike' (−15 per matched sector,
+  //      strong negative signal for personalization)
+  //   3. POSTs to /api/engagement with topicVote='disliked' (syncs the vote
+  //      to Firebase so it's visible across devices)
+  //   4. Removes the topic from ALL local feed state arrays (topics,
+  //      olderTopics, myCountryTopics, blindspotSections) so it disappears
+  //      from every view instantly.
+  // The card's own exit animation (slide off-screen left) has ALREADY run
+  // by the time this is called — TopicCard awaits the animation before
+  // invoking onDismiss — so the removal is invisible to the user.
+  const handleDismissTopic = React.useCallback((topic: TopicArticle) => {
+    const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
+
+    // 1. Persist the dislike vote to localStorage (matches topic-detail.tsx
+    //    saveVote so the detail overlay would show the dislike as active
+    //    if the user ever re-encountered this topic).
+    try {
+      localStorage.setItem(`neutralwire:vote:${topic.topicId}`, 'disliked')
+    } catch {
+      // silent — localStorage may be unavailable (private mode, etc.)
+    }
+
+    // 2 + 3. Bump engagement locally + sync the vote to Firebase.
+    //    bumpEngagementForTopic handles both the localStorage engagement
+    //    update AND its own /api/engagement POST for the sector stats.
+    //    We ALSO fire a separate /api/engagement call with type='topicVote'
+    //    so the per-topic vote is recorded (same as the detail overlay).
+    if (deviceId) {
+      bumpEngagementForTopic(
+        deviceId,
+        topic.title,
+        topic.summary || '',
+        'dislike',
+      ).catch(() => {})
+      fetch('/api/engagement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'topicVote',
+          deviceId,
+          topicId: topic.topicId,
+          vote: 'disliked',
+        }),
+      }).catch(() => {})
+    }
+
+    // 4. Remove from ALL local feed state. A topic can appear in multiple
+    //    arrays simultaneously (e.g. in `topics` AND in a SectionedFeed's
+    //    fetched categoryTopics, or in `myCountryTopics` AND interspersed
+    //    in Relevant), so we filter every array to be safe.
+    setTopics((prev) => prev.filter((t) => t.topicId !== topic.topicId))
+    setOlderTopics((prev) => prev.filter((t) => t.topicId !== topic.topicId))
+    setMyCountryTopics((prev) => prev.filter((t) => t.topicId !== topic.topicId))
+    setBlindspotSections((prev) => {
+      const next: Record<string, TopicArticle[]> = {}
+      let changed = false
+      for (const [key, list] of Object.entries(prev)) {
+        const filtered = list.filter((t) => t.topicId !== topic.topicId)
+        if (filtered.length !== list.length) changed = true
+        next[key] = filtered
+      }
+      return changed ? next : prev
+    })
+
+    // Refresh the engagement state so the personalization boost takes
+    // effect on the next render (the disliked topic's sectors get −15,
+    // which demotes similar topics in the feed).
+    setTimeout(() => {
+      setEngagement(getEngagement())
+      window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
+    }, 200)
+  }, [])
+
   // --- REDUNDANT topic-open watcher (foolproof) ---
   // Multiple layers ensure the topic ALWAYS opens when ?topic= is in the URL
   // or when the SW posts an 'open-topic' message.
@@ -1568,6 +1646,7 @@ export default function Home() {
                           topics={filteredTopics}
                           olderTopics={olderTopics}
                           onOpenDetail={handleOpenDetail}
+                          onDismiss={handleDismissTopic}
                           country={country}
                           interests={interests}
                           engagement={engagement}
@@ -1578,6 +1657,7 @@ export default function Home() {
                         <BlindspotSectionedFeed
                           sections={blindspotSections}
                           onOpenDetail={handleOpenDetail}
+                          onDismiss={handleDismissTopic}
                           onSearchClick={() => setShowSearch(true)}
                         />
                       ) : (
@@ -1585,6 +1665,7 @@ export default function Home() {
                           topics={filteredTopics}
                           olderTopics={olderTopics}
                           onOpenDetail={handleOpenDetail}
+                          onDismiss={handleDismissTopic}
                           label={CATEGORY_LABELS[category] || category}
                           onSearchClick={() => setShowSearch(true)}
                         />
@@ -1596,6 +1677,7 @@ export default function Home() {
                         <BlindspotSectionedFeed
                           sections={blindspotSections}
                           onOpenDetail={handleOpenDetail}
+                          onDismiss={handleDismissTopic}
                           onSearchClick={() => setShowSearch(true)}
                         />
                       </div>
@@ -1607,6 +1689,7 @@ export default function Home() {
                           topic={featured}
                           variant="featured"
                           onOpenDetail={handleOpenDetail}
+                          onDismiss={handleDismissTopic}
                           index={0}
                         />
                       )}
@@ -1615,6 +1698,7 @@ export default function Home() {
                           key={t.topicId + (t.imageUrl || '')}
                           topic={t}
                           onOpenDetail={handleOpenDetail}
+                          onDismiss={handleDismissTopic}
                           index={i + 1}
                         />
                       ))}
@@ -1623,6 +1707,7 @@ export default function Home() {
                           key={t.topicId + (t.imageUrl || '')}
                           topic={t}
                           onOpenDetail={handleOpenDetail}
+                          onDismiss={handleDismissTopic}
                           index={rest.length + 1 + i}
                         />
                       ))}
@@ -1638,6 +1723,7 @@ export default function Home() {
                         topic={featured}
                         variant="featured"
                         onOpenDetail={handleOpenDetail}
+                        onDismiss={handleDismissTopic}
                         index={0}
                       />
                     )}
@@ -1646,6 +1732,7 @@ export default function Home() {
                         key={t.topicId + (t.imageUrl || '')}
                         topic={t}
                         onOpenDetail={handleOpenDetail}
+                        onDismiss={handleDismissTopic}
                         index={i + 1}
                       />
                     ))}
@@ -1654,6 +1741,7 @@ export default function Home() {
                         key={t.topicId + (t.imageUrl || '')}
                         topic={t}
                         onOpenDetail={handleOpenDetail}
+                        onDismiss={handleDismissTopic}
                         index={rest.length + 1 + i}
                       />
                     ))}
@@ -1877,6 +1965,7 @@ function SectionedFeed({
   topics,
   olderTopics,
   onOpenDetail,
+  onDismiss,
   country,
   interests,
   engagement,
@@ -1885,6 +1974,7 @@ function SectionedFeed({
   topics: TopicArticle[]
   olderTopics: TopicArticle[]
   onOpenDetail: (topic: TopicArticle) => void
+  onDismiss?: (topic: TopicArticle) => void
   country?: CountryInfo | null
   interests: string[]
   engagement: EngagementStats
@@ -1893,6 +1983,32 @@ function SectionedFeed({
   const allTopics = [...topics, ...olderTopics]
   const [categoryTopics, setCategoryTopics] = React.useState<Record<string, TopicArticle[]>>({})
   const [loadingCategories, setLoadingCategories] = React.useState(true)
+
+  // ── Section-local dismiss handler ──
+  // SectionedFeed fetches its OWN topics from each subtopic category
+  // (world, politics, etc.) into `categoryTopics` — these are NOT in the
+  // parent's `topics` array. So when a card is dismissed here, we must
+  // ALSO remove it from this component's internal state, otherwise the
+  // card would reappear on the next render (parent state change wouldn't
+  // touch categoryTopics).
+  //
+  // The wrapped handler:
+  //   1. Filters the dismissed topic out of every category list
+  //   2. Calls the parent's onDismiss (which bumps dislike engagement +
+  //      removes from the parent's topics/olderTopics/myCountryTopics)
+  const handleDismissInSection = React.useCallback((topic: TopicArticle) => {
+    setCategoryTopics((prev) => {
+      let changed = false
+      const next: Record<string, TopicArticle[]> = {}
+      for (const [key, list] of Object.entries(prev)) {
+        const filtered = list.filter((t) => t.topicId !== topic.topicId)
+        if (filtered.length !== list.length) changed = true
+        next[key] = filtered
+      }
+      return changed ? next : prev
+    })
+    onDismiss?.(topic)
+  }, [onDismiss])
 
   // ── Fetch top news directly from each subtopic category ──
   // Instead of using keyword detection on the relevant feed's own topics
@@ -1914,28 +2030,16 @@ function SectionedFeed({
   React.useEffect(() => {
     let cancelled = false
 
-    // Map interest IDs to category IDs. Most overlap directly, but
-    // 'entertainment' isn't a news category (no RSS feeds for it), so
-    // we skip it. 'world' and 'politics' are always included.
-    const INTEREST_TO_CATEGORY: Record<string, string> = {
-      politics: 'politics',
-      world: 'world',
-      technology: 'technology',
-      business: 'business',
-      science: 'science',
-      health: 'health',
-      sports: 'sports',
-      // 'entertainment' has no dedicated category — skip
-    }
-
-    // Always include world + politics. Then add all user interests.
-    const categorySet = new Set<string>(['world', 'politics'])
-    for (const interest of interests) {
-      const cat = INTEREST_TO_CATEGORY[interest]
-      if (cat) categorySet.add(cat)
-    }
-
-    const categoriesToFetch = Array.from(categorySet).map((cat) => ({
+    // ── Fetch ALL subtopic categories ──
+    // Always fetch all standard categories (world, politics, business,
+    // technology, science, health, sports) so every subcategory has its
+    // own section in the Relevant feed. User interests just affect the
+    // ORDER (interested categories appear first), not which are shown.
+    const ALL_CATEGORIES = [
+      'world', 'politics', 'business', 'technology',
+      'science', 'health', 'sports',
+    ]
+    const categoriesToFetch = ALL_CATEGORIES.map((cat) => ({
       cat: cat as Category,
       label: cat,
     }))
@@ -1979,7 +2083,7 @@ function SectionedFeed({
     })()
 
     return () => { cancelled = true }
-  }, [country?.code, interests])
+  }, [country?.code])
 
   if (allTopics.length === 0 && loadingCategories) return null
 
@@ -2191,6 +2295,29 @@ function SectionedFeed({
     })
   }
 
+  // ── Local News section (city-level) ──
+  // If the user's city is detected (e.g. Ahmedabad, Reading), filter
+  // the relevant feed for topics mentioning that city. This shows local
+  // news that directly affects the user's area.
+  const cityName = country?.city?.trim()
+  const cityNameLower = cityName?.toLowerCase()
+  if (cityNameLower && cityNameLower.length >= 3) {
+    const localTopics = allTopics.filter((t) => {
+      if (isDuplicate(t)) return false
+      const text = `${t.title} ${t.summary}`.toLowerCase()
+      return text.includes(cityNameLower)
+    })
+    if (localTopics.length > 0) {
+      for (const t of localTopics) markShown(t)
+      allSections.push({
+        key: 'local',
+        label: `${cityName} News`,
+        topics: localTopics.slice(0, 7),
+        isInterested: false,
+      })
+    }
+  }
+
   // My Country section — placed naturally (not boosted)
   const myCountryCatTopics = categoryTopics['mycountry']
   if (myCountryCatTopics && myCountryCatTopics.length > 0) {
@@ -2266,6 +2393,7 @@ function SectionedFeed({
                     topic={sectionTopics[0]}
                     variant="hero"
                     onOpenDetail={onOpenDetail}
+                    onDismiss={handleDismissInSection}
                     index={0}
                   />
                 </div>
@@ -2277,6 +2405,7 @@ function SectionedFeed({
                   topic={t}
                   variant="mini"
                   onOpenDetail={onOpenDetail}
+                  onDismiss={handleDismissInSection}
                   index={i + 1}
                 />
               ))}
@@ -2300,10 +2429,12 @@ function SectionedFeed({
 function BlindspotSectionedFeed({
   sections,
   onOpenDetail,
+  onDismiss,
   onSearchClick,
 }: {
   sections: Record<string, TopicArticle[]>
   onOpenDetail: (topic: TopicArticle) => void
+  onDismiss?: (topic: TopicArticle) => void
   onSearchClick: () => void
 }) {
   // Define the order of sections (matching the category nav order).
@@ -2377,6 +2508,7 @@ function BlindspotSectionedFeed({
                     topic={sectionTopics[0]}
                     variant="hero"
                     onOpenDetail={onOpenDetail}
+                    onDismiss={onDismiss}
                     index={0}
                   />
                 </div>
@@ -2387,6 +2519,7 @@ function BlindspotSectionedFeed({
                   topic={t}
                   variant="mini"
                   onOpenDetail={onOpenDetail}
+                  onDismiss={onDismiss}
                   index={i + 1}
                 />
               ))}
@@ -2409,12 +2542,14 @@ function MobileTopicLayout({
   topics,
   olderTopics,
   onOpenDetail,
+  onDismiss,
   label,
   onSearchClick,
 }: {
   topics: TopicArticle[]
   olderTopics: TopicArticle[]
   onOpenDetail: (topic: TopicArticle) => void
+  onDismiss?: (topic: TopicArticle) => void
   label: string
   onSearchClick: () => void
 }) {
@@ -2473,6 +2608,7 @@ function MobileTopicLayout({
                   topic={chunk[0]}
                   variant="hero"
                   onOpenDetail={onOpenDetail}
+                  onDismiss={onDismiss}
                   index={0}
                 />
               </div>
@@ -2483,6 +2619,7 @@ function MobileTopicLayout({
                 topic={t}
                 variant="mini"
                 onOpenDetail={onOpenDetail}
+                onDismiss={onDismiss}
                 index={i + 1}
               />
             ))}

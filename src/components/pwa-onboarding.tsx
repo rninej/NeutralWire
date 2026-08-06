@@ -37,6 +37,9 @@ export function PwaOnboarding() {
   const [showOnboarding, setShowOnboarding] = React.useState(false)
   const [showDonate, setShowDonate] = React.useState(false)
   const [selected, setSelected] = React.useState<Set<string>>(new Set())
+  const [step, setStep] = React.useState(1) // 1 = sectors, 2 = reading habits
+  const [readingDepth, setReadingDepth] = React.useState<'brief' | 'detailed'>('brief')
+  const [readingFreq, setReadingFreq] = React.useState<'daily' | 'weekly' | 'occasional'>('daily')
 
   React.useEffect(() => {
     // Only in PWA (standalone mode)
@@ -104,6 +107,11 @@ export function PwaOnboarding() {
     const sectorsArray = Array.from(selected)
     localStorage.setItem(ONBOARDED_KEY, 'true')
     setInterestsLocal(sectorsArray)
+    // Store reading preferences for future personalization
+    try {
+      localStorage.setItem('neutralwire:reading-depth', readingDepth)
+      localStorage.setItem('neutralwire:reading-freq', readingFreq)
+    } catch { /* ignore */ }
     setShowOnboarding(false)
 
     const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
@@ -140,43 +148,113 @@ export function PwaOnboarding() {
     setShowDonate(false)
   }
 
-  // ── Onboarding popup ──
+  // ── Onboarding popup (2-step quiz) ──
   if (showOnboarding) {
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
         <div className="w-full max-w-md rounded-2xl bg-background p-6 shadow-2xl">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-bold">Welcome to NeutralWire</h2>
-            <button onClick={() => { setShowOnboarding(false); localStorage.setItem(ONBOARDED_KEY, 'true') }} className="text-muted-foreground hover:text-foreground">
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-          <p className="mb-4 text-sm text-muted-foreground">
-            Pick a few topics you care about. We'll use these to personalise your news feed and notifications.
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            {SECTORS.map((sector) => (
-              <button
-                key={sector.id}
-                onClick={() => toggleSector(sector.id)}
-                className={`flex items-center gap-2 rounded-xl border p-3 text-sm font-medium transition-all ${
-                  selected.has(sector.id)
-                    ? 'border-foreground bg-foreground/5 ring-1 ring-foreground'
-                    : 'border-border hover:bg-muted'
-                }`}
+          {step === 1 ? (
+            <>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-bold">Welcome to NeutralWire</h2>
+                <button onClick={() => { setShowOnboarding(false); localStorage.setItem(ONBOARDED_KEY, 'true') }} className="text-muted-foreground hover:text-foreground">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <p className="mb-4 text-sm text-muted-foreground">
+                Pick a few topics you care about. We&apos;ll use these to personalise your news feed and notifications.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {SECTORS.map((sector) => (
+                  <button
+                    key={sector.id}
+                    onClick={() => toggleSector(sector.id)}
+                    className={`flex items-center gap-2 rounded-xl border p-3 text-sm font-medium transition-all ${
+                      selected.has(sector.id)
+                        ? 'border-foreground bg-foreground/5 ring-1 ring-foreground'
+                        : 'border-border hover:bg-muted'
+                    }`}
+                  >
+                    <span className="text-lg">{sector.emoji}</span>
+                    {sector.label}
+                  </button>
+                ))}
+              </div>
+              <Button
+                onClick={() => setStep(2)}
+                className="mt-4 w-full"
+                disabled={selected.size === 0}
               >
-                <span className="text-lg">{sector.emoji}</span>
-                {sector.label}
-              </button>
-            ))}
-          </div>
-          <Button
-            onClick={handleOnboardingComplete}
-            className="mt-4 w-full"
-            disabled={selected.size === 0}
-          >
-            {selected.size === 0 ? 'Select at least one' : `Save ${selected.size} ${selected.size === 1 ? 'interest' : 'interests'}`}
-          </Button>
+                {selected.size === 0 ? 'Select at least one' : `Continue with ${selected.size} ${selected.size === 1 ? 'interest' : 'interests'}`}
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-bold">Reading Preferences</h2>
+                <button onClick={() => setStep(1)} className="text-muted-foreground hover:text-foreground text-sm">
+                  ← Back
+                </button>
+              </div>
+
+              {/* Reading depth */}
+              <p className="mb-2 text-sm font-medium">How do you like to read the news?</p>
+              <div className="mb-4 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setReadingDepth('brief')}
+                  className={`rounded-xl border p-3 text-sm transition-all ${
+                    readingDepth === 'brief'
+                      ? 'border-foreground bg-foreground/5 ring-1 ring-foreground'
+                      : 'border-border hover:bg-muted'
+                  }`}
+                >
+                  <div className="font-medium">Quick scan</div>
+                  <div className="text-[11px] text-muted-foreground">Headlines + summaries</div>
+                </button>
+                <button
+                  onClick={() => setReadingDepth('detailed')}
+                  className={`rounded-xl border p-3 text-sm transition-all ${
+                    readingDepth === 'detailed'
+                      ? 'border-foreground bg-foreground/5 ring-1 ring-foreground'
+                      : 'border-border hover:bg-muted'
+                  }`}
+                >
+                  <div className="font-medium">In-depth</div>
+                  <div className="text-[11px] text-muted-foreground">Full analysis + sources</div>
+                </button>
+              </div>
+
+              {/* Reading frequency */}
+              <p className="mb-2 text-sm font-medium">How often do you check the news?</p>
+              <div className="mb-4 grid grid-cols-3 gap-2">
+                {[
+                  { id: 'daily', label: 'Daily', desc: 'Every day' },
+                  { id: 'weekly', label: 'Weekly', desc: 'A few times/week' },
+                  { id: 'occasional', label: 'Rarely', desc: 'Occasionally' },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setReadingFreq(opt.id as 'daily' | 'weekly' | 'occasional')}
+                    className={`rounded-xl border p-2.5 text-center text-sm transition-all ${
+                      readingFreq === opt.id
+                        ? 'border-foreground bg-foreground/5 ring-1 ring-foreground'
+                        : 'border-border hover:bg-muted'
+                    }`}
+                  >
+                    <div className="font-medium">{opt.label}</div>
+                    <div className="text-[10px] text-muted-foreground">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+
+              <Button
+                onClick={handleOnboardingComplete}
+                className="w-full"
+              >
+                Done — show me my news
+              </Button>
+            </>
+          )}
         </div>
       </div>
     )

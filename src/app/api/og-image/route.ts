@@ -170,19 +170,22 @@ export async function GET(req: NextRequest) {
       }
       biasBarSvg += `</g>`
 
-      // Numbers (drawn on top, not clipped — they're inside the segments)
+      // Percentages (drawn on top, not clipped — they're inside the segments)
+      const lPct = Math.round((leanLeft / total) * 100)
+      const cPct = Math.round((leanCenter / total) * 100)
+      const rPct = Math.round((leanRight / total) * 100)
       if (leftW > 35) {
         biasBarSvg += renderTextAsPaths(
-          String(leanLeft),
+          lPct + '%',
           barX + leftW / 2,
-          barY + (barHeight - 34) / 2, // vertically centered
+          barY + (barHeight - 34) / 2,
           34,
           '#fff',
         )
       }
       if (centerW > 35) {
         biasBarSvg += renderTextAsPaths(
-          String(leanCenter),
+          cPct + '%',
           barX + leftW + centerW / 2,
           barY + (barHeight - 34) / 2,
           34,
@@ -192,7 +195,7 @@ export async function GET(req: NextRequest) {
       if (rightW > 35) {
         const rightX = barX + leftW + centerW
         biasBarSvg += renderTextAsPaths(
-          String(leanRight),
+          rPct + '%',
           rightX + rightW / 2,
           barY + (barHeight - 34) / 2,
           34,

@@ -61,10 +61,14 @@ const TRIGGER_TZ_SECRET = 'nw-tz-trigger-9f3a7c2e1b8d4f6a'
 
 // ── Time windows for each slot (in LOCAL hour:minute) ──
 // Each window is 90 minutes wide so a 30-min cron catches every user.
+// Windows are centered on typical briefing times:
+//   Morning:  7:30–9:00 AM (people wake up, check phone)
+//   Lunch:   12:30–2:00 PM (lunch break)
+//   Evening:  7:30–9:00 PM (after dinner, wind down)
 const SLOT_WINDOWS = {
-  morning: { startHour: 7, startMinute: 0, endHour: 8, endMinute: 30 },
-  lunch: { startHour: 12, startMinute: 0, endHour: 13, endMinute: 30 },
-  evening: { startHour: 19, startMinute: 0, endHour: 20, endMinute: 30 },
+  morning: { startHour: 7, startMinute: 30, endHour: 9, endMinute: 0 },
+  lunch: { startHour: 12, startMinute: 30, endHour: 14, endMinute: 0 },
+  evening: { startHour: 19, startMinute: 30, endHour: 21, endMinute: 0 },
 } as const
 
 type Slot = keyof typeof SLOT_WINDOWS
@@ -282,9 +286,9 @@ export async function GET(req: NextRequest) {
         : `${origin}/icon-512.png`
 
       const slotLabels: Record<Slot, string> = {
-        morning: '📰 Morning Briefing',
-        lunch: '🍴 Lunch Briefing',
-        evening: '🌙 Evening Briefing',
+        morning: 'Morning Briefing',
+        lunch: 'Lunch Briefing',
+        evening: 'Evening Briefing',
       }
 
       let sentCount = 0
