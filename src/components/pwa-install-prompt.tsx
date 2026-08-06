@@ -457,9 +457,12 @@ export function PwaInstallPrompt() {
   )
 }
 
-// ── Reusable instruction modal (used for Samsung Internet + iOS Safari) ──
-// A centered overlay with step-by-step instructions. Tapping the backdrop
-// or the X dismisses it (with a 24h cooldown).
+// ── Reusable bottom sheet (used for Samsung Internet + iOS Safari) ──
+// A bottom-anchored sheet that slides up. Does NOT block the page —
+// the user can still scroll and interact with the site behind it.
+// The sheet has a clear "Got it" button and an X to dismiss.
+// This design is more noticeable than a toast but less intrusive
+// than a full-screen modal — people actually read it.
 interface InstructionStep {
   number: number
   content: React.ReactNode
@@ -477,68 +480,66 @@ function InstallInstructionsModal({
   onDismiss: () => void
 }) {
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
-      onClick={onDismiss}
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-    >
+    <div className="fixed bottom-0 left-0 right-0 z-[70] flex justify-center px-3 pb-3 pointer-events-none">
       <div
-        className="w-full max-w-sm rounded-2xl bg-background p-6 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        className="pointer-events-auto w-full max-w-md rounded-2xl border bg-background shadow-2xl overflow-hidden"
+        style={{
+          animation: 'slideUp 0.3s ease-out',
+        }}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background">
-              <Download className="h-4 w-4" />
+        {/* Drag handle */}
+        <div className="flex justify-center pt-2 pb-1">
+          <div className="h-1 w-10 rounded-full bg-muted-foreground/30" />
+        </div>
+
+        <div className="px-4 pb-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background">
+                <Download className="h-4 w-4" />
+              </div>
+              <h2 className="text-base font-bold">{title}</h2>
             </div>
-            <h2 className="text-base font-bold">{title}</h2>
+            <button
+              onClick={onDismiss}
+              className="text-muted-foreground hover:text-foreground p-1"
+              aria-label="Dismiss"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
+
+          <div className="space-y-2">
+            {steps.map((step) => (
+              <div
+                key={step.number}
+                className="flex items-start gap-2 rounded-md bg-muted/50 p-2"
+              >
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-foreground text-[10px] font-bold text-background">
+                  {step.number}
+                </span>
+                <div className="flex-1 text-xs leading-relaxed">
+                  {step.content}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {note && (
+            <div className="mt-2 rounded-md bg-blue-500/10 p-2 text-xs text-blue-600 dark:text-blue-400">
+              {note}
+            </div>
+          )}
+
           <button
+            className="mt-3 w-full rounded-lg bg-foreground py-2.5 text-xs font-semibold text-background hover:opacity-90 transition-opacity"
             onClick={onDismiss}
-            className="text-muted-foreground hover:text-foreground"
-            aria-label="Dismiss"
           >
-            <X className="h-5 w-5" />
+            Got it — maybe later
           </button>
         </div>
-
-        <p className="mb-3 text-sm text-muted-foreground">
-          Follow these steps to install the app:
-        </p>
-
-        <div className="space-y-2">
-          {steps.map((step) => (
-            <div
-              key={step.number}
-              className="flex items-start gap-2 rounded-md bg-muted/50 p-2"
-            >
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-foreground text-[10px] font-bold text-background">
-                {step.number}
-              </span>
-              <div className="flex-1 text-xs leading-relaxed">
-                {step.content}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {note && (
-          <div className="mt-3 rounded-md bg-blue-500/10 p-2 text-xs text-blue-600 dark:text-blue-400">
-            {note}
-          </div>
-        )}
-
-        <Button
-          size="sm"
-          variant="ghost"
-          className="mt-4 h-8 w-full text-xs"
-          onClick={onDismiss}
-        >
-          Maybe later
-        </Button>
       </div>
+      <style>{`@keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }`}</style>
     </div>
   )
 }

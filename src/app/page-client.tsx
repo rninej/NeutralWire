@@ -1671,9 +1671,20 @@ export default function Home() {
                         />
                       )}
                     </div>
-                    {/* Desktop: magazine-style layout */}
+                    {/* Desktop: same sectioned layout as mobile (all categories) */}
                     <div className="hidden lg:block">
-                      {category === 'blindspots' ? (
+                      {category === 'relevant' ? (
+                        <SectionedFeed
+                          topics={filteredTopics}
+                          olderTopics={olderTopics}
+                          onOpenDetail={handleOpenDetail}
+                          onDismiss={handleDismissTopic}
+                          country={country}
+                          interests={interests}
+                          engagement={engagement}
+                          onSearchClick={() => setShowSearch(true)}
+                        />
+                      ) : category === 'blindspots' ? (
                         <BlindspotSectionedFeed
                           sections={blindspotSections}
                           onOpenDetail={handleOpenDetail}
@@ -1681,7 +1692,7 @@ export default function Home() {
                           onSearchClick={() => setShowSearch(true)}
                         />
                       ) : (
-                        <DesktopMagazineLayout
+                        <MobileTopicLayout
                           topics={filteredTopics}
                           olderTopics={olderTopics}
                           onOpenDetail={handleOpenDetail}
