@@ -40,7 +40,7 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               title={`Left: ${lPct}% (${left} sources)`}
             >
               {lPct > 10 && (
-                <span className="text-[8px] font-bold text-white leading-none">L{lPct}%</span>
+                <span className="text-[8px] font-bold text-white leading-none">{lPct}%</span>
               )}
             </motion.div>
           )}
@@ -53,7 +53,7 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               title={`Center: ${cPct}% (${center} sources)`}
             >
               {cPct > 10 && (
-                <span className="text-[8px] font-bold text-white leading-none">C{cPct}%</span>
+                <span className="text-[8px] font-bold text-white leading-none">{cPct}%</span>
               )}
             </motion.div>
           )}
@@ -66,7 +66,7 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
               title={`Right: ${rPct}% (${right} sources)`}
             >
               {rPct > 10 && (
-                <span className="text-[8px] font-bold text-white leading-none">R{rPct}%</span>
+                <span className="text-[8px] font-bold text-white leading-none">{rPct}%</span>
               )}
             </motion.div>
           )}

@@ -171,12 +171,15 @@ export async function GET(req: NextRequest) {
       biasBarSvg += `</g>`
 
       // Percentages (drawn on top, not clipped — they're inside the segments)
+      // Note: we show just the number without '%' sign because the '%' SVG
+      // path renders poorly at small sizes (looks like a glitch inside the
+      // number). The colored segments already convey left/center/right.
       const lPct = Math.round((leanLeft / total) * 100)
       const cPct = Math.round((leanCenter / total) * 100)
       const rPct = Math.round((leanRight / total) * 100)
       if (leftW > 35) {
         biasBarSvg += renderTextAsPaths(
-          lPct + '%',
+          String(lPct),
           barX + leftW / 2,
           barY + (barHeight - 34) / 2,
           34,
@@ -185,7 +188,7 @@ export async function GET(req: NextRequest) {
       }
       if (centerW > 35) {
         biasBarSvg += renderTextAsPaths(
-          cPct + '%',
+          String(cPct),
           barX + leftW + centerW / 2,
           barY + (barHeight - 34) / 2,
           34,
@@ -195,7 +198,7 @@ export async function GET(req: NextRequest) {
       if (rightW > 35) {
         const rightX = barX + leftW + centerW
         biasBarSvg += renderTextAsPaths(
-          rPct + '%',
+          String(rPct),
           rightX + rightW / 2,
           barY + (barHeight - 34) / 2,
           34,
