@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { firebaseRead } from '@/lib/firebase-server'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import type { Category } from '@/lib/news-sources'
 import PageClient from './page-client'
 
 // Force dynamic rendering so metadata is generated per-request (needed for
@@ -54,9 +55,17 @@ export async function generateMetadata({
       `archive/${topicId}`,
     )
 
-    // Fallback: check the live news cache categories
+    // Fallback: check the live news cache categories.
+    // Check ALL categories (not just a few) so every topic can be found
+    // for OG metadata — missing a category means the share preview shows
+    // the default NeutralWire image instead of the article's image.
     if (!topic) {
-      const cacheCategories = ['relevant', 'top', 'world', 'politics', 'business', 'technology']
+      const cacheCategories: Category[] = [
+        'relevant', 'top', 'world', 'politics', 'business',
+        'technology', 'science', 'health', 'sports',
+      ]
+      // Also check mycountry for common country codes
+      const myCountryCodes = ['GB', 'US', 'IN', 'HK', 'AU', 'CA', 'IE', 'NZ']
       for (const cat of cacheCategories) {
         try {
           const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${cat}`)
@@ -66,6 +75,20 @@ export async function generateMetadata({
           }
         } catch {
           // continue
+        }
+      }
+      // Check mycountry caches if not found yet
+      if (!topic) {
+        for (const cc of myCountryCodes) {
+          try {
+            const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/mycountry__${cc}`)
+            if (payload?.topics) {
+              topic = payload.topics.find((t) => t.topicId === topicId) || null
+              if (topic) break
+            }
+          } catch {
+            // continue
+          }
         }
       }
     }

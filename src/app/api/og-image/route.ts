@@ -44,7 +44,12 @@ export async function GET(req: NextRequest) {
     }
 
     if (!topic) {
-      const cacheCategories = ['relevant', 'top', 'world', 'politics', 'business', 'technology']
+      // Check ALL live news cache categories (not just a few) so every
+      // topic can be found for OG image generation.
+      const cacheCategories = [
+        'relevant', 'top', 'world', 'politics', 'business',
+        'technology', 'science', 'health', 'sports',
+      ]
       for (const cat of cacheCategories) {
         try {
           const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${cat}`)
@@ -54,6 +59,21 @@ export async function GET(req: NextRequest) {
           }
         } catch {
           // continue
+        }
+      }
+      // Check mycountry caches for common country codes
+      if (!topic) {
+        const myCountryCodes = ['GB', 'US', 'IN', 'HK', 'AU', 'CA', 'IE', 'NZ']
+        for (const cc of myCountryCodes) {
+          try {
+            const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/mycountry__${cc}`)
+            if (payload?.topics) {
+              topic = payload.topics.find((t) => t.topicId === topicId) || null
+              if (topic) break
+            }
+          } catch {
+            // continue
+          }
         }
       }
     }
