@@ -122,11 +122,14 @@ export function canRefresh(category: Category, country: string = ''): boolean {
  * `aggregateFn` is injected so this module stays pure / testable.
  *
  * ── My Country merge logic ──
- * For `mycountry`, the refresh MERGES old + new topics instead of replacing.
- * This prevents good stories from disappearing when a GDELT fetch returns
- * fewer/worse results. Old topics still within the 48h freshness window are
- * kept; new topics are added; the combined set is written to the cache.
- * The cache NEVER shrinks below its previous size on a refresh.
+ * For `mycountry`, the refresh ALWAYS merges old + new topics instead of
+ * replacing. This prevents good country-specific stories from disappearing
+ * when a background refresh fetches a bad result (e.g. GDELT times out →
+ * RSS fallback returns international news that isn't country-specific).
+ *
+ * Old topics still within the 24h freshness window are preserved; new
+ * topics appear first (freshest); the combined set is capped at 40.
+ * The cache NEVER shrinks below its previous good state on a refresh.
  */
 export async function refreshCategory(
   category: Category,
@@ -147,16 +150,30 @@ export async function refreshCategory(
     try {
       const agg = await aggregateFn(category)
 
-      // ── For mycountry: merge old + new topics to prevent good stories
-      // from disappearing on refresh ──
+      // ── For mycountry: ALWAYS merge old + new topics ──
       //
-      // MERGE POLICY: Only merge when the new result is SPARSE (< 10 topics).
-      // When the new result has >= 10 topics, REPLACE the cache entirely.
-      // This prevents stale topics from a previous broken fetch (e.g. when
-      // a country was misconfigured and cached wrong-country news) from
-      // lingering in the feed for 24h. The merge is only a safety net for
-      // when GDELT/RSS returns very few results on a given refresh.
-      if (category === 'mycountry' && agg.topics.length < 10) {
+      // WHY ALWAYS MERGE (was: only merge when < 10 new topics):
+      // The previous "replace when >= 10 topics" policy RUINED feeds.
+      // Here's what happened:
+      //   1. India's feed was good (proper India news from GDELT)
+      //   2. A background refresh triggered (30-min TTL)
+      //   3. GDELT timed out → RSS fallback returned ≥10 topics of
+      //      INTERNATIONAL news (not India-specific)
+      //   4. Since the new result had ≥10 topics, the cache was REPLACED
+      //      entirely → all the good India news was gone, replaced by
+      //      random international news
+      //
+      // FIX: Always merge for mycountry. New topics come first (they're
+      // the freshest), then old topics that are still within the 24h
+      // freshness window and not already in the new set are preserved.
+      // This way:
+      //   - If the new fetch has good country news → it replaces the old
+      //     set naturally (new topics appear at the top, old ones age out
+      //     after 24h)
+      //   - If the new fetch is a bad fallback (wrong country) → the old
+      //     good topics are preserved and still appear in the feed
+      //   - The cache never shrinks below its previous good state
+      if (category === 'mycountry') {
         const oldCached = await readCachedNews(category, country)
         if (oldCached && oldCached.topics && oldCached.topics.length > 0) {
           const now = Date.now()
@@ -164,8 +181,8 @@ export async function refreshCategory(
           const freshOldTopics = oldCached.topics.filter(
             (t) => now - t.latestSeen < 24 * 60 * 60 * 1000,
           )
-          // Merge: NEW topics first (fresh from GDELT), then old ones not
-          // already in the new set.
+          // Merge: NEW topics first (fresh from GDELT/RSS), then old
+          // ones not already in the new set.
           const newTopicIds = new Set(agg.topics.map((t) => t.topicId))
           const preservedOldTopics = freshOldTopics.filter(
             (t) => !newTopicIds.has(t.topicId),
@@ -174,7 +191,7 @@ export async function refreshCategory(
           const finalTopics = [...agg.topics, ...preservedOldTopics].slice(0, 40)
 
           console.log(
-            `[news-cache] mycountry merge (sparse result): ${agg.topics.length} new + ${preservedOldTopics.length} preserved old = ${finalTopics.length} total (was ${oldCached.topics.length})`,
+            `[news-cache] mycountry merge: ${agg.topics.length} new + ${preservedOldTopics.length} preserved old = ${finalTopics.length} total (was ${oldCached.topics.length})`,
           )
 
           await writeCachedNews(category, country, finalTopics, agg.articleCount, agg.sourceCount)
