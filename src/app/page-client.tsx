@@ -2385,10 +2385,13 @@ function SectionedFeed({
             {/* ── Same format for ALL sections: 1 large (hero) + rest mini ──
                 Mobile: hero full width on top, mini cards in 2-column grid below.
                 Desktop: 2-column grid — hero takes left column (tall),
-                mini cards stack in the right column (wider, matching height). */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-2">
+                mini cards stack in the right column (wider, matching height).
+                IMPORTANT: the desktop 2-col layout uses a separate hidden lg:block
+                wrapper so the mobile layout (3-col) is completely unchanged. */}
+            {/* Mobile layout (original, unchanged) */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden">
               {sectionTopics[0] && (
-                <div className="sm:col-span-2 lg:col-span-1 lg:row-span-6">
+                <div className="sm:col-span-2">
                   <TopicCard
                     key={sectionTopics[0].topicId}
                     topic={sectionTopics[0]}
@@ -2399,8 +2402,32 @@ function SectionedFeed({
                   />
                 </div>
               )}
-              {/* Mini cards: 2-column grid on mobile, stacked in right column on desktop */}
-              <div className="sm:col-span-2 lg:col-span-1 grid grid-cols-2 gap-3">
+              {sectionTopics.slice(1, 7).map((t, i) => (
+                <TopicCard
+                  key={t.topicId}
+                  topic={t}
+                  variant="mini"
+                  onOpenDetail={onOpenDetail}
+                  onDismiss={handleDismissInSection}
+                  index={i + 1}
+                />
+              ))}
+            </div>
+            {/* Desktop layout (lg only): 2-column — hero left, mini cards right */}
+            <div className="hidden lg:grid grid-cols-2 gap-3">
+              {sectionTopics[0] && (
+                <div className="col-span-1 row-span-6">
+                  <TopicCard
+                    key={sectionTopics[0].topicId}
+                    topic={sectionTopics[0]}
+                    variant="hero"
+                    onOpenDetail={onOpenDetail}
+                    onDismiss={handleDismissInSection}
+                    index={0}
+                  />
+                </div>
+              )}
+              <div className="col-span-1 grid grid-cols-2 gap-3">
                 {sectionTopics.slice(1, 7).map((t, i) => (
                   <TopicCard
                     key={t.topicId}
@@ -2408,9 +2435,9 @@ function SectionedFeed({
                     variant="mini"
                     onOpenDetail={onOpenDetail}
                     onDismiss={handleDismissInSection}
-                  index={i + 1}
-                />
-              ))}
+                    index={i + 1}
+                  />
+                ))}
               </div>
             </div>
           </motion.section>
@@ -2746,9 +2773,10 @@ function MobileTopicLayout({
               </button>
             </div>
           )}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-2">
+          {/* Mobile layout (original, unchanged) */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden">
             {chunk[0] && (
-              <div className="sm:col-span-2 lg:col-span-1 lg:row-span-6">
+              <div className="sm:col-span-2">
                 <TopicCard
                   key={chunk[0].topicId}
                   topic={chunk[0]}
@@ -2759,7 +2787,32 @@ function MobileTopicLayout({
                 />
               </div>
             )}
-            <div className="sm:col-span-2 lg:col-span-1 grid grid-cols-2 gap-3">
+            {chunk.slice(1, 7).map((t, i) => (
+              <TopicCard
+                key={t.topicId}
+                topic={t}
+                variant="mini"
+                onOpenDetail={onOpenDetail}
+                onDismiss={onDismiss}
+                index={i + 1}
+              />
+            ))}
+          </div>
+          {/* Desktop layout (lg only): 2-column — hero left, mini cards right */}
+          <div className="hidden lg:grid grid-cols-2 gap-3">
+            {chunk[0] && (
+              <div className="col-span-1 row-span-6">
+                <TopicCard
+                  key={chunk[0].topicId}
+                  topic={chunk[0]}
+                  variant="hero"
+                  onOpenDetail={onOpenDetail}
+                  onDismiss={onDismiss}
+                  index={0}
+                />
+              </div>
+            )}
+            <div className="col-span-1 grid grid-cols-2 gap-3">
               {chunk.slice(1, 7).map((t, i) => (
                 <TopicCard
                   key={t.topicId}
