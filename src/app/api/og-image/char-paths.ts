@@ -57,16 +57,19 @@ export function renderTextAsPaths(
   fill: string,
 ): string {
   const scale = height / 140
-  const charWidth = 100 * scale * 0.6 // 60% of grid width
-  const totalWidth = text.length * charWidth
+  // Each character gets a slot of 120*scale pixels. The digit itself
+  // only uses 60px of the 100px grid (x=20 to x=80), so with a 120px
+  // slot there's a 60px gap between digits — plenty of separation.
+  const charSlot = 120 * scale
+  const totalWidth = text.length * charSlot
   const startX = centerX - totalWidth / 2
 
   let svg = ''
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]
-    const path = CHAR_PATHS[ch.toUpperCase()] // Auto-uppercase
+    const path = CHAR_PATHS[ch.toUpperCase()]
     if (!path) continue
-    const charX = startX + i * charWidth
+    const charX = startX + i * charSlot
     svg += `<g transform="translate(${charX},${topY}) scale(${scale})"><path d="${path}" fill="${fill}"/></g>`
   }
   return svg
