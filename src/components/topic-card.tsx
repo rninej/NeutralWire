@@ -7,7 +7,7 @@ import {
   useTransform,
   useAnimationControls,
 } from 'framer-motion'
-import { Clock, ExternalLink, Globe, ThumbsDown } from 'lucide-react'
+import { Clock, ExternalLink, Globe, ThumbsDown, X, Loader2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -80,6 +80,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   // card auto-opened its source list, which made the first news story look
   // different from the rest.
   const [open, setOpen] = React.useState(defaultOpen)
+  const [showSources, setShowSources] = React.useState(false)
   const imageUrl = pickImage(topic)
   // Key the imgError state to the imageUrl so it auto-resets when the image changes.
   // This avoids stale error state from a previous render.
@@ -293,8 +294,9 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   // Includes a compact bias bar so every card shows the red/blue/grey spectrum.
   // When no image: uses a colored left border accent instead of a blank space
   // so the card looks intentional and pleasant next to image cards.
-  if (variant === 'mini') {
-    return wrapWithSwipe(
+  const renderCard = () => {
+    if (variant === 'mini') {
+      return wrapWithSwipe(
       <Card
         className={cn(
           'h-full overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
@@ -330,10 +332,18 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
           <div className="mt-auto pt-1">
             <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
           </div>
+          {/* View sources button */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowSources(true) }}
+            className="text-[10px] font-medium text-foreground/70 underline-offset-2 hover:underline mt-0.5 self-start"
+          >
+            View sources
+          </button>
         </div>
       </Card>,
-    )
-  }
+      )
+    }
 
   // ── HERO variant: large card with image on TOP, big title below ──
   // Used for the top story in each section. Full-width on mobile.
@@ -429,10 +439,17 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
         </div>
       )}
 
-      {/* ── HERO: compact bias bar at the bottom (no sources button — keep it clean) ── */}
+      {/* ── HERO: compact bias bar + view sources button at the bottom ── */}
       {isHero && (
         <div className="mt-auto px-4 pb-3 pt-2">
           <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowSources(true) }}
+            className="mt-1.5 text-xs font-medium text-foreground/70 underline-offset-2 hover:underline"
+          >
+            View sources
+          </button>
         </div>
       )}
 
@@ -447,53 +464,186 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             </span>
             <button
               type="button"
-              onClick={() => setOpen((v) => !v)}
+              onClick={(e) => { e.stopPropagation(); setShowSources(true) }}
               className="text-xs font-medium text-foreground underline-offset-2 hover:underline"
             >
-              {open ? 'Hide' : 'View'} sources
+              View sources
             </button>
           </div>
-
-        {open && (
-          <ul className="mt-1 divide-y divide-border rounded-md border">
-            {topic.articles.slice(0, 12).map((a) => {
-              const lean = LEANING_BADGE[a.leaning]
-              return (
-                <li key={a.id}>
-                  <a
-                    href={a.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-start gap-2 px-3 py-2 hover:bg-muted/50 transition-colors"
-                  >
-                    <span
-                      className={cn(
-                        'mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase',
-                        lean.cls,
-                      )}
-                    >
-                      {lean.label}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="line-clamp-2 text-xs font-medium leading-snug">
-                        {a.title}
-                      </div>
-                      <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-                        <Globe className="h-2.5 w-2.5" />
-                        {a.sourceName}
-                        <span className="opacity-50">·</span>
-                        {a.country}
-                        <ExternalLink className="ml-auto h-2.5 w-2.5" />
-                      </div>
-                    </div>
-                  </a>
-                </li>
-              )
-            })}
-          </ul>
-        )}
         </div>
       )}
     </Card>,
+    )
+  }
+
+  // Render the card + sources popup
+  const cardElement = renderCard()
+  return (
+    <>
+      {cardElement}
+      {showSources && <SourcesPopup topic={topic} onClose={() => setShowSources(false)} />}
+    </>
+  )
+}
+
+// ── Sources Popup ──
+// A scrollable full-screen overlay that shows all sources for a topic,
+// grouped by leaning (Left / Center / Right). Fetches the full topic
+// (with articles) from /api/topic/[id] when the articles array is
+// empty (slim=1 feed responses strip articles).
+const LEANING_LABELS: Record<string, { label: string; cls: string; color: string }> = {
+  left: { label: 'Left', cls: 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300', color: 'text-blue-600 dark:text-blue-400' },
+  center: { label: 'Center', cls: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300', color: 'text-zinc-600 dark:text-zinc-400' },
+  right: { label: 'Right', cls: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300', color: 'text-red-600 dark:text-red-400' },
+}
+
+function SourcesPopup({ topic, onClose }: { topic: TopicArticle; onClose: () => void }) {
+  const [fullTopic, setFullTopic] = React.useState<TopicArticle | null>(null)
+  const [loading, setLoading] = React.useState(true)
+
+  React.useEffect(() => {
+    // If the topic already has articles, use them directly
+    if (topic.articles && topic.articles.length > 0) {
+      setFullTopic(topic)
+      setLoading(false)
+      return
+    }
+    // Otherwise fetch the full topic from /api/topic/[id]
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/topic/${encodeURIComponent(topic.topicId)}`, { cache: 'no-store' })
+        if (!res.ok) throw new Error('Failed')
+        const data = await res.json()
+        if (!cancelled && data.topic) {
+          setFullTopic(data.topic as TopicArticle)
+        }
+      } catch {
+        // silent
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [topic])
+
+  // Lock body scroll
+  React.useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [])
+
+  const articles = fullTopic?.articles || []
+  const leftArticles = articles.filter((a) => a.leaning === 'left')
+  const centerArticles = articles.filter((a) => a.leaning === 'center')
+  const rightArticles = articles.filter((a) => a.leaning === 'right')
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] bg-black/50 flex items-end sm:items-center justify-center"
+      onClick={onClose}
+    >
+      <div
+        className="w-full sm:max-w-lg max-h-[85vh] bg-background rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-4 py-3 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <Badge variant="secondary" className="text-[10px] shrink-0">
+              {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
+            </Badge>
+            <h3 className="text-sm font-bold truncate">{topic.title}</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground shrink-0 p-1"
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Bias bar */}
+        <div className="px-4 py-2 border-b shrink-0">
+          <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} showLabels />
+          <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>Left ({topic.leanLeft})</span>
+            <span>Center ({topic.leanCenter})</span>
+            <span>Right ({topic.leanRight})</span>
+          </div>
+        </div>
+
+        {/* Scrollable sources list */}
+        <div className="overflow-y-auto p-4 space-y-4 max-h-[60vh]">
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading sources…</span>
+            </div>
+          ) : articles.length === 0 ? (
+            <div className="text-center py-8 text-sm text-muted-foreground">
+              No sources available for this story.
+            </div>
+          ) : (
+            <>
+              {leftArticles.length > 0 && (
+                <SourceGroup label="Left" count={leftArticles.length} color={LEANING_LABELS.left.color} articles={leftArticles} />
+              )}
+              {centerArticles.length > 0 && (
+                <SourceGroup label="Center" count={centerArticles.length} color={LEANING_LABELS.center.color} articles={centerArticles} />
+              )}
+              {rightArticles.length > 0 && (
+                <SourceGroup label="Right" count={rightArticles.length} color={LEANING_LABELS.right.color} articles={rightArticles} />
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SourceGroup({ label, count, color, articles }: {
+  label: string
+  count: number
+  color: string
+  articles: TopicArticle['articles']
+}) {
+  return (
+    <div>
+      <div className={cn('mb-2 flex items-center gap-2 text-xs font-semibold uppercase', color)}>
+        {label}
+        <span className="text-muted-foreground">({count})</span>
+      </div>
+      <div className="space-y-2">
+        {articles.map((a) => {
+          const lean = LEANING_LABELS[a.leaning] || LEANING_LABELS.center
+          return (
+            <a
+              key={a.id}
+              href={a.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-lg border p-3 transition-colors hover:bg-muted/50"
+            >
+              <div className="line-clamp-2 text-sm font-medium leading-snug">
+                {a.title}
+              </div>
+              <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                <span className={cn('inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase', lean.cls)}>
+                  {lean.label}
+                </span>
+                <Globe className="h-2.5 w-2.5" />
+                {a.sourceName}
+                <span className="opacity-50">·</span>
+                {a.country}
+                <ExternalLink className="ml-auto h-2.5 w-2.5" />
+              </div>
+            </a>
+          )
+        })}
+      </div>
+    </div>
   )
 }
