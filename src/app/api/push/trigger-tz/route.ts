@@ -290,22 +290,56 @@ export async function GET(req: NextRequest) {
       return true
     })
 
-    // ── Filter out US domestic politics / Trump news ──
-    // These are not relevant to non-US users and cause complaints.
-    const usPoliticsPatterns = [
-      'trump', 'biden', 'harris', 'gop', 'republican', 'democrat',
-      'us congress', 'us senate', 'us house', 'scotus', 'us supreme court',
-      'white house', 'capitol', 'pentagon', 'senator', 'congressman',
-      'us poll', 'us election', 'us primary', 'us governor',
-      'rand paul', 'fauci', 'senate hearing', 'house hearing',
-    ]
-    candidates = candidates.filter((s) => {
-      const titleLower = s.title.toLowerCase()
-      for (const pattern of usPoliticsPatterns) {
-        if (titleLower.includes(pattern)) return false
-      }
-      return true
-    })
+    // ── Filter out US domestic politics for non-US users ──
+    // Only applies when the dominant country is NOT 'US'. US users should
+    // still get US politics notifications. The filter is comprehensive —
+    // catches Trump, Biden, US Congress, US elections, US states, US
+    // domestic policy, and any story that's clearly about US internal
+    // affairs with no international angle.
+    const isUSDominant = dominantCountry === 'US'
+    if (!isUSDominant) {
+      const usPoliticsPatterns = [
+        // Politicians
+        'trump', 'biden', 'harris', 'obama', 'sanders', 'desantis',
+        'mccarthy', 'pelosi', 'schumer', 'mcconnell', 'aoc',
+        'rand paul', 'fauci', 'pete hegseth', 'kash patel',
+        // Parties
+        'gop', 'republican', 'democrat', 'mag', 'maga',
+        // Government
+        'us congress', 'us senate', 'us house', 'scotus',
+        'us supreme court', 'white house', 'capitol', 'pentagon',
+        'senator', 'congressman', 'congresswoman', 'us governor',
+        'us poll', 'us approval', 'us election', 'us primary',
+        'senate hearing', 'house hearing', 'senate committee',
+        'house committee', 'fbi', 'cia', 'doj', 'attorney general',
+        'us federal', 'us state law', 'us military', 'us troops',
+        // US domestic news
+        'us border', 'us customs', 'us marshals', 'us citizen',
+        'us nationals', 'us embassy',
+        // US states/cities (when clearly domestic)
+        'new york', 'los angeles', 'chicago', 'houston', 'phoenix',
+        'philadelphia', 'san antonio', 'san diego', 'dallas',
+        'san jose', 'austin', 'jacksonville', 'fort worth',
+        'columbus', 'indianapolis', 'charlotte', 'san francisco',
+        'seattle', 'denver', 'boston', 'el paso', 'nashville',
+        'detroit', 'portland', 'memphis', 'oklahoma city',
+        'las vegas', 'louisville', 'baltimore', 'milwaukee',
+        'albuquerque', 'tucson', 'fresno',
+        // US-specific terms
+        'us weekly', 'us news', 'us marshals',
+      ]
+      const beforeFilter = candidates.length
+      candidates = candidates.filter((s) => {
+        const titleLower = s.title.toLowerCase()
+        for (const pattern of usPoliticsPatterns) {
+          if (titleLower.includes(pattern)) return false
+        }
+        return true
+      })
+      console.log(`[trigger-tz] US politics filter: ${beforeFilter} → ${candidates.length} (removed ${beforeFilter - candidates.length} US stories for non-US dominant country ${dominantCountry})`)
+    } else {
+      console.log('[trigger-tz] US dominant — skipping US politics filter')
+    }
 
     if (candidates.length === 0) {
       console.log('[trigger-tz] No stories available (after US filter) — skipping all sends')
