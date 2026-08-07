@@ -272,22 +272,23 @@ export async function GET(req: NextRequest) {
     // ── 3. Fetch stories for the notification content ──
     // Use the MOST COMMON country among devices to notify, so the stories
     // are relevant to the majority. Fall back to GB.
-    // Also fetch with each target device's country for personalization.
     let allStories: TopicArticle[] = []
-    try {
-      // Determine the dominant country from devices to notify
-      const countryCounts: Record<string, number> = {}
-      for (const target of toNotify) {
-        // Read the device's country from the devices record
-        const dev = devices[target.deviceId]
-        // Check for country code in the device data
-        const cc = (dev as Record<string, unknown>)?.countryCode as string ||
-                   (dev as Record<string, unknown>)?.country as string || 'GB'
-        countryCounts[cc] = (countryCounts[cc] || 0) + 1
-      }
-      const dominantCountry = Object.entries(countryCounts)
-        .sort((a, b) => b[1] - a[1])[0]?.[0] || 'GB'
 
+    // Determine the dominant country from devices to notify
+    // Declared OUTSIDE the try block so it's available even if the
+    // fetch fails (the catch block leaves allStories empty, but
+    // dominantCountry is still defined for the US filter check below).
+    const countryCounts: Record<string, number> = {}
+    for (const target of toNotify) {
+      const dev = devices[target.deviceId]
+      const cc = (dev as Record<string, unknown>)?.countryCode as string ||
+                 (dev as Record<string, unknown>)?.country as string || 'GB'
+      countryCounts[cc] = (countryCounts[cc] || 0) + 1
+    }
+    const dominantCountry = Object.entries(countryCounts)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || 'GB'
+
+    try {
       const categories = ['mycountry', 'relevant', 'world', 'technology', 'business', 'science']
       const results = await Promise.allSettled(
         categories.map(async (cat) => {
