@@ -391,6 +391,31 @@ export async function GET(req: NextRequest) {
       }
 
       try {
+        // ── Double-check: re-read sentSlotsToday right before sending ──
+        // This catches the race condition where two cron runs overlap
+        // (30-min cron can overlap if the first run takes >30s).
+        const deviceNow = await firebaseRead<Record<string, string>>(
+          `devices/${target.deviceId}/sentSlotsToday`
+        )
+        if (deviceNow?.[target.slot] === target.dateKey) {
+          console.log(`[trigger-tz] Race condition detected: ${target.slot} already sent to ${target.deviceId.slice(0, 8)} — skipping`)
+          continue
+        }
+
+        // ── Mark slot as sent BEFORE sending the push ──
+        // This prevents duplicate sends if the function is killed or
+        // the push takes too long. If the push fails, the slot is still
+        // marked (better to miss one notification than send 4 duplicates).
+        await firebaseWrite(
+          `devices/${target.deviceId}/sentSlotsToday/${target.slot}`,
+          target.dateKey,
+        )
+
+        if (!VAPID_PRIVATE_KEY) {
+          console.warn('[trigger-tz] VAPID_PRIVATE_KEY not set — cannot send pushes')
+          break
+        }
+
         const payload = JSON.stringify({
           title: slotLabels[target.slot],
           body: bestStory.title.slice(0, 100),
@@ -402,22 +427,11 @@ export async function GET(req: NextRequest) {
           notifId: `tz_${target.dateKey}_${target.slot}_${target.deviceId.slice(-6)}`,
         })
 
-        if (!VAPID_PRIVATE_KEY) {
-          console.warn('[trigger-tz] VAPID_PRIVATE_KEY not set — cannot send pushes')
-          break
-        }
-
         await webpush.sendNotification(
           target.subscription as webpush.PushSubscription,
           payload,
         )
         sentCount++
-
-        // Mark this slot as sent for today
-        await firebaseWrite(
-          `devices/${target.deviceId}/sentSlotsToday/${target.slot}`,
-          target.dateKey,
-        )
 
         // Small delay between sends
         await new Promise((r) => setTimeout(r, 100))
