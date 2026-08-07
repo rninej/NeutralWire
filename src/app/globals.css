@@ -137,23 +137,27 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 .glass-frosted {
-  background: rgb(255 255 255 / 0.8);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgb(255 255 255 / 0.75);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
 .dark .glass-frosted {
-  background: rgb(10 10 10 / 0.8);
+  background: rgb(18 18 20 / 0.65);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
 
 .glass-liquid {
-  background: rgb(255 255 255 / 0.65);
+  background: rgb(255 255 255 / 0.6);
   backdrop-filter: blur(30px) saturate(180%);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
-  border: 1px solid rgb(255 255 255 / 0.1);
+  border: 1px solid rgb(255 255 255 / 0.12);
 }
 .dark .glass-liquid {
-  background: rgb(10 10 10 / 0.65);
-  border: 1px solid rgb(255 255 255 / 0.05);
+  background: rgb(22 22 26 / 0.55);
+  backdrop-filter: blur(30px) saturate(150%);
+  -webkit-backdrop-filter: blur(30px) saturate(150%);
+  border: 1px solid rgb(255 255 255 / 0.08);
 }
 
 /* ── Platform-aware glass utility ──
@@ -164,26 +168,30 @@
   /* Default (no platform class) — keep element's existing backdrop styles. */
 }
 .platform-android .glass {
-  background: rgb(255 255 255 / 0.8);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgb(255 255 255 / 0.75);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
 .dark.platform-android .glass,
 .platform-android.dark .glass {
-  background: rgb(10 10 10 / 0.8);
+  background: rgb(18 18 20 / 0.65);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
 .platform-apple .glass {
-  background: rgb(255 255 255 / 0.7);
+  background: rgb(255 255 255 / 0.6);
   backdrop-filter: blur(30px) saturate(180%);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
-  border: 1px solid rgb(255 255 255 / 0.1);
-  box-shadow: 0 10px 30px -10px rgb(0 0 0 / 0.05);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  box-shadow: 0 8px 32px -8px rgb(0 0 0 / 0.08);
 }
 .dark.platform-apple .glass,
 .platform-apple.dark .glass {
-  background: rgb(10 10 10 / 0.7);
-  border: 1px solid rgb(255 255 255 / 0.05);
-  box-shadow: 0 10px 30px -10px rgb(0 0 0 / 0.4);
+  background: rgb(22 22 26 / 0.55);
+  backdrop-filter: blur(30px) saturate(150%);
+  -webkit-backdrop-filter: blur(30px) saturate(150%);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  box-shadow: 0 8px 32px -8px rgb(0 0 0 / 0.3);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
