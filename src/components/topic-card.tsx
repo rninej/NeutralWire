@@ -3,6 +3,7 @@
 import * as React from 'react'
 import {
   motion,
+  AnimatePresence,
   useMotionValue,
   useTransform,
   useAnimationControls,
@@ -197,6 +198,34 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
     whileTap: onOpenDetail ? { scale: 0.98 } : undefined,
   }
 
+  // ── Card hover glow (desktop only — see .card-glow CSS rule) ──
+  // Compute the dominant leaning so we can tint the glow. Blue for left,
+  // red for right, neutral grey for center. The actual hover effect is
+  // driven by CSS — here we just expose the color as CSS variables on
+  // the card's root motion.div.
+  const dominantLean: 'left' | 'right' | 'center' =
+    topic.leanLeft >= topic.leanRight && topic.leanLeft > topic.leanCenter
+      ? 'left'
+      : topic.leanRight >= topic.leanLeft && topic.leanRight > topic.leanCenter
+        ? 'right'
+        : 'center'
+  const glowStyle: React.CSSProperties = {
+    // Semi-transparent tint so the glow reads as a colored halo, not a
+    // solid ring. The shadow uses the same color at higher opacity.
+    ['--glow-color' as string]:
+      dominantLean === 'left'
+        ? 'rgb(59 130 246 / 0.35)' // blue-500/35
+        : dominantLean === 'right'
+          ? 'rgb(239 68 68 / 0.35)' // red-500/35
+          : 'rgb(113 113 122 / 0.30)', // zinc-500/30
+    ['--glow-shadow' as string]:
+      dominantLean === 'left'
+        ? 'rgb(59 130 246 / 0.20)'
+        : dominantLean === 'right'
+          ? 'rgb(239 68 68 / 0.20)'
+          : 'rgb(113 113 122 / 0.18)',
+  }
+
   /**
    * Wraps the card content with the swipe-to-dismiss UI.
    *
@@ -224,13 +253,13 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
     // original behavior for any TopicCard used outside the main feed.
     if (!onDismiss) {
       return (
-        <motion.div {...cardMotion} className="group">
+        <motion.div {...cardMotion} className="group card-glow rounded-lg" style={glowStyle}>
           {content}
         </motion.div>
       )
     }
     return (
-      <motion.div {...cardMotion} className="group">
+      <motion.div {...cardMotion} className="group card-glow rounded-lg" style={glowStyle}>
         <div className="relative">
           {/* Red glow background — intensifies with swipe distance.
               Uses bg-red-500 (a solid red) with a motion-driven opacity
@@ -472,7 +501,11 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   return (
     <>
       {cardElement}
-      {showSources && <SourcesPopup topic={topic} onClose={() => setShowSources(false)} />}
+      {/* Sources popup — wrapped in AnimatePresence so the exit animation
+          (slide-down + fade) actually fires when showSources flips to false. */}
+      <AnimatePresence>
+        {showSources && <SourcesPopup topic={topic} onClose={() => setShowSources(false)} />}
+      </AnimatePresence>
     </>
   )
 }
@@ -530,14 +563,31 @@ function SourcesPopup({ topic, onClose }: { topic: TopicArticle; onClose: () => 
   const rightArticles = articles.filter((a) => a.leaning === 'right')
 
   return (
-    <div
+    <motion.div
       className="fixed inset-0 z-[80] bg-black/50 flex items-end sm:items-center justify-center"
       onClick={onClose}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
     >
-      <div
-        className="w-full sm:max-w-lg max-h-[85vh] bg-background rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+      {/* Bottom-sheet style entrance: slide up from the bottom + fade in.
+          On desktop (sm:items-center) the slide is still from the bottom,
+          which reads as a more modern modal animation than a center pop. */}
+      <motion.div
+        className="glass w-full sm:max-w-lg max-h-[85vh] bg-background/95 backdrop-blur-xl rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-border/40"
         onClick={(e) => e.stopPropagation()}
+        initial={{ y: '100%', opacity: 0.6 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: '100%', opacity: 0 }}
+        transition={{ type: 'spring', stiffness: 360, damping: 36, mass: 0.8 }}
       >
+        {/* Drag handle indicator (mobile only) — a small pill at the top of
+            the sheet that signals it's a bottom sheet that can be swiped
+            away. Visual only — no actual swipe handler here. */}
+        <div className="sm:hidden flex justify-center pt-2 pb-1 shrink-0">
+          <div className="h-1 w-10 rounded-full bg-foreground/20" />
+        </div>
         {/* Header */}
         <div className="flex items-center justify-between border-b px-4 py-3 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -566,7 +616,7 @@ function SourcesPopup({ topic, onClose }: { topic: TopicArticle; onClose: () => 
         </div>
 
         {/* Scrollable sources list */}
-        <div className="overflow-y-auto p-4 space-y-4 max-h-[60vh]">
+        <div className="nw-scrollbar overflow-y-auto p-4 space-y-4 max-h-[60vh]">
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -590,8 +640,8 @@ function SourcesPopup({ topic, onClose }: { topic: TopicArticle; onClose: () => 
             </>
           )}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   )
 }
 

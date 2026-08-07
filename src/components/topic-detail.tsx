@@ -378,8 +378,11 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
       exit={{ opacity: 0, y: 40 }}
       transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
     >
-      {/* Sticky top bar: Close (left) | right group (ml-auto) → like/dislike + Share + Ask AI(sticky) */}
-      <div className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
+      {/* Sticky top bar: Close (left) | right group (ml-auto) → like/dislike + Share + Ask AI(sticky)
+          The .glass class activates the platform-specific backdrop blur + bg
+          opacity (frosted on Android, liquid on Apple, fallback to the
+          inline bg-background/95 backdrop-blur on other platforms). */}
+      <div className="glass sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5 flex-shrink-0">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
@@ -533,10 +536,17 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
         {/* Image */}
         {showImage && (
           <div className="relative mb-6 aspect-[16/9] w-full overflow-hidden rounded-lg bg-muted">
-            <img
+            {/* Image entrance: subtle zoom-in (scale 1.05 → 1) over 0.5s
+                when the detail opens. The overflow-hidden parent clips the
+                overflow so the image doesn't bleed outside the rounded box
+                during the zoom. */}
+            <motion.img
               src={`/api/img?url=${encodeURIComponent(topic.imageUrl!)}`}
               alt=""
               className="h-full w-full object-cover"
+              initial={{ scale: 1.05 }}
+              animate={{ scale: 1 }}
+              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               onError={() => setImgError(true)}
             />
           </div>

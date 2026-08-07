@@ -48,6 +48,7 @@ import type { TopicArticle } from '@/lib/news-aggregator'
 import type { CountryInfo } from '@/lib/country-detect'
 import { detectCountryClient, DEFAULT_COUNTRY } from '@/lib/country-detect'
 import { getDeviceId } from '@/lib/referral'
+import { usePlatform } from '@/lib/use-platform'
 import {
   getInterests,
   getEngagement,
@@ -59,6 +60,7 @@ import {
   bumpCountryNewsCount,
   type EngagementStats,
 } from '@/lib/user-interests'
+import { ScrollToTop } from '@/components/scroll-to-top'
 
 /**
  * Subscribe to push notifications via the Push API.
@@ -172,6 +174,13 @@ interface SearchResponse {
 }
 
 export default function Home() {
+  // --- Platform detection (Android / Apple / Other) ---
+  // Sets body.platform-{android|apple|other} so the CSS glass rules in
+  // globals.css apply the right backdrop-blur + bg opacity to sticky
+  // elements. The return value is unused here — the side effect of
+  // setting the body class is what matters.
+  usePlatform()
+
   // --- Country detection ---
   const [country, setCountry] = useState<CountryInfo | null>(null)
   // Only render time-dependent values after mount (avoids hydration mismatch
@@ -1444,7 +1453,10 @@ export default function Home() {
             initial={{ y: -40, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -40, opacity: 0 }}
-            transition={{ duration: 0.25, ease: 'easeOut' }}
+            // Spring transition for a smoother, more natural slide-down
+            // than a linear ease. Low stiffness + high damping keeps it
+            // snappy (~250ms effective) without bouncing past the target.
+            transition={{ type: 'spring', stiffness: 320, damping: 30, mass: 0.7 }}
             className="sticky top-0 z-[60] flex items-center justify-center gap-2 bg-amber-500 px-4 py-2.5 text-center text-sm font-semibold text-black shadow-lg"
           >
             <WifiOff className="h-4 w-4 flex-shrink-0" />
@@ -1453,17 +1465,31 @@ export default function Home() {
         )}
       </AnimatePresence>
       {/* Header */}
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      {/* The .glass class activates the platform-specific backdrop blur + bg
+          opacity (frosted on Android, liquid on Apple, fallback to the
+          inline bg-background/95 backdrop-blur on other platforms). */}
+      <header className="glass sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
           <a href="/" className="flex items-center gap-2 font-bold">
+            {/* Logo entrance: fade in + scale from 0.9 → 1 over 0.4s.
+                The whileHover scale-up is preserved (1.15 with a spring). */}
             <motion.img
               src="/icon-192.png"
               alt="NeutralWire"
               className="h-7 w-7 rounded"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
               whileHover={{ scale: 1.15 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 14 }}
             />
-            <span className="hidden sm:inline">NeutralWire</span>
+            <motion.span
+              className="hidden sm:inline"
+              initial={{ opacity: 0, x: -6 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.4, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}
+            >
+              NeutralWire
+            </motion.span>
           </a>
 
           {/* Country picker (clickable, with manual override) */}
@@ -1557,11 +1583,35 @@ export default function Home() {
       </header>
 
       {/* Main */}
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
-        {/* Search bar (hidden by default — shown when search bubble is clicked) */}
+      {/* Page-load animation: the entire main content area fades in + slides
+          up slightly (8px) on initial render. The animation runs ONCE —
+          it's on the outer wrapper, not on category-switch transitions
+          (those are handled by the inner AnimatePresence below). */}
+      <motion.main
+        className="mx-auto w-full max-w-7xl flex-1 px-4 py-6"
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+      >
+        {/* Search bar — expands open with a width + opacity animation.
+            Wrapped in AnimatePresence so closing it also animates out
+            (collapses + fades) rather than popping away. */}
+        <AnimatePresence>
         {showSearch && (
-          <div className="mb-4 flex items-center gap-2">
-            <div className="relative flex-1">
+          <motion.div
+            initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+            animate={{ opacity: 1, height: 'auto', marginBottom: 16 }}
+            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+            transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
+            className="overflow-hidden"
+          >
+          <div className="flex items-center gap-2">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.22, delay: 0.04, ease: 'easeOut' }}
+              className="relative flex-1"
+            >
               <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
@@ -1580,7 +1630,7 @@ export default function Home() {
                   <X className="h-4 w-4" />
                 </button>
               )}
-            </div>
+            </motion.div>
             <Button
               variant="ghost"
               size="sm"
@@ -1590,7 +1640,9 @@ export default function Home() {
               <X className="h-4 w-4" />
             </Button>
           </div>
+          </motion.div>
         )}
+        </AnimatePresence>
 
         {/* Search results (full-catalog API search) — replaces the normal view
             when local search yields nothing and an API search is running.
@@ -1756,7 +1808,7 @@ export default function Home() {
                   {loadingMore && (
                     <div className="grid w-full max-w-7xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                       {Array.from({ length: 4 }).map((_, i) => (
-                        <div key={i} className="h-64 animate-pulse rounded-lg bg-muted/40" />
+                        <div key={i} className="h-64 shimmer rounded-lg" />
                       ))}
                     </div>
                   )}
@@ -1771,7 +1823,7 @@ export default function Home() {
             </motion.div>
           </AnimatePresence>
         )}
-      </main>
+      </motion.main>
 
       {/* Footer */}
       <footer className="border-t bg-muted/30 py-4 mt-auto">
@@ -1779,6 +1831,10 @@ export default function Home() {
           NeutralWire
         </div>
       </footer>
+
+      {/* Floating scroll-to-top button — appears after the user scrolls
+          down 500px. Smoothly scrolls back to top when clicked. */}
+      <ScrollToTop showAfter={500} />
 
       {/* PWA install prompt (mobile only, dismissible) */}
       <PwaInstallPrompt />
@@ -1864,7 +1920,11 @@ function CategoryTab({
         <motion.span
           layoutId="category-tab-pill"
           className="absolute inset-0 rounded-md bg-foreground"
-          transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+          // Spring with a slight bounce — lower damping gives it one small
+          // overshoot when it lands on the new tab, making the slide feel
+          // alive rather than robotic. Stiffness stays high so the slide
+          // is fast (~250ms effective duration).
+          transition={{ type: 'spring', stiffness: 420, damping: 26, mass: 0.9 }}
           style={{ zIndex: 0 }}
         />
       )}
@@ -1899,10 +1959,13 @@ function CategoryTab({
 function LoadingState() {
   return (
     <div className="space-y-4">
-      <Card className="h-72 animate-pulse bg-muted/40" />
+      {/* Skeleton cards use the shimmer class (gradient sweep) instead of
+          plain animate-pulse — looks more polished and matches the glass
+          aesthetic of the rest of the app. */}
+      <Card className="h-72 shimmer rounded-lg" />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 6 }).map((_, i) => (
-          <Card key={i} className="h-64 animate-pulse bg-muted/40" />
+          <Card key={i} className="h-64 shimmer rounded-lg" />
         ))}
       </div>
     </div>

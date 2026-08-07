@@ -1345,3 +1345,69 @@ Stage Summary:
 - Disliked articles → negative engagement bumps (-15 per matching sector) via bumpEngagementForTopic
 - All existing donation popup logic, 1hr dismiss cooldown, PWA-only check, and X-button dismissal preserved unchanged
 - 2-column mobile / 3-column desktop grid, scrollable, with framer-motion entrance animations, custom scrollbar styling, and full accessibility (ARIA roles, labels, pressed states)
+
+---
+Task ID: 2+3
+Agent: full-stack-developer
+Task: Add platform-specific glass theme (Android frosted glass, Apple liquid glass) + 10 professional animations throughout NeutralWire.
+
+Work Log:
+
+PART 1 — Platform Detection + Glass Theme:
+- Created `src/lib/use-platform.ts` exporting `Platform` type, `detectPlatform()` pure fn (reads navigator.userAgent: Android if /Android/i, Apple if /iPhone|iPad|iPod|Mac/i && !Android, else 'other'), and `usePlatform()` hook that returns 'other' on first render (no hydration mismatch) then in a useEffect sets state + writes `platform-android|apple|other` class to document.body.
+- Added reusable glass CSS classes to `src/app/globals.css`:
+  * `.glass-frosted` (white 0.8 / dark 0.8 + blur(20px))
+  * `.glass-liquid` (white 0.65 / dark 0.65 + blur(30px) saturate(180%) + 1px white/10 border) — plus dark variants
+  * `.glass` — platform-aware utility: no-op by default; `.platform-android .glass` applies frosted; `.platform-apple .glass` applies liquid + subtle shadow. Element keeps its inline Tailwind backdrop classes as a desktop fallback.
+- Applied `glass` class to 4 surfaces:
+  1. Sticky `<header>` in `src/app/page-client.tsx`
+  2. Topic detail sticky top bar in `src/components/topic-detail.tsx`
+  3. Sources popup container in `src/components/topic-card.tsx` (SourcesPopup component)
+  4. PWA onboarding modal in `src/components/pwa-onboarding.tsx`
+- Fixed pre-existing bug: `src/components/pwa-onboarding.tsx` imported `Flask` from lucide-react (doesn't exist — only `FlaskConical`, `FlaskConicalOff`, `FlaskRound` do). This caused `ReferenceError: Flask is not defined` and `GET / 500`. Fixed import to `FlaskConical` + updated the one JSX usage. Page now returns 200.
+
+PART 2 — Professional Animations (all transform/opacity, 150–400 ms):
+
+1. Page load animation — wrapped `<main>` in `<motion.main>` with `initial={{opacity:0,y:8}} animate={{opacity:1,y:0}}` over 0.4s, ease `[0.16,1,0.3,1]`. Runs once on mount.
+2. Header logo animation — `<motion.img>` now has `initial={{opacity:0,scale:0.9}} animate={{opacity:1,scale:1}}` over 0.4s. whileHover scale 1.15 preserved. The "NeutralWire" wordmark is now a `<motion.span>` fading + sliding in from x:-6 (50ms delay).
+3. Search bar expand animation — wrapped in `<AnimatePresence>` with `<motion.div>` animating `height:0→'auto'`, `opacity:0→1`, `marginBottom:0→16` over 220ms. Inner input container scales in 0.96→1 (40ms delay). Closing collapses smoothly.
+4. Offline banner spring — replaced `transition={{duration:0.25,ease:'easeOut'}}` with `transition={{type:'spring',stiffness:320,damping:30,mass:0.7}}` for a smoother slide-down.
+5. Topic detail image zoom-in — `<img>` → `<motion.img>` with `initial={{scale:1.05}} animate={{scale:1}}` over 0.5s, ease `[0.16,1,0.3,1]`. Parent has overflow-hidden so the zoom is clipped to the rounded box.
+6. Sources popup bottom-sheet — SourcesPopup container is now `<motion.div>` with `initial={{y:'100%',opacity:0.6}} animate={{y:0,opacity:1}}` spring (stiffness 360, damping 36, mass 0.8). Backdrop fades in. Wrapped call site in `<AnimatePresence>` so the exit animation (slide-down + fade) actually fires. Added a mobile drag-handle pill.
+7. Card hover glow — `.card-glow` CSS class inside `@media (hover:hover) and (pointer:fine)` so touch devices skip it. TopicCard computes dominant leaning (left/right/center from leanLeft/leanRight/leanCenter) and exposes `--glow-color` + `--glow-shadow` CSS vars (blue/red/zinc, 0.35 + 0.20 alpha). On hover the card shows a 1px tinted ring + 24px blurred shadow matching its bias color. Pure box-shadow — no layout shift.
+8. Tab pill bounce — `transition={{type:'spring',stiffness:400,damping:32}}` → `transition={{type:'spring',stiffness:420,damping:26,mass:0.9}}` for a small overshoot when the sliding pill lands on the new tab.
+9. Skeleton shimmer — `.shimmer` CSS class: 1.6s linear-gradient sweep moving left-to-right via `background-position`. Dark-mode variant included. Replaced every `animate-pulse bg-muted/40` in `src/app/page-client.tsx` (LoadingState's 7 cards + 4 infinite-scroll sentinel cards) with `shimmer rounded-lg`.
+10. Scroll-to-top button — new `src/components/scroll-to-top.tsx` component. Listens to window.scroll (passive), toggles visibility past 500px. Renders a fixed `bottom-4 right-4 z-40` chevron-up button with `bg-background/90 backdrop-blur-md ring-1 ring-border/60`. Entrance uses `.scroll-top-enter` CSS keyframe (opacity 0→1, translateY+scale 8px/0.92→0/1, 200ms). Click handler `window.scrollTo({top:0,behavior:'smooth'})`. Mounted after the footer in page-client.tsx.
+
+Verification:
+- `bun run lint` → PASS (0 errors, 0 warnings).
+- `curl http://localhost:3000/` → HTTP 200 (was 500 before fixing the Flask import bug).
+- Dev server recompiled cleanly after the changes — no `ReferenceError`, no compile errors.
+- Did NOT change the dev server port (3000), did NOT run `bun run build`.
+
+Files changed:
+- `src/lib/use-platform.ts` (new, 89 lines) — platform detection hook
+- `src/components/scroll-to-top.tsx` (new, 60 lines) — floating scroll-to-top button
+- `src/app/globals.css` — added glass, shimmer, card-glow, scroll-top-enter, nw-scrollbar CSS
+- `src/app/page-client.tsx` — wired usePlatform; .glass on header; logo entrance; offline spring; main fade-in; search expand; shimmer skeletons; tab pill bounce; ScrollToTop mount
+- `src/components/topic-detail.tsx` — .glass on top bar; article image zoom-in
+- `src/components/topic-card.tsx` — SourcesPopup glass + bottom-sheet spring + AnimatePresence wrapper; desktop card-glow with bias-tinted CSS vars
+- `src/components/pwa-onboarding.tsx` — .glass on modal; fixed Flask→FlaskConical import bug (was 500-ing the page)
+
+Summary of all 10 animation requirements — all completed:
+1. ✅ Page load fade-in + slide-up (0.4s) on main
+2. ✅ Header logo fade-in + scale 0.9→1 (0.4s)
+3. ✅ Search bar expand (height + opacity + scale nested input)
+4. ✅ Offline banner spring transition
+5. ✅ Topic detail image zoom-in (scale 1.05→1 over 0.5s)
+6. ✅ Sources popup bottom-sheet slide-up + fade-in (spring)
+7. ✅ Card hover glow (bias-tinted, desktop-only via hover media query)
+8. ✅ Tab pill bounce (lower damping → small overshoot)
+9. ✅ Skeleton shimmer (gradient sweep, replaces animate-pulse)
+10. ✅ Scroll-to-top button (chevron-up, appears past 500px, smooth scroll)
+
+All platform glass requirements — all completed:
+1. ✅ Android frosted glass: `.glass-frosted` + `.platform-android .glass` (blur(20px), 0.8 bg)
+2. ✅ Apple liquid glass: `.glass-liquid` + `.platform-apple .glass` (blur(30px) saturate(180%), 0.7 bg, white/10 border, subtle shadow)
+3. ✅ usePlatform() hook in `src/lib/use-platform.ts` returns 'android'|'apple'|'other' and sets body class on mount
+4. ✅ Glass applied to: sticky header, topic detail top bar, sources popup, onboarding modal
