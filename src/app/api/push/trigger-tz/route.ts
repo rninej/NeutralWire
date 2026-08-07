@@ -59,15 +59,16 @@ const TRIGGER_TZ_SECRET = 'nw-tz-trigger-9f3a7c2e1b8d4f6a'
  */
 
 // ── Time windows for each slot (in LOCAL hour:minute) ──
-// Each window is 90 minutes wide so a 30-min cron catches every user.
+// Each window is 2 hours wide so a 30-min cron catches every user
+// even if their timezone is slightly off or they're traveling.
 // Windows are centered on typical briefing times:
-//   Morning:  7:30–9:00 AM (people wake up, check phone)
-//   Lunch:   12:30–2:00 PM (lunch break)
-//   Evening:  7:30–9:00 PM (after dinner, wind down)
+//   Morning:  6:30–8:30 AM (people wake up, check phone)
+//   Lunch:   11:30–1:30 PM (lunch break)
+//   Evening:  6:30–8:30 PM (after dinner, wind down)
 const SLOT_WINDOWS = {
-  morning: { startHour: 7, startMinute: 30, endHour: 9, endMinute: 0 },
-  lunch: { startHour: 12, startMinute: 30, endHour: 14, endMinute: 0 },
-  evening: { startHour: 19, startMinute: 30, endHour: 21, endMinute: 0 },
+  morning: { startHour: 6, startMinute: 30, endHour: 8, endMinute: 30 },
+  lunch: { startHour: 11, startMinute: 30, endHour: 13, endMinute: 30 },
+  evening: { startHour: 18, startMinute: 30, endHour: 20, endMinute: 30 },
 } as const
 
 type Slot = keyof typeof SLOT_WINDOWS
@@ -240,13 +241,29 @@ export async function GET(req: NextRequest) {
     }
 
     // ── 3. Fetch stories for the notification content ──
+    // Use the MOST COMMON country among devices to notify, so the stories
+    // are relevant to the majority. Fall back to GB.
+    // Also fetch with each target device's country for personalization.
     let allStories: TopicArticle[] = []
     try {
+      // Determine the dominant country from devices to notify
+      const countryCounts: Record<string, number> = {}
+      for (const target of toNotify) {
+        // Read the device's country from the devices record
+        const dev = devices[target.deviceId]
+        // Check for country code in the device data
+        const cc = (dev as Record<string, unknown>)?.countryCode as string ||
+                   (dev as Record<string, unknown>)?.country as string || 'GB'
+        countryCounts[cc] = (countryCounts[cc] || 0) + 1
+      }
+      const dominantCountry = Object.entries(countryCounts)
+        .sort((a, b) => b[1] - a[1])[0]?.[0] || 'GB'
+
       const categories = ['mycountry', 'relevant', 'world', 'technology', 'business', 'science']
       const results = await Promise.allSettled(
         categories.map(async (cat) => {
           const newsRes = await fetch(
-            `${PRODUCTION_ORIGIN}/api/news?category=${cat}&country=GB&limit=5&minCoverage=1`,
+            `${PRODUCTION_ORIGIN}/api/news?category=${cat}&country=${dominantCountry}&limit=5&minCoverage=1`,
             { cache: 'no-store' },
           )
           if (newsRes.ok) {
@@ -267,15 +284,32 @@ export async function GET(req: NextRequest) {
 
     // Dedup by topicId
     const seenIds = new Set<string>()
-    const candidates = allStories.filter((s) => {
+    let candidates = allStories.filter((s) => {
       if (seenIds.has(s.topicId)) return false
       seenIds.add(s.topicId)
       return true
     })
 
+    // ── Filter out US domestic politics / Trump news ──
+    // These are not relevant to non-US users and cause complaints.
+    const usPoliticsPatterns = [
+      'trump', 'biden', 'harris', 'gop', 'republican', 'democrat',
+      'us congress', 'us senate', 'us house', 'scotus', 'us supreme court',
+      'white house', 'capitol', 'pentagon', 'senator', 'congressman',
+      'us poll', 'us election', 'us primary', 'us governor',
+      'rand paul', 'fauci', 'senate hearing', 'house hearing',
+    ]
+    candidates = candidates.filter((s) => {
+      const titleLower = s.title.toLowerCase()
+      for (const pattern of usPoliticsPatterns) {
+        if (titleLower.includes(pattern)) return false
+      }
+      return true
+    })
+
     if (candidates.length === 0) {
-      console.log('[trigger-tz] No stories available — skipping all sends')
-      return NextResponse.json({ ok: true, message: 'No stories available', sent: 0, toNotify: toNotify.length, ts: Date.now() })
+      console.log('[trigger-tz] No stories available (after US filter) — skipping all sends')
+      return NextResponse.json({ ok: true, message: 'No stories available after filtering', sent: 0, toNotify: toNotify.length, ts: Date.now() })
     }
 
     // ── 4. Load global sent-history (never send the same story twice) ──
