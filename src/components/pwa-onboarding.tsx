@@ -1,14 +1,18 @@
 'use client'
 
 import * as React from 'react'
-import { X, Heart } from 'lucide-react'
+import { X, Heart, Loader2, Check, ThumbsDown, ImageIcon } from 'lucide-react'
+import { motion } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import {
   SECTORS,
+  detectSectors,
+  bumpEngagementForTopic,
   setInterestsLocal,
   syncInterestsWithFirebase,
 } from '@/lib/user-interests'
 import { getDeviceId } from '@/lib/referral'
+import type { TopicArticle } from '@/lib/news-aggregator'
 
 const ONBOARDED_KEY = 'neutralwire:onboarded'
 const ONBOARDING_DISMISSED_KEY = 'neutralwire:onboarding-dismissed-at'
@@ -22,26 +26,176 @@ const DONATE_PRESSED_KEY = 'neutralwire:donate-pressed'
 // First popup after 10 articles, then doubles: 20 → 40 → 80 → 160...
 const INITIAL_THRESHOLD = 10
 
+// ── Quiz article model ──
+interface QuizArticle {
+  topicId: string
+  title: string
+  summary: string
+  imageUrl: string | null
+  coverage: number
+  category: string
+  categoryLabel: string
+}
+
+// ── Categories fetched for the quiz ──
+// 2 articles each from the 7 main subtopics (world, politics, business,
+// technology, science, health, sports) = 14
+// + 2 from 'relevant' = 16
+// + 2 from 'top' (or 'mycountry' if country detected) = 18
+// + 4 more from random categories (2 categories × 2 articles, offset=2 to
+//   avoid duplicating the first 2) = 22 total
+const QUIZ_BASE_CATEGORIES = [
+  'world',
+  'politics',
+  'business',
+  'technology',
+  'science',
+  'health',
+  'sports',
+] as const
+
+const CATEGORY_LABELS: Record<string, string> = {
+  world: 'World',
+  politics: 'Politics',
+  business: 'Business',
+  technology: 'Tech',
+  science: 'Science',
+  health: 'Health',
+  sports: 'Sports',
+  top: 'Top',
+  relevant: 'Relevant',
+  mycountry: 'My Country',
+}
+
+// Sort priority for displaying articles in the quiz:
+//   world/politics first (0)
+//   business/technology next (1)
+//   science/health/sports next (2)
+//   relevant/top/mycountry last (3)
+const CATEGORY_PRIORITY: Record<string, number> = {
+  world: 0,
+  politics: 0,
+  business: 1,
+  technology: 1,
+  science: 2,
+  health: 2,
+  sports: 2,
+  top: 3,
+  relevant: 3,
+  mycountry: 3,
+}
+
+const FETCH_TIMEOUT_MS = 12_000 // per-category fetch timeout
+
+/**
+ * Read the visitor's detected (or manually-picked) country code from
+ * localStorage. Used to fetch virtual categories ('relevant', 'mycountry')
+ * with the correct country context.
+ */
+function getDetectedCountry(): string {
+  if (typeof window === 'undefined') return ''
+  try {
+    // Prefer manual override (set by the CountryPicker component)
+    const manual = localStorage.getItem('neutralwire:country-manual')
+    if (manual) {
+      const parsed = JSON.parse(manual) as { code?: string }
+      if (parsed?.code) return parsed.code
+    }
+    // Then auto-detected (set by detectCountryClient with a 24h TTL)
+    const auto = localStorage.getItem('neutralwire:country')
+    if (auto) {
+      const parsed = JSON.parse(auto) as {
+        ts?: number
+        info?: { code?: string } | null
+      }
+      if (parsed?.info?.code) return parsed.info.code
+    }
+  } catch {
+    /* ignore */
+  }
+  return ''
+}
+
+/**
+ * Fetch news for a single category with timeout + graceful failure.
+ * Returns an empty array on any error so the rest of the quiz can still load.
+ */
+async function fetchCategoryArticles(
+  category: string,
+  country: string,
+  limit: number,
+  offset: number = 0,
+): Promise<QuizArticle[]> {
+  const params = new URLSearchParams({
+    category,
+    limit: String(limit),
+    slim: '1',
+    minCoverage: '1',
+    offset: String(offset),
+  })
+  if ((category === 'relevant' || category === 'mycountry') && country) {
+    params.set('country', country)
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  try {
+    const res = await fetch(`/api/news?${params.toString()}`, {
+      signal: controller.signal,
+    })
+    if (!res.ok) return []
+    const data = (await res.json()) as { topics?: TopicArticle[] }
+    if (!data.topics) return []
+    return data.topics.map((t) => ({
+      topicId: t.topicId,
+      title: t.title,
+      summary: t.summary,
+      imageUrl: t.imageUrl,
+      coverage: t.coverage,
+      category,
+      categoryLabel: CATEGORY_LABELS[category] || category,
+    }))
+  } catch {
+    return []
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 /**
  * PWA Onboarding + Donation Trigger.
  *
- * Shows on first launch in the installed PWA:
- * 1. Interest selection popup (pick sectors → saved to localStorage + Firebase)
- * 2. Tracks how many news articles the user opens
- * 3. After 10 articles opened → donation popup (Ko-fi)
- * 4. If dismissed: next popup after 2x the threshold (20 → 40 → 80 → 160)
- * 5. If pressed (donated): next popup after 3 months
+ * Article-based personalization quiz shown on first launch in the installed
+ * PWA (standalone mode only):
  *
- * The article-open count is incremented by listening to the
- * 'neutralwire:topic-opened' custom event (dispatched by TopicDetail).
+ *  1. Fetches 22 fresh articles from multiple categories (world, politics,
+ *     business, tech, science, health, sports, relevant, top/mycountry + 4
+ *     more from random categories).
+ *  2. Step 1 — "Select all news that interests you": user taps cards to
+ *     mark liked stories. Sectors are detected from each liked article's
+ *     title/summary and added to the user's interests.
+ *  3. Step 2 — "Select news you don't want to see": user taps cards to mark
+ *     disliked stories. Each disliked article triggers a negative-engagement
+ *     bump (bumpEngagementForTopic with reason='dislike').
+ *  4. On completion: interests saved to localStorage + Firebase,
+ *     ONBOARDED_KEY set to 'true', and 'neutralwire:interests-changed'
+ *     event dispatched.
+ *
+ * Also tracks how many news articles the user opens over time and shows a
+ * donation popup (Ko-fi) after the 10th article, doubling the threshold on
+ * each dismissal (10 → 20 → 40 → 80). If the user donates, the popup is
+ * suppressed for 3 months.
  */
 export function PwaOnboarding() {
   const [showOnboarding, setShowOnboarding] = React.useState(false)
   const [showDonate, setShowDonate] = React.useState(false)
-  const [selected, setSelected] = React.useState<Set<string>>(new Set())
-  const [step, setStep] = React.useState(1) // 1 = sectors, 2 = reading habits
-  const [readingDepth, setReadingDepth] = React.useState<'brief' | 'detailed'>('brief')
-  const [readingFreq, setReadingFreq] = React.useState<'daily' | 'weekly' | 'occasional'>('daily')
+
+  // Quiz state
+  const [step, setStep] = React.useState<'loading' | 'likes' | 'dislikes'>('loading')
+  const [articles, setArticles] = React.useState<QuizArticle[]>([])
+  const [likedIds, setLikedIds] = React.useState<Set<string>>(new Set())
+  const [dislikedIds, setDislikedIds] = React.useState<Set<string>>(new Set())
+  const [fetchError, setFetchError] = React.useState<string>('')
 
   React.useEffect(() => {
     // Only in PWA (standalone mode)
@@ -53,16 +207,11 @@ export function PwaOnboarding() {
     // Check if onboarded (completed the quiz) OR recently dismissed
     const onboarded = localStorage.getItem(ONBOARDED_KEY)
     const dismissedAt = localStorage.getItem(ONBOARDING_DISMISSED_KEY)
-    const dismissedRecently = dismissedAt && (Date.now() - parseInt(dismissedAt, 10) < ONBOARDING_DISMISS_DURATION)
+    const dismissedRecently =
+      dismissedAt && Date.now() - parseInt(dismissedAt, 10) < ONBOARDING_DISMISS_DURATION
     if (!onboarded && !dismissedRecently) {
       setTimeout(() => setShowOnboarding(true), 1500)
     }
-
-    // Load saved interests
-    try {
-      const saved = localStorage.getItem('neutralwire:interests')
-      if (saved) setSelected(new Set(JSON.parse(saved)))
-    } catch { /* ignore */ }
 
     // ── Donation popup check ──
     // Triggered when the user has opened enough news articles.
@@ -107,32 +256,150 @@ export function PwaOnboarding() {
     }
   }, [])
 
-  const handleOnboardingComplete = async () => {
-    const sectorsArray = Array.from(selected)
-    localStorage.setItem(ONBOARDED_KEY, 'true')
-    setInterestsLocal(sectorsArray)
-    // Store reading preferences for future personalization
-    try {
-      localStorage.setItem('neutralwire:reading-depth', readingDepth)
-      localStorage.setItem('neutralwire:reading-freq', readingFreq)
-    } catch { /* ignore */ }
-    setShowOnboarding(false)
+  // ── Fetch quiz articles when onboarding opens ──
+  React.useEffect(() => {
+    if (!showOnboarding) return
+    if (articles.length > 0) return // already fetched
+    let cancelled = false
+    setStep('loading')
+    setFetchError('')
 
-    const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
-    if (deviceId) {
-      syncInterestsWithFirebase(deviceId, sectorsArray).catch(() => {})
+    void (async () => {
+      try {
+        const country = getDetectedCountry()
+        // 'top' is the default when no country detected; otherwise use
+        // 'mycountry' to surface local-relevant stories.
+        const topOrMyCountry = country ? 'mycountry' : 'top'
+
+        // Primary fetches: 7 base categories + 'relevant' + (top or mycountry)
+        const primaryCategories = [...QUIZ_BASE_CATEGORIES, 'relevant', topOrMyCountry]
+        const primaryResults = await Promise.all(
+          primaryCategories.map((cat) => fetchCategoryArticles(cat, country, 2, 0)),
+        )
+
+        // Random extras: 4 more articles from 2 random categories
+        // (fetched with offset=2 to avoid duplicating the first 2 articles).
+        const randomPool = [...QUIZ_BASE_CATEGORIES, 'top', 'relevant', 'mycountry']
+        const pickedRandom = new Set<string>()
+        const randomCats: string[] = []
+        let safety = 0
+        while (randomCats.length < 2 && pickedRandom.size < randomPool.length && safety < 20) {
+          safety++
+          const idx = Math.floor(Math.random() * randomPool.length)
+          const cat = randomPool[idx]
+          if (pickedRandom.has(cat)) continue
+          pickedRandom.add(cat)
+          randomCats.push(cat)
+        }
+        const randomResults = await Promise.all(
+          randomCats.map((cat) => fetchCategoryArticles(cat, country, 2, 2)),
+        )
+
+        // Combine + dedupe by topicId (same story can appear in multiple cats)
+        const all = [...primaryResults.flat(), ...randomResults.flat()]
+        const seen = new Set<string>()
+        const unique: QuizArticle[] = []
+        for (const a of all) {
+          if (!a?.topicId) continue
+          if (seen.has(a.topicId)) continue
+          seen.add(a.topicId)
+          unique.push(a)
+        }
+
+        // Sort by "most likely to interest":
+        //   world/politics first → business/tech → science/health/sports → rest
+        // Within the same priority group, sort by coverage (desc).
+        unique.sort((a, b) => {
+          const pa = CATEGORY_PRIORITY[a.category] ?? 3
+          const pb = CATEGORY_PRIORITY[b.category] ?? 3
+          if (pa !== pb) return pa - pb
+          return b.coverage - a.coverage
+        })
+
+        if (cancelled) return
+        setArticles(unique)
+        setStep('likes')
+      } catch (err) {
+        if (!cancelled) {
+          setFetchError(err instanceof Error ? err.message : String(err))
+          setStep('likes')
+          setArticles([])
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
     }
+  }, [showOnboarding, articles.length])
 
-    window.dispatchEvent(new CustomEvent('neutralwire:interests-changed'))
-  }
-
-  const toggleSector = (id: string) => {
-    setSelected((prev) => {
+  const toggleLike = (id: string) => {
+    setLikedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
+  }
+
+  const toggleDislike = (id: string) => {
+    setDislikedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const handleOnboardingComplete = async () => {
+    // Build new interests = existing ∪ detected sectors from liked articles.
+    // Existing interests are preserved so re-running the quiz doesn't wipe
+    // previous selections.
+    const likedArticles = articles.filter((a) => likedIds.has(a.topicId))
+    const dislikedArticles = articles.filter((a) => dislikedIds.has(a.topicId))
+
+    const validSectorIds = new Set<string>(SECTORS.map((s) => s.id))
+    const newInterests = new Set<string>()
+    try {
+      const saved = localStorage.getItem('neutralwire:interests')
+      if (saved) {
+        const parsed = JSON.parse(saved) as string[]
+        for (const s of parsed) newInterests.add(s)
+      }
+    } catch {
+      /* ignore */
+    }
+    for (const a of likedArticles) {
+      const sectors = detectSectors(a.title, a.summary)
+      for (const s of sectors) {
+        // Only add sectors that are part of our canonical SECTORS list
+        // (defensive — detectSectors already only returns valid IDs).
+        if (validSectorIds.has(s)) newInterests.add(s)
+      }
+    }
+
+    const sectorsArray = Array.from(newInterests)
+    localStorage.setItem(ONBOARDED_KEY, 'true')
+    setInterestsLocal(sectorsArray)
+    setShowOnboarding(false)
+
+    const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
+    if (deviceId) {
+      syncInterestsWithFirebase(deviceId, sectorsArray).catch(() => {})
+      // Record negative engagement for each disliked article.
+      // bumpEngagementForTopic detects sectors internally and bumps each
+      // by -15 (reason='dislike').
+      for (const a of dislikedArticles) {
+        bumpEngagementForTopic(deviceId, a.title, a.summary, 'dislike').catch(() => {})
+      }
+    }
+
+    window.dispatchEvent(new CustomEvent('neutralwire:interests-changed'))
+  }
+
+  const handleDismiss = () => {
+    setShowOnboarding(false)
+    localStorage.setItem(ONBOARDING_DISMISSED_KEY, String(Date.now()))
   }
 
   const handleDonatePress = () => {
@@ -146,118 +413,220 @@ export function PwaOnboarding() {
   const handleDonateDismiss = () => {
     const currentThreshold = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
     // Double the threshold: 10 → 20 → 40 → 80 → 160...
-    const newThreshold = currentThreshold === 0 ? INITIAL_THRESHOLD * 2 : currentThreshold * 2
+    const newThreshold =
+      currentThreshold === 0 ? INITIAL_THRESHOLD * 2 : currentThreshold * 2
     localStorage.setItem(DONATE_NEXT_KEY, String(newThreshold))
     localStorage.setItem(DONATE_SHOWN_KEY, String(Date.now()))
     setShowDonate(false)
   }
 
-  // ── Onboarding popup (2-step quiz) ──
+  // ── Onboarding popup (article-based quiz) ──
   if (showOnboarding) {
+    const selectedSet = step === 'likes' ? likedIds : dislikedIds
     return (
-      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-        <div className="w-full max-w-md rounded-2xl bg-background p-6 shadow-2xl">
-          {step === 1 ? (
-            <>
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-lg font-bold">Welcome to NeutralWire</h2>
-                <button onClick={() => { setShowOnboarding(false); localStorage.setItem(ONBOARDING_DISMISSED_KEY, String(Date.now())) }} className="text-muted-foreground hover:text-foreground">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-              <p className="mb-4 text-sm text-muted-foreground">
-                Pick a few topics you care about. We&apos;ll use these to personalise your news feed and notifications.
+      <div
+        className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-3 sm:p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Personalize your news feed"
+      >
+        <div className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-2xl bg-background shadow-2xl">
+          {/* Header */}
+          <div className="flex items-start justify-between gap-3 border-b border-border p-4 sm:p-6">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base font-bold sm:text-lg">
+                {step === 'likes'
+                  ? 'Select all news that interests you'
+                  : step === 'dislikes'
+                    ? "Select news you don't want to see"
+                    : 'Welcome to NeutralWire'}
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
+                {step === 'likes'
+                  ? 'Tap stories you want to see more of — we’ll personalize your feed.'
+                  : step === 'dislikes'
+                    ? 'Tap stories you’d rather not see — we’ll push them down.'
+                    : 'Fetching fresh stories for you…'}
               </p>
-              <div className="grid grid-cols-2 gap-2">
-                {SECTORS.map((sector) => (
-                  <button
-                    key={sector.id}
-                    onClick={() => toggleSector(sector.id)}
-                    className={`flex items-center gap-2 rounded-xl border p-3 text-sm font-medium transition-all ${
-                      selected.has(sector.id)
-                        ? 'border-foreground bg-foreground/5 ring-1 ring-foreground'
-                        : 'border-border hover:bg-muted'
-                    }`}
-                  >
-                    <span className="text-lg">{sector.emoji}</span>
-                    {sector.label}
-                  </button>
-                ))}
-              </div>
-              <Button
-                onClick={() => setStep(2)}
-                className="mt-4 w-full"
-                disabled={selected.size === 0}
-              >
-                {selected.size === 0 ? 'Select at least one' : `Continue with ${selected.size} ${selected.size === 1 ? 'interest' : 'interests'}`}
-              </Button>
-            </>
-          ) : (
-            <>
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-lg font-bold">Reading Preferences</h2>
-                <button onClick={() => setStep(1)} className="text-muted-foreground hover:text-foreground text-sm">
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {step === 'dislikes' && (
+                <button
+                  onClick={() => setStep('likes')}
+                  className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
                   ← Back
                 </button>
-              </div>
-
-              {/* Reading depth */}
-              <p className="mb-2 text-sm font-medium">How do you like to read the news?</p>
-              <div className="mb-4 grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => setReadingDepth('brief')}
-                  className={`rounded-xl border p-3 text-sm transition-all ${
-                    readingDepth === 'brief'
-                      ? 'border-foreground bg-foreground/5 ring-1 ring-foreground'
-                      : 'border-border hover:bg-muted'
-                  }`}
-                >
-                  <div className="font-medium">Quick scan</div>
-                  <div className="text-[11px] text-muted-foreground">Headlines + summaries</div>
-                </button>
-                <button
-                  onClick={() => setReadingDepth('detailed')}
-                  className={`rounded-xl border p-3 text-sm transition-all ${
-                    readingDepth === 'detailed'
-                      ? 'border-foreground bg-foreground/5 ring-1 ring-foreground'
-                      : 'border-border hover:bg-muted'
-                  }`}
-                >
-                  <div className="font-medium">In-depth</div>
-                  <div className="text-[11px] text-muted-foreground">Full analysis + sources</div>
-                </button>
-              </div>
-
-              {/* Reading frequency */}
-              <p className="mb-2 text-sm font-medium">How often do you check the news?</p>
-              <div className="mb-4 grid grid-cols-3 gap-2">
-                {[
-                  { id: 'daily', label: 'Daily', desc: 'Every day' },
-                  { id: 'weekly', label: 'Weekly', desc: 'A few times/week' },
-                  { id: 'occasional', label: 'Rarely', desc: 'Occasionally' },
-                ].map((opt) => (
-                  <button
-                    key={opt.id}
-                    onClick={() => setReadingFreq(opt.id as 'daily' | 'weekly' | 'occasional')}
-                    className={`rounded-xl border p-2.5 text-center text-sm transition-all ${
-                      readingFreq === opt.id
-                        ? 'border-foreground bg-foreground/5 ring-1 ring-foreground'
-                        : 'border-border hover:bg-muted'
-                    }`}
-                  >
-                    <div className="font-medium">{opt.label}</div>
-                    <div className="text-[10px] text-muted-foreground">{opt.desc}</div>
-                  </button>
-                ))}
-              </div>
-
-              <Button
-                onClick={handleOnboardingComplete}
-                className="w-full"
+              )}
+              <button
+                onClick={handleDismiss}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Dismiss onboarding"
               >
-                Done — show me my news
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Body */}
+          {step === 'loading' ? (
+            <div className="flex flex-col items-center justify-center gap-3 p-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                Fetching fresh stories for you…
+              </p>
+            </div>
+          ) : articles.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 p-12 text-center">
+              <p className="text-sm text-muted-foreground">
+                {fetchError
+                  ? 'Could not load stories. Please try again later.'
+                  : 'No stories available right now.'}
+              </p>
+              <Button onClick={handleOnboardingComplete} variant="outline" size="sm">
+                Skip for now
               </Button>
-            </>
+            </div>
+          ) : (
+            <div className="flex flex-1 flex-col overflow-hidden p-4 sm:p-6">
+              {/* Step indicator + selection count */}
+              <div className="mb-3 flex items-center justify-between text-xs text-muted-foreground">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={
+                      step === 'likes'
+                        ? 'font-semibold text-foreground'
+                        : ''
+                    }
+                  >
+                    1. Interests
+                  </span>
+                  <span aria-hidden>→</span>
+                  <span
+                    className={
+                      step === 'dislikes'
+                        ? 'font-semibold text-foreground'
+                        : ''
+                    }
+                  >
+                    2. Avoid
+                  </span>
+                </div>
+                <span className="tabular-nums">
+                  {selectedSet.size} selected
+                </span>
+              </div>
+
+              {/* Scrollable article grid */}
+              <div
+                className="quiz-scroll max-h-[70vh] -mr-1 overflow-y-auto pr-1
+                  [scrollbar-width:thin]
+                  [&::-webkit-scrollbar]:w-2
+                  [&::-webkit-scrollbar-track]:bg-transparent
+                  [&::-webkit-scrollbar-thumb]:rounded-full
+                  [&::-webkit-scrollbar-thumb]:bg-muted-foreground/30
+                  [&::-webkit-scrollbar-thumb:hover]:bg-muted-foreground/50"
+              >
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3">
+                  {articles.map((article, idx) => {
+                    const isSelected = selectedSet.has(article.topicId)
+                    return (
+                      <motion.button
+                        key={article.topicId}
+                        type="button"
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{
+                          duration: 0.25,
+                          delay: Math.min(idx * 0.025, 0.4),
+                          ease: 'easeOut',
+                        }}
+                        onClick={() =>
+                          step === 'likes'
+                            ? toggleLike(article.topicId)
+                            : toggleDislike(article.topicId)
+                        }
+                        aria-pressed={isSelected}
+                        aria-label={`${isSelected ? 'Deselect' : 'Select'}: ${article.title}`}
+                        className={`relative overflow-hidden rounded-xl border text-left transition-all ${
+                          isSelected
+                            ? 'border-foreground bg-foreground/5 ring-2 ring-foreground'
+                            : 'border-border hover:bg-muted hover:border-foreground/30'
+                        }`}
+                      >
+                        {/* Image thumbnail (or muted placeholder if none) */}
+                        {article.imageUrl ? (
+                          <div className="aspect-[16/9] w-full overflow-hidden bg-muted">
+                            <img
+                              src={`/api/img?url=${encodeURIComponent(article.imageUrl)}`}
+                              alt=""
+                              loading="lazy"
+                              className="h-full w-full object-cover"
+                              onError={(e) => {
+                                // Hide broken images — the parent placeholder bg shows through.
+                                (e.currentTarget as HTMLImageElement).style.display = 'none'
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex aspect-[16/9] w-full items-center justify-center bg-muted">
+                            <ImageIcon className="h-6 w-6 text-muted-foreground/40" />
+                          </div>
+                        )}
+
+                        {/* Content: badges + title */}
+                        <div className="p-2.5">
+                          <div className="mb-1.5 flex items-center gap-1.5">
+                            <span className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                              {article.categoryLabel}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground tabular-nums">
+                              {article.coverage} {article.coverage === 1 ? 'source' : 'sources'}
+                            </span>
+                          </div>
+                          <p className="line-clamp-3 text-xs font-medium leading-snug sm:text-sm">
+                            {article.title}
+                          </p>
+                        </div>
+
+                        {/* Selected indicator */}
+                        {isSelected && (
+                          <div
+                            className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-foreground text-background shadow-sm"
+                            aria-hidden
+                          >
+                            {step === 'likes' ? (
+                              <Check className="h-3 w-3" />
+                            ) : (
+                              <ThumbsDown className="h-3 w-3" />
+                            )}
+                          </div>
+                        )}
+                      </motion.button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Footer action */}
+              <div className="mt-3 border-t border-border pt-3">
+                {step === 'likes' ? (
+                  <Button
+                    onClick={() => setStep('dislikes')}
+                    className="w-full"
+                    // Enabled even if nothing selected — dislikes step is next.
+                  >
+                    {likedIds.size === 0
+                      ? 'Continue'
+                      : `Continue · ${likedIds.size} selected`}
+                  </Button>
+                ) : (
+                  <Button onClick={handleOnboardingComplete} className="w-full">
+                    Done — show me my news
+                  </Button>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -268,13 +637,13 @@ export function PwaOnboarding() {
   if (showDonate) {
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-        <div className="w-full max-w-sm rounded-2xl bg-background p-6 shadow-2xl text-center">
+        <div className="w-full max-w-sm rounded-2xl bg-background p-6 text-center shadow-2xl">
           <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-r from-pink-500 to-red-500">
             <Heart className="h-7 w-7 fill-white text-white" />
           </div>
           <h2 className="mb-2 text-lg font-bold">Support NeutralWire</h2>
           <p className="mb-4 text-sm text-muted-foreground">
-            NeutralWire is built by a 15-year-old working alone, for free. If it's been useful, consider buying him a coffee. Every bit helps keep the servers running.
+            NeutralWire is built by a 15-year-old working alone, for free. If it&apos;s been useful, consider buying him a coffee. Every bit helps keep the servers running.
           </p>
           <div className="flex flex-col gap-2">
             <Button
@@ -283,7 +652,11 @@ export function PwaOnboarding() {
             >
               <Heart className="mr-2 h-4 w-4 fill-white" /> Donate on Ko-fi
             </Button>
-            <Button onClick={handleDonateDismiss} variant="ghost" className="w-full text-xs text-muted-foreground">
+            <Button
+              onClick={handleDonateDismiss}
+              variant="ghost"
+              className="w-full text-xs text-muted-foreground"
+            >
               Maybe later
             </Button>
           </div>
