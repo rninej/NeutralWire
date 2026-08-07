@@ -138,6 +138,14 @@ export async function GET(req: NextRequest) {
   const t0 = Date.now()
   const secret = req.nextUrl.searchParams.get('secret') || ''
   const dryRun = req.nextUrl.searchParams.get('dry') === '1'
+  // ?forceEvening=1 — forces the evening briefing to ALL subscribed
+  // devices regardless of their local time. Used for emergency sends
+  // when a briefing was missed. Also clears the sentSlotsToday/evening
+  // flag so it can be sent again.
+  const forceEvening = req.nextUrl.searchParams.get('forceEvening') === '1'
+  // ?forceSlot=morning|lunch|evening — forces a specific slot to ALL
+  // devices, bypassing the time window check.
+  const forceSlot = req.nextUrl.searchParams.get('forceSlot') as Slot | null
 
   if (secret !== TRIGGER_TZ_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -194,7 +202,28 @@ export async function GET(req: NextRequest) {
       // Skip browser tabs (only PWA gets notifications)
       if (device.pushIsStandalone === false) { skipNotStandalone++; continue }
 
-      // ── Timezone handling ──
+      // ── Force mode: skip all checks, send to ALL eligible devices ──
+      if (forceEvening || forceSlot) {
+        const forcedSlot: Slot = forceSlot || 'evening'
+        // Use the device's timezone for the dateKey, or UTC as fallback
+        const deviceTimezone = device.timezone || 'UTC'
+        const localInfo = getLocalTime(deviceTimezone)
+        const dateKey = localInfo?.dateKey || new Date().toISOString().slice(0, 10)
+
+        // Check if already sent (but in force mode, we OVERRIDE this)
+        // Clear the flag so it can be sent again
+        toNotify.push({
+          deviceId,
+          slot: forcedSlot,
+          dateKey: dateKey + '-forced', // Use a unique dateKey so it doesn't collide with normal sends
+          subscription: device.pushSubscription,
+          interests: device.interests || [],
+          engagement: device.engagement || {},
+        })
+        continue
+      }
+
+      // ── Normal mode: check timezone + time window ──
       // Devices with OLDER PWA installs (before timezone tracking was added)
       // don't have a timezone stored. Instead of skipping them (which would
       // mean they NEVER get notifications), fall back to UTC. This ensures

@@ -958,9 +958,21 @@ export default function Home() {
 
   // --- Manual country override ---
   const handleCountryChange = React.useCallback((c: CountryInfo) => {
+    // IMMEDIATELY clear all topics so the old country's news doesn't
+    // flash on screen while the new country's news loads. This prevents
+    // the glitch where switching to India briefly shows UK news.
+    setTopics([])
+    setOlderTopics([])
+    setMyCountryTopics([])
+    setBlindspotSections({})
+    setLoading(true)
+    setError(null)
     setCountry(c)
     try {
       localStorage.setItem('neutralwire:country-manual', JSON.stringify(c))
+      // Also clear the auto-detected country cache so it doesn't
+      // override the manual selection on next page load
+      localStorage.removeItem('neutralwire:country')
     } catch {
       // ignore
     }
