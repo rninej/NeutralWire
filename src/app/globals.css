@@ -141,6 +141,7 @@
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
+/* .dark is on <html>, glass element is a descendant of <body> */
 .dark .glass-frosted {
   background: rgb(18 18 20 / 0.65);
   backdrop-filter: blur(20px) saturate(120%);
@@ -172,8 +173,9 @@
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
-.dark.platform-android .glass,
-.platform-android.dark .glass {
+/* Dark mode: .dark is on <html>, .platform-android is on <body> */
+.dark .platform-android .glass,
+.platform-android .dark .glass {
   background: rgb(18 18 20 / 0.65);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
@@ -185,8 +187,8 @@
   border: 1px solid rgb(255 255 255 / 0.12);
   box-shadow: 0 8px 32px -8px rgb(0 0 0 / 0.08);
 }
-.dark.platform-apple .glass,
-.platform-apple.dark .glass {
+.dark .platform-apple .glass,
+.platform-apple .dark .glass {
   background: rgb(22 22 26 / 0.55);
   backdrop-filter: blur(30px) saturate(150%);
   -webkit-backdrop-filter: blur(30px) saturate(150%);
