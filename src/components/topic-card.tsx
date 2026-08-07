@@ -275,7 +275,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             drag="x"
             dragDirectionLock
             dragConstraints={{ left: -300, right: 0 }}
-            dragElastic={0.6}
+            dragElastic={{ left: 0.6, right: 0 }}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             animate={dragControls}

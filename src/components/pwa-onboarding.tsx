@@ -38,12 +38,13 @@ interface QuizArticle {
 }
 
 // ── Categories fetched for the quiz ──
-// 2 articles each from the 7 main subtopics (world, politics, business,
-// technology, science, health, sports) = 14
-// + 2 from 'relevant' = 16
-// + 2 from 'top' (or 'mycountry' if country detected) = 18
-// + 4 more from random categories (2 categories × 2 articles, offset=2 to
-//   avoid duplicating the first 2) = 22 total
+// 2 articles each from ALL subtopic categories EXCEPT 'relevant':
+//   world, politics, business, technology, science, health, sports,
+//   top, mycountry (if country detected), blindspots
+// = 8-9 categories × 2 articles = 16-18
+// + extra articles from random categories to reach 22 total
+// 'relevant' is EXCLUDED because it's a mix of other categories —
+// the quiz uses the actual subtopics to customize the relevant feed.
 const QUIZ_BASE_CATEGORIES = [
   'world',
   'politics',
@@ -52,6 +53,7 @@ const QUIZ_BASE_CATEGORIES = [
   'science',
   'health',
   'sports',
+  'top',
 ] as const
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -267,23 +269,30 @@ export function PwaOnboarding() {
     void (async () => {
       try {
         const country = getDetectedCountry()
-        // 'top' is the default when no country detected; otherwise use
-        // 'mycountry' to surface local-relevant stories.
-        const topOrMyCountry = country ? 'mycountry' : 'top'
 
-        // Primary fetches: 7 base categories + 'relevant' + (top or mycountry)
-        const primaryCategories = [...QUIZ_BASE_CATEGORIES, 'relevant', topOrMyCountry]
+        // Primary fetches: all subtopic categories EXCEPT 'relevant'
+        // (relevant is a mix — the quiz uses actual subtopics to
+        // customize the relevant feed and notifications).
+        // Base: world, politics, business, tech, science, health, sports, top
+        const primaryCategories = [...QUIZ_BASE_CATEGORIES]
+        // Add mycountry if country is detected
+        if (country) {
+          primaryCategories.push('mycountry')
+        }
+        // Add blindspots
+        primaryCategories.push('blindspots')
+
         const primaryResults = await Promise.all(
           primaryCategories.map((cat) => fetchCategoryArticles(cat, country, 2, 0)),
         )
 
-        // Random extras: 4 more articles from 2 random categories
-        // (fetched with offset=2 to avoid duplicating the first 2 articles).
-        const randomPool = [...QUIZ_BASE_CATEGORIES, 'top', 'relevant', 'mycountry']
+        // Random extras: fetch more articles from random categories
+        // (with offset=2 to avoid duplicating) until we have ~22 total.
+        const randomPool = [...primaryCategories]
         const pickedRandom = new Set<string>()
         const randomCats: string[] = []
         let safety = 0
-        while (randomCats.length < 2 && pickedRandom.size < randomPool.length && safety < 20) {
+        while (randomCats.length < 3 && pickedRandom.size < randomPool.length && safety < 20) {
           safety++
           const idx = Math.floor(Math.random() * randomPool.length)
           const cat = randomPool[idx]
