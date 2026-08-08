@@ -179,17 +179,35 @@ export default function RootLayout({
             `,
           }}
         />
-        {/* ── Firebase download tracker ──
-            Polls /api/fb-stats every 5s and logs to the browser console:
-            - Session total (this browser session, accumulated across API calls)
-            - Instance total (this Vercel serverless instance)
-            - Last 5 Firebase reads with paths + sizes
-            This helps identify which API routes are consuming the most
-            Firebase download bandwidth. */}
+        {/* ── Firebase download tracker (DEV ONLY) ──
+            Polls /api/fb-stats and logs Firebase download sizes to the
+            browser console. This is a DEVELOPMENT TOOL — in production it
+            was causing ~120 serverless invocations/hour per active user
+            (every 30s polling), which:
+              - Burned Vercel Fluid Compute CPU (4h/month limit)
+              - Burned Function Invocations (104K/1M limit)
+              - Each poll was a cold function call (~50ms CPU)
+
+            Now gated behind a `?debug=fb` URL param OR
+            `localStorage.debug_fb = 1`. Default: does NOT poll at all
+            in production, saving ~120 invocations/hour per user. */}
         <script
           dangerouslySetInnerHTML={{
             __html: `
               (function() {
+                // Only run if explicitly enabled via URL param or localStorage
+                var enabled = false;
+                try {
+                  if (window.location.search.indexOf('debug=fb') !== -1) {
+                    enabled = true;
+                    try { localStorage.setItem('debug_fb', '1'); } catch (e) {}
+                  } else if (localStorage.getItem('debug_fb') === '1') {
+                    enabled = true;
+                  }
+                } catch (e) {}
+
+                if (!enabled) return;
+
                 var sessionTotal = 0;
                 var lastSessionId = null;
                 var lastInstanceBytes = 0;
@@ -205,11 +223,8 @@ export default function RootLayout({
                     .then(function(res) { return res.ok ? res.json() : null; })
                     .then(function(data) {
                       if (!data) return;
-
-                      // If the server instance changed (cold start), reset
                       if (data.sessionId !== lastSessionId) {
                         if (lastSessionId !== null) {
-                          // Log the final total of the previous instance
                           console.log(
                             '%c[Firebase] Previous instance total: ' + formatBytes(lastInstanceBytes),
                             'color: #ff6b6b; font-weight: bold;'
@@ -219,23 +234,18 @@ export default function RootLayout({
                         lastInstanceBytes = data.sessionDownloadBytes;
                         sessionTotal += data.sessionDownloadBytes;
                       } else {
-                        // Same instance — add the delta
                         var delta = data.sessionDownloadBytes - lastInstanceBytes;
                         if (delta > 0) {
                           sessionTotal += delta;
                           lastInstanceBytes = data.sessionDownloadBytes;
                         }
                       }
-
-                      // Log the current state
                       console.log(
                         '%c[Firebase] Session: ' + formatBytes(sessionTotal) +
                         ' | Instance: ' + formatBytes(data.sessionDownloadBytes) +
                         ' (' + data.sessionOps + ' ops)',
                         'color: #4ecdc4; font-weight: bold;'
                       );
-
-                      // Log recent ops if there are new ones
                       if (data.recentOps && data.recentOps.length > 0) {
                         var recent = data.recentOps.slice(-5);
                         var newOps = recent.filter(function(op) {
@@ -259,16 +269,12 @@ export default function RootLayout({
                     .catch(function() {});
                 }
 
-                // Initial log
                 console.log(
-                  '%c[Firebase Tracker] Monitoring Firebase downloads. Polling every 30s.',
+                  '%c[Firebase Tracker] DEBUG mode active. Polling every 60s. Add ?debug=fb to enable.',
                   'color: #c44569; font-weight: bold; font-size: 14px;'
                 );
-
-                // Poll every 30 seconds (was 5s — was causing excessive
-                // serverless invocations that each count as a Firebase read)
-                setInterval(poll, 30000);
-                // Also poll immediately
+                // Poll every 60 seconds (was 30s — halved to reduce invocations)
+                setInterval(poll, 60000);
                 setTimeout(poll, 3000);
               })();
             `,

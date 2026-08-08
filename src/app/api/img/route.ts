@@ -3,11 +3,22 @@ import { NextRequest, NextResponse } from 'next/server'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+// Images are immutable — cache at the CDN for 7 days so repeat image
+// loads (same URL) don't hit the function at all. The SW also caches
+// images client-side, but the CDN cache helps the FIRST load from a
+// new device and shared images across users.
+export const maxDuration = 10
 
 // In-process cache for image blobs (keyed by URL hash).
 // Images don't change, so cache for 1 hour.
 const IMG_CACHE = new Map<string, { ts: number; blob: Buffer; contentType: string }>()
 const IMG_TTL_MS = 60 * 60 * 1000
+
+// CDN cache header for image responses. 7 days at the edge means
+// repeat requests for the same image URL (across ALL users) are served
+// from the Vercel CDN without running this function — huge CPU savings
+// since image proxying was one of the most-invoked endpoints.
+const IMG_CDN_CACHE = 'public, s-maxage=604800, stale-while-revalidate=86400'
 
 /**
  * Image proxy: fetches an image URL server-side and returns it.
@@ -15,6 +26,11 @@ const IMG_TTL_MS = 60 * 60 * 1000
  * from loading images directly from news sites.
  *
  * Usage: /api/img?url=<image-url>
+ *
+ * CDN caching: images are immutable (same URL = same image forever),
+ * so we cache at the CDN for 7 days. This is the single biggest CPU
+ * saver — without it, every page load was proxying 10-30 images
+ * through this function (each ~50ms CPU = 500-1500ms CPU per page).
  */
 export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get('url')
@@ -27,13 +43,13 @@ export async function GET(req: NextRequest) {
     return new NextResponse('Invalid URL', { status: 400 })
   }
 
-  // Check cache
+  // Check in-process cache (warm instance)
   const cached = IMG_CACHE.get(url)
   if (cached && Date.now() - cached.ts < IMG_TTL_MS) {
     return new NextResponse(cached.blob, {
       headers: {
         'Content-Type': cached.contentType,
-        'Cache-Control': 'public, max-age=3600',
+        'Cache-Control': IMG_CDN_CACHE,
       },
     })
   }
@@ -70,7 +86,7 @@ export async function GET(req: NextRequest) {
     return new NextResponse(blob, {
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=3600',
+        'Cache-Control': IMG_CDN_CACHE,
       },
     })
   } catch {

@@ -353,6 +353,16 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             <span className="text-[10px] text-muted-foreground whitespace-nowrap">
               {mounted ? formatTime(topic.latestSeen) : ''}
             </span>
+            {/* View sources button — on the RIGHT of the date/time, matching
+                the hero/default card layout. ml-auto pushes it to the far
+                right edge of the row. */}
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setShowSources(true) }}
+              className="ml-auto text-[10px] font-medium text-foreground/70 underline-offset-2 hover:underline shrink-0"
+            >
+              View sources
+            </button>
           </div>
           <h3 className="font-bold text-sm leading-tight line-clamp-3">
             {topic.title}
@@ -361,14 +371,6 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
           <div className="mt-auto pt-1">
             <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
           </div>
-          {/* View sources button */}
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowSources(true) }}
-            className="text-[10px] font-medium text-foreground/70 underline-offset-2 hover:underline mt-0.5 self-start"
-          >
-            View sources
-          </button>
         </div>
       </Card>,
       )
@@ -395,7 +397,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             alt=""
             loading={variant === 'featured' || isHero ? 'eager' : 'lazy'}
             // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
-            fetchpriority={variant === 'featured' || isHero ? 'high' : 'low'}
+            fetchPriority={variant === 'featured' || isHero ? 'high' : 'low'}
             className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
@@ -462,7 +464,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             alt=""
             loading={variant === 'featured' ? 'eager' : 'lazy'}
             // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
-            fetchpriority={variant === 'featured' ? 'high' : 'low'}
+            fetchPriority={variant === 'featured' ? 'high' : 'low'}
             className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
@@ -533,6 +535,11 @@ function SourcesPopup({ topic, onClose }: { topic: TopicArticle; onClose: () => 
       return
     }
     // Otherwise fetch the full topic from /api/topic/[id]
+    // The server now does a smart sequential scan of archive + 10 most-
+    // likely categories (was 21), so this single call is enough.
+    // We removed the old client-side fallback that fetched up to 8
+    // categories (each 50-200KB) + re-fetched with articles — that was
+    // causing 1-6MB of unnecessary downloads per "View sources" click.
     let cancelled = false
     ;(async () => {
       try {
@@ -544,40 +551,13 @@ function SourcesPopup({ topic, onClose }: { topic: TopicArticle; onClose: () => 
             return
           }
         }
-        // Fallback: try fetching from the news API directly
-        // (the topic might still be in the live cache even if not in
-        // the archive or /api/topic lookup)
-        const newsCats = ['top', 'world', 'politics', 'business', 'technology', 'science', 'health', 'sports']
-        for (const cat of newsCats) {
-          try {
-            const newsRes = await fetch(`/api/news?category=${cat}&limit=20&slim=1`, { cache: 'no-store' })
-            if (newsRes.ok) {
-              const newsData = await newsRes.json()
-              const found = (newsData.topics || []).find((t: TopicArticle) => t.topicId === topic.topicId)
-              if (found && !cancelled) {
-                // Re-fetch with slim=0 to get articles
-                const fullRes = await fetch(`/api/news?category=${cat}&limit=20`, { cache: 'no-store' })
-                if (fullRes.ok) {
-                  const fullData = await fullRes.json()
-                  const fullTopic = (fullData.topics || []).find((t: TopicArticle) => t.topicId === topic.topicId)
-                  if (fullTopic && !cancelled) {
-                    setFullTopic(fullTopic)
-                    return
-                  }
-                }
-                // Fallback: use the slim version (no articles but at least the topic data)
-                if (!cancelled) {
-                  setFullTopic(found)
-                  return
-                }
-              }
-            }
-          } catch {
-            // continue to next category
-          }
+        // If the server couldn't find it, just use the slim topic data
+        // (no articles). The popup will show "No sources available."
+        if (!cancelled) {
+          setFullTopic(topic)
         }
       } catch {
-        // silent
+        // silent — popup will show "No sources available"
       } finally {
         if (!cancelled) setLoading(false)
       }

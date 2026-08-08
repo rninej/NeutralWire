@@ -21,10 +21,9 @@ import {
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-// Cap CPU time. Most requests are cache hits (<100ms). A cold aggregate
-// (RSS/GDELT) can take 5-15s. 25s is a safe ceiling that prevents a
-// runaway request from burning Vercel Fluid Compute CPU.
-export const maxDuration = 25
+// Cap CPU time. Cache hits are <100ms. A cold aggregate (RSS/GDELT)
+// takes 5-15s. 20s is a safe ceiling (was 25s — reduced to save CPU).
+export const maxDuration = 20
 
 /**
  * Cache-first news endpoint.

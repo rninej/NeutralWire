@@ -1,20 +1,44 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
-
-// v17: removed branded loading splash (user request), kept minimal offline
-//      page only. /api/summary + /api/topic SWR caching retained.
-// v16: branded loading screen, /api/summary SWR, /api/topic SWR.
+//
+// v19: CACHE EVICTION — prevents the SW cache from growing unbounded
+//      (was hitting 30-99MB on mobile). Caps at MAX_CACHE_ENTRIES with
+//      LRU eviction + a 12h max-age sweep on activate. Splits API cache
+//      into a separate cache so it can be evicted independently of the
+//      app shell. /api/img moved to its own cache with a tighter cap
+//      (images are the biggest contributor to cache bloat).
+// v18: minimal offline page only. /api/summary + /api/topic SWR caching.
+// v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-// v12: SWR. v11: fire-and-forget tracking. v10: fixed notificationclick.
-const CACHE_NAME = 'neutralwire-v18'
+const SHELL_CACHE = 'neutralwire-shell-v19'
+const API_CACHE = 'neutralwire-api-v19'
+const IMG_CACHE = 'neutralwire-img-v19'
+// Legacy cache names to purge on activate (v18 and older).
+const LEGACY_CACHES = [
+  'neutralwire-v18', 'neutralwire-v17', 'neutralwire-v16',
+  'neutralwire-v15', 'neutralwire-v14',
+]
 const STATIC_ASSETS = ['/manifest.json', '/favicon-32.png', '/icon-192.png', '/icon-512.png', '/']
+
+// ── Cache eviction limits ──
+// The API cache holds /api/news, /api/topic, /api/summary responses.
+// Each can be 50-200KB. Without eviction this grew to 30-99MB on mobile.
+// Cap at 60 entries (~6-12MB worst case) with LRU eviction.
+const MAX_API_ENTRIES = 60
+// Images are the biggest bloat contributor. Cap at 80 (~8-15MB).
+// Images are immutable so we can be more aggressive with eviction —
+// the SW cache-first will just re-fetch if evicted.
+const MAX_IMG_ENTRIES = 80
+// Max age: entries older than 12h are considered stale and evicted
+// during the activate sweep.
+const MAX_AGE_MS = 12 * 60 * 60 * 1000
 
 // ---------- Install ----------
 // Pre-cache the app shell so the FIRST load is instant when online, and
 // the PWA works offline immediately after install.
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) =>
+    caches.open(SHELL_CACHE).then((cache) =>
       // addAll is atomic — if any fetch fails, none are cached. We use
       // individual puts with catch so a single failed asset doesn't
       // break the whole install.
@@ -30,17 +54,104 @@ self.addEventListener('install', (event) => {
   self.skipWaiting()
 })
 
-// ---------- Activate ----------
+// ---------- Activate: purge legacy caches + sweep stale entries ----------
+// On activate we:
+//   1. Delete ALL legacy caches (v18 and older) — forces a clean start
+//      with the new eviction logic.
+//   2. Sweep the API + IMG caches for entries older than MAX_AGE_MS.
+//   3. If still over MAX_*_ENTRIES, evict the oldest until under the cap.
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((names) =>
-      Promise.all(
-        names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)),
-      ),
-    ),
+    (async () => {
+      const names = await caches.keys()
+      // Delete legacy caches + old shell/api/img caches from previous versions
+      await Promise.all(
+        names
+          .filter((n) => LEGACY_CACHES.includes(n) || n.endsWith('-v18') || n.endsWith('-v17'))
+          .map((n) => caches.delete(n)),
+      )
+      // Sweep stale entries from the current caches
+      await sweepCache(API_CACHE, MAX_API_ENTRIES)
+      await sweepCache(IMG_CACHE, MAX_IMG_ENTRIES)
+    })(),
   )
   self.clients.claim()
 })
+
+/**
+ * Evict stale + excess entries from a cache.
+ * - Entries older than MAX_AGE_MS are deleted.
+ * - If the cache still has more than maxEntries, the oldest are evicted
+ *   (LRU by the cache's internal insertion order, which Response objects
+ *   don't directly expose — we approximate by the Date header if present,
+ *   otherwise by the order keys() returns them).
+ */
+async function sweepCache(cacheName, maxEntries) {
+  try {
+    const cache = await caches.open(cacheName)
+    const keys = await cache.keys()
+    if (keys.length === 0) return
+    const now = Date.now()
+    const toDelete = []
+    // First pass: delete entries older than MAX_AGE_MS (using the Date
+    // response header if available; otherwise keep — we can't tell age).
+    for (const req of keys) {
+      try {
+        const res = await cache.match(req)
+        if (!res) continue
+        const dateHeader = res.headers.get('date')
+        if (dateHeader) {
+          const entryTime = new Date(dateHeader).getTime()
+          if (now - entryTime > MAX_AGE_MS) {
+            toDelete.push(req)
+          }
+        }
+      } catch {
+        // can't read this entry — evict it (corrupt)
+        toDelete.push(req)
+      }
+    }
+    // Second pass: if still over the cap, evict oldest (first entries).
+    // keys() returns entries in insertion order (oldest first), so we
+    // evict from the front until under the cap.
+    const remaining = keys.length - toDelete.length
+    if (remaining > maxEntries) {
+      const excess = remaining - maxEntries
+      const notYetDeleted = keys.filter((k) => !toDelete.includes(k))
+      for (let i = 0; i < excess && i < notYetDeleted.length; i++) {
+        toDelete.push(notYetDeleted[i])
+      }
+    }
+    await Promise.all(toDelete.map((req) => cache.delete(req)))
+    if (toDelete.length > 0) {
+      console.log(`[SW] evicted ${toDelete.length} entries from ${cacheName} (was ${keys.length})`)
+    }
+  } catch (err) {
+    console.warn('[SW] sweep failed:', err)
+  }
+}
+
+/**
+ * Put a response into a cache AND enforce the max-entries cap.
+ * After putting, if the cache exceeds maxEntries, evict the oldest entries.
+ * This runs fire-and-forget (not awaited) so it doesn't block the response.
+ */
+async function putWithEviction(cacheName, request, response, maxEntries) {
+  try {
+    const cache = await caches.open(cacheName)
+    await cache.put(request, response)
+    // Check count and evict if over the cap
+    const keys = await cache.keys()
+    if (keys.length > maxEntries) {
+      const excess = keys.length - maxEntries
+      // Evict the oldest (first N entries)
+      const toEvict = keys.slice(0, excess)
+      await Promise.all(toEvict.map((req) => cache.delete(req)))
+    }
+  } catch (err) {
+    console.warn('[SW] putWithEviction failed:', err)
+  }
+}
 
 // ---------- Minimal offline page (inline HTML) ----------
 // Shown only when: offline AND no cached HTML at all. Just a simple
@@ -73,8 +184,7 @@ self.addEventListener('fetch', (event) => {
       (async () => {
         try {
           const networkRes = await fetch(req, { cache: 'no-store' })
-          const cache = await caches.open(CACHE_NAME)
-          cache.put(req, networkRes.clone())
+          putWithEviction(SHELL_CACHE, req, networkRes.clone(), 5)
           return networkRes
         } catch {
           // Network failed (offline) — fall back to cached HTML
@@ -99,8 +209,7 @@ self.addEventListener('fetch', (event) => {
         if (cached) return cached
         return fetch(req).then((res) => {
           if (res.ok) {
-            const clone = res.clone()
-            caches.open(CACHE_NAME).then((cache) => cache.put(req, clone))
+            putWithEviction(SHELL_CACHE, req, res.clone(), 20)
           }
           return res
         })
@@ -116,13 +225,14 @@ self.addEventListener('fetch', (event) => {
   if (req.url.includes('/api/news')) {
     event.respondWith(
       (async () => {
-        const cache = await caches.open(CACHE_NAME)
+        const cache = await caches.open(API_CACHE)
         const cached = await cache.match(req)
 
         // Kick off a background fetch to update the cache (revalidate).
+        // Uses putWithEviction so the API cache stays under MAX_API_ENTRIES.
         const networkFetch = fetch(req, { cache: 'no-store' })
           .then((res) => {
-            if (res.ok) cache.put(req, res.clone())
+            if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
             return res
           })
           .catch(() => null)
@@ -156,12 +266,12 @@ self.addEventListener('fetch', (event) => {
   if (req.url.includes('/api/summary')) {
     event.respondWith(
       (async () => {
-        const cache = await caches.open(CACHE_NAME)
+        const cache = await caches.open(API_CACHE)
         const cached = await cache.match(req)
 
         const networkFetch = fetch(req, { cache: 'no-store' })
           .then((res) => {
-            if (res.ok) cache.put(req, res.clone())
+            if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
             return res
           })
           .catch(() => null)
@@ -194,13 +304,13 @@ self.addEventListener('fetch', (event) => {
   if (req.url.match(/\/api\/topic\//)) {
     event.respondWith(
       (async () => {
-        const cache = await caches.open(CACHE_NAME)
+        const cache = await caches.open(API_CACHE)
         const cached = await cache.match(req)
 
         // Kick off a background fetch to update the cache.
         const networkFetch = fetch(req, { cache: 'no-store' })
           .then((res) => {
-            if (res.ok) cache.put(req, res.clone())
+            if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
             return res
           })
           .catch(() => null)
@@ -228,15 +338,18 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // ── /api/img → cache-first (images don't change) ──
+  // ── /api/img → cache-first with EVICTION (images don't change) ──
+  // Images are the biggest cache bloat contributor (hundreds of unique
+  // URLs, each 30-200KB). Cache-first with putWithEviction keeps the
+  // IMG_CACHE under MAX_IMG_ENTRIES. If evicted, the next request just
+  // re-fetches from the network (transparent to the user).
   if (req.url.includes('/api/img')) {
     event.respondWith(
       caches.match(req).then((cached) => {
         if (cached) return cached
         return fetch(req).then((res) => {
           if (res.ok) {
-            const clone = res.clone()
-            caches.open(CACHE_NAME).then((cache) => cache.put(req, clone))
+            putWithEviction(IMG_CACHE, req, res.clone(), MAX_IMG_ENTRIES)
           }
           return res
         }).catch(() => {

@@ -770,8 +770,8 @@ export default function Home() {
     // This ensures even first-time visitors get their timezone stored in
     // Firebase right away, so the notification cron can send them briefings
     // at the correct local time. Without this, the timezone is only sent
-    // during the 2-minute session ping — which means a user who opens the
-    // app and closes it within 2 minutes never gets their timezone stored.
+    // during the session ping — which means a user who opens the app and
+    // closes it within 5 minutes never gets their timezone stored.
     const userTimezone = typeof Intl !== 'undefined'
       ? Intl.DateTimeFormat().resolvedOptions().timeZone || ''
       : ''
@@ -783,21 +783,63 @@ export default function Home() {
       }).catch(() => {})
     }
 
-    // Track session activity every 2 MINUTES (was 15 seconds — was causing
-    // excessive Firebase reads/writes. 2 minutes is enough for streak tracking).
+    // ── Track session activity every 5 MINUTES (was 2 min) ──
+    // The streak only needs 15s/day to qualify, so 5 min is plenty.
     // Also sends the user's IANA timezone so notifications can be scheduled
-    // at the correct local time (morning/lunch/evening per timezone).
-    let sessionInterval: ReturnType<typeof setInterval>
-    const startSessionTracking = () => {
-      sessionInterval = setInterval(() => {
-        fetch('/api/session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deviceId, seconds: 120, referralCode: refCode, tz: userTimezone }),
-        }).catch(() => {})
-      }, 120000) // 2 minutes (was 15000 = 15 seconds)
+    // at the correct local time.
+    //
+    // ── VISIBILITY-AWARE: only pings when the tab is VISIBLE ──
+    // When the user switches tabs or minimizes the browser, we STOP
+    // pinging. This prevents wasted Function Invocations + Firebase
+    // writes when the user isn't actually looking at the page.
+    // A hidden tab sending 30 pings/hour = 720/day of pure waste.
+    //
+    // CPU impact: 5min interval = 12 pings/hour (was 30/hour at 2min).
+    // Each ping = 2 Firebase reads + 2 patches = ~300ms CPU.
+    // Saving: 18 pings/hour × 300ms = 5.4s CPU/hour per active user.
+    // Over a month = ~40 minutes CPU per user saved.
+    let sessionInterval: ReturnType<typeof setInterval> | null = null
+    const SESSION_PING_MS = 5 * 60 * 1000 // 5 minutes
+    const SESSION_SECONDS = 300 // 5 min of accumulated time per ping
+
+    const pingSession = () => {
+      // Don't ping if the tab is hidden — the user isn't actively reading
+      if (document.hidden) return
+      fetch('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, seconds: SESSION_SECONDS, referralCode: refCode, tz: userTimezone }),
+      }).catch(() => {})
     }
-    startSessionTracking()
+
+    const startSessionTracking = () => {
+      if (sessionInterval) return
+      sessionInterval = setInterval(pingSession, SESSION_PING_MS)
+    }
+    const stopSessionTracking = () => {
+      if (sessionInterval) {
+        clearInterval(sessionInterval)
+        sessionInterval = null
+      }
+    }
+
+    // Start tracking only when the tab is visible; pause when hidden.
+    if (document.hidden) {
+      // Tab started hidden — wait until it's visible to start
+    } else {
+      startSessionTracking()
+    }
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopSessionTracking()
+      } else {
+        // Tab became visible — ping immediately (catches the "just came back"
+        // moment) then resume the interval.
+        pingSession()
+        startSessionTracking()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     // Detect PWA install and report it.
     const isStandalone =
@@ -915,7 +957,8 @@ export default function Home() {
     }
 
     return () => {
-      clearInterval(sessionInterval)
+      stopSessionTracking()
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('appinstalled', installedHandler)
     }
   }, [])
