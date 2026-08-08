@@ -537,10 +537,44 @@ function SourcesPopup({ topic, onClose }: { topic: TopicArticle; onClose: () => 
     ;(async () => {
       try {
         const res = await fetch(`/api/topic/${encodeURIComponent(topic.topicId)}`, { cache: 'no-store' })
-        if (!res.ok) throw new Error('Failed')
-        const data = await res.json()
-        if (!cancelled && data.topic) {
-          setFullTopic(data.topic as TopicArticle)
+        if (res.ok) {
+          const data = await res.json()
+          if (!cancelled && data.topic) {
+            setFullTopic(data.topic as TopicArticle)
+            return
+          }
+        }
+        // Fallback: try fetching from the news API directly
+        // (the topic might still be in the live cache even if not in
+        // the archive or /api/topic lookup)
+        const newsCats = ['top', 'world', 'politics', 'business', 'technology', 'science', 'health', 'sports']
+        for (const cat of newsCats) {
+          try {
+            const newsRes = await fetch(`/api/news?category=${cat}&limit=20&slim=1`, { cache: 'no-store' })
+            if (newsRes.ok) {
+              const newsData = await newsRes.json()
+              const found = (newsData.topics || []).find((t: TopicArticle) => t.topicId === topic.topicId)
+              if (found && !cancelled) {
+                // Re-fetch with slim=0 to get articles
+                const fullRes = await fetch(`/api/news?category=${cat}&limit=20`, { cache: 'no-store' })
+                if (fullRes.ok) {
+                  const fullData = await fullRes.json()
+                  const fullTopic = (fullData.topics || []).find((t: TopicArticle) => t.topicId === topic.topicId)
+                  if (fullTopic && !cancelled) {
+                    setFullTopic(fullTopic)
+                    return
+                  }
+                }
+                // Fallback: use the slim version (no articles but at least the topic data)
+                if (!cancelled) {
+                  setFullTopic(found)
+                  return
+                }
+              }
+            }
+          } catch {
+            // continue to next category
+          }
         }
       } catch {
         // silent

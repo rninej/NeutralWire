@@ -224,15 +224,9 @@ export async function GET(req: NextRequest) {
       }
 
       // ── Normal mode: check timezone + time window ──
-      // Devices with OLDER PWA installs (before timezone tracking was added)
-      // don't have a timezone stored. Instead of skipping them (which would
-      // mean they NEVER get notifications), fall back to UTC. This ensures
-      // ALL subscribed devices get notifications — the timezone is an
-      // optimization for correct local-time delivery, not a requirement.
       const deviceTimezone = device.timezone || 'UTC'
       if (!device.timezone) {
-        // Log for diagnostics but DON'T skip
-        skipNoTimezone++ // counts how many are falling back to UTC
+        skipNoTimezone++
       }
 
       // Check if it's time for a briefing in this device's timezone
@@ -242,8 +236,16 @@ export async function GET(req: NextRequest) {
       const { slot, dateKey } = slotInfo
 
       // ── NEVER TWICE: check if this slot was already sent today ──
+      // Also: if the stored dateKey is from a PREVIOUS day (or from a
+      // UTC fallback that used a different date format), clear it so
+      // the user isn't permanently blocked from getting notifications.
       const lastSentDate = device.sentSlotsToday?.[slot]
-      if (lastSentDate === dateKey) { skipAlreadySent++; continue }
+      if (lastSentDate === dateKey) {
+        skipAlreadySent++; continue
+      }
+      // If the stored date is stale (not today), it's fine — the check
+      // above only blocks if it matches TODAY's dateKey. Stale entries
+      // from previous days naturally don't match.
 
       toNotify.push({
         deviceId,

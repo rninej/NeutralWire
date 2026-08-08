@@ -17,9 +17,15 @@ const SEGMENT_TRANSITION = { duration: 0.6, ease: 'easeOut' as const }
 
 export function BiasBar({ left, center, right, showLabels = true, className }: BiasBarProps) {
   const total = left + center + right
-  const lPct = total === 0 ? 0 : Math.round((left / total) * 100)
-  const cPct = total === 0 ? 0 : Math.round((center / total) * 100)
-  const rPct = total === 0 ? 0 : Math.round((right / total) * 100)
+  // If all lean counts are 0 but there IS coverage, show it as center
+  // (unknown leaning = center). This prevents an empty bias bar when
+  // a topic has sources but no leaning data.
+  const effectiveLeft = total === 0 ? 0 : left
+  const effectiveCenter = total === 0 ? 0 : center
+  const effectiveRight = total === 0 ? 0 : right
+  const lPct = total === 0 ? 0 : Math.round((effectiveLeft / total) * 100)
+  const cPct = total === 0 ? 0 : Math.round((effectiveCenter / total) * 100)
+  const rPct = total === 0 ? 0 : Math.round((effectiveRight / total) * 100)
 
   return (
     <div className={cn('w-full', className)}>

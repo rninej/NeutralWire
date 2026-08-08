@@ -63,10 +63,14 @@ export async function GET(
     // 2. Check the live news cache — but read each category SEPARATELY
     // instead of reading the entire newsCache node at once (which downloads
     // all categories = huge Firebase download). We check the most common
-    // categories first.
+    // categories first, including multiple mycountry codes.
     const cacheCategories = [
-      'relevant', 'mycountry__GB', 'top', 'world', 'politics',
+      'relevant', 'top', 'world', 'politics',
       'business', 'technology', 'science', 'health', 'sports',
+      'mycountry__GB', 'mycountry__US', 'mycountry__IN', 'mycountry__HK',
+      'mycountry__AU', 'mycountry__CA', 'mycountry__IE', 'mycountry__NZ',
+      'relevant__GB', 'relevant__US', 'relevant__IN', 'relevant__HK',
+      'blindspots',
     ]
     for (const catKey of cacheCategories) {
       const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${catKey}`)
