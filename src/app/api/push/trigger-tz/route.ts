@@ -9,9 +9,7 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const maxDuration = 55
 
-// VAPID setup is deferred to inside the handler (not at module load) so
-// the route doesn't crash when VAPID_PRIVATE_KEY isn't set (dev env).
-// Production has it set as an env var.
+// VAPID setup deferred to handler (not module load) to avoid crashes in dev.
 let vapidConfigured = false
 function ensureVapid() {
   if (vapidConfigured) return
@@ -24,47 +22,9 @@ function ensureVapid() {
 const PRODUCTION_ORIGIN =
   process.env.NEXT_PUBLIC_SITE_URL || 'https://neutralwire.org'
 
-// Hardcoded secret (same approach as the cron refresh endpoint).
 const TRIGGER_TZ_SECRET = 'nw-tz-trigger-9f3a7c2e1b8d4f6a'
 
-/**
- * TIMEZONE-AWARE NOTIFICATION TRIGGER
- *
- * Called by cron-job.org every 30 minutes. For EACH subscribed device,
- * checks the device's local time and sends the appropriate briefing:
- *
- *   - Morning briefing:  7:00–8:30 AM local time
- *   - Lunch briefing:   12:00–1:30 PM local time
- *   - Evening briefing:  7:00–8:30 PM local time
- *
- * If a device's local time falls in one of these windows AND they haven't
- * already received that slot TODAY (in their local timezone), send the
- * notification. Otherwise skip.
- *
- * This means:
- *   - A user in India (UTC+5:30) gets their morning briefing at 7-8:30 AM IST
- *   - A user in the UK (UTC+0/1) gets theirs at 7-8:30 AM GMT/BST
- *   - A user in the US (UTC-5 to -8) gets theirs at 7-8:30 AM their local time
- *
- * The endpoint returns 200 immediately and runs the per-device dispatch in
- * the background (via after()). This keeps cron-job.org's 30s timeout happy.
- *
- * ── DRY RUN MODE ──
- *   ?dry=1 — runs the full logic (computes who would get notified) but
- *   does NOT send any pushes or record anything. Use this for testing.
- *
- * Usage:
- *   GET /api/push/trigger-tz?secret=nw-tz-trigger-9f3a7c2e1b8d4f6a
- *   GET /api/push/trigger-tz?secret=nw-tz-trigger-9f3a7c2e1b8d4f6a&dry=1
- */
-
-// ── Time windows for each slot (in LOCAL hour:minute) ──
-// Each window is 2 hours wide so a 30-min cron catches every user
-// even if their timezone is slightly off or they're traveling.
-// Windows are centered on typical briefing times:
-//   Morning:  6:30–8:30 AM (people wake up, check phone)
-//   Lunch:   11:30–1:30 PM (lunch break)
-//   Evening:  6:30–8:30 PM (after dinner, wind down)
+// ── Briefing windows (LOCAL time, 2h wide for 30-min cron) ──
 const SLOT_WINDOWS = {
   morning: { startHour: 6, startMinute: 30, endHour: 8, endMinute: 30 },
   lunch: { startHour: 11, startMinute: 30, endHour: 13, endMinute: 30 },
@@ -73,56 +33,38 @@ const SLOT_WINDOWS = {
 
 type Slot = keyof typeof SLOT_WINDOWS
 
-/**
- * Get the user's current local hour and minute in their timezone.
- * Returns null if the timezone is invalid or unknown.
- */
+// Max age for global sent-history entries (14 days). Entries older than
+// this are pruned so the history doesn't grow forever and block all
+// future stories.
+const HISTORY_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
+
 function getLocalTime(timezone: string): { hour: number; minute: number; dateKey: string } | null {
   if (!timezone) return null
   try {
     const now = new Date()
-    // Format: "2026-08-05T07:30:00" in the user's timezone
     const formatter = new Intl.DateTimeFormat('en-CA', {
       timeZone: timezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
     })
     const parts = formatter.formatToParts(now)
     const get = (type: string) => parts.find((p) => p.type === type)?.value || ''
-    const year = get('year')
-    const month = get('month')
-    const day = get('day')
     const hour = parseInt(get('hour'), 10)
     const minute = parseInt(get('minute'), 10)
     if (isNaN(hour) || isNaN(minute)) return null
-    // dateKey = YYYY-MM-DD in the user's local timezone
-    const dateKey = `${year}-${month}-${day}`
-    return { hour, minute, dateKey }
+    return { hour, minute, dateKey: `${get('year')}-${get('month')}-${get('day')}` }
   } catch {
-    // Invalid timezone
     return null
   }
 }
 
-/**
- * Check if the current local time falls within a slot's window.
- */
 function isInSlotWindow(hour: number, minute: number, slot: Slot): boolean {
   const win = SLOT_WINDOWS[slot]
   const currentMin = hour * 60 + minute
-  const startMin = win.startHour * 60 + win.startMinute
-  const endMin = win.endHour * 60 + win.endMinute
-  return currentMin >= startMin && currentMin <= endMin
+  return currentMin >= win.startHour * 60 + win.startMinute &&
+         currentMin <= win.endHour * 60 + win.endMinute
 }
 
-/**
- * Determine which slot (if any) a device should receive right now,
- * based on their local time.
- */
 function getSlotForLocalTime(timezone: string): { slot: Slot; dateKey: string } | null {
   const local = getLocalTime(timezone)
   if (!local) return null
@@ -134,51 +76,84 @@ function getSlotForLocalTime(timezone: string): { slot: Slot; dateKey: string } 
   return null
 }
 
+// ── Sector keywords for per-device story personalization ──
+const SECTOR_KEYWORDS: Record<string, string[]> = {
+  politics: ['trump', 'biden', 'starmer', 'parliament', 'congress', 'senate', 'election', 'labour', 'conservative', 'government', 'minister', 'president', 'policy', 'cabinet', 'downing street', 'white house', 'supreme court', 'lawmaker', 'legislation'],
+  world: ['ukraine', 'russia', 'putin', 'china', 'israel', 'gaza', 'hamas', 'iran', 'middle east', 'europe', 'nato', 'united nations', 'refugee', 'ceasefire', 'nuclear', 'war', 'conflict'],
+  business: ['stock', 'market', 'economy', 'inflation', 'interest rate', 'federal reserve', 'gdp', 'recession', 'tariff', 'trade war', 'merger', 'earnings', 'ipo', 'oil price', 'wall street', 'banking', 'finance'],
+  technology: ['ai ', 'artificial intelligence', 'openai', 'google', 'apple', 'microsoft', 'meta ', 'facebook', 'amazon', 'tesla', 'nvidia', 'chip', 'tiktok', 'elon musk', 'iphone', 'android', 'startup', 'crypto', 'bitcoin', 'cyber', 'hack'],
+  science: ['nasa', 'spacex', 'rocket', 'mars', 'moon', 'space', 'astronaut', 'telescope', 'physics', 'chemistry', 'biology', 'genome', 'dna', 'researchers', 'scientists', 'discovery', 'breakthrough', 'climate', 'carbon', 'earthquake'],
+  health: ['covid', 'pandemic', 'vaccine', 'hospital', 'nhs', 'fda', 'medicine', 'drug', 'pharma', 'cancer', 'disease', 'outbreak', 'virus', 'flu', 'mental health', 'diabetes', 'heart', 'stroke'],
+  sports: ['premier league', 'champions league', 'world cup', 'nba', 'nfl', 'arsenal', 'chelsea', 'liverpool', 'cricket', 'rugby', 'golf', 'f1', 'boxing', 'ufc', 'olympics', 'football', 'tennis'],
+}
+
+function detectSectors(title: string): string[] {
+  const text = title.toLowerCase()
+  const matched = new Set<string>()
+  for (const [sector, keywords] of Object.entries(SECTOR_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (text.includes(kw)) { matched.add(sector); break }
+    }
+  }
+  return Array.from(matched)
+}
+
+/**
+ * Score a story for a specific device based on their interests + engagement.
+ * Higher score = more relevant to this user.
+ */
+function scoreStoryForDevice(
+  story: TopicArticle,
+  interests: string[],
+  engagement: Record<string, { score: number; clicks: number }>,
+): number {
+  let score = story.coverage * 2 // base: more sources = more important
+  const sectors = detectSectors(story.title)
+  for (const sector of sectors) {
+    if (interests.includes(sector)) score += 30 // user is interested
+    const eng = engagement[sector]
+    if (eng) {
+      if (eng.score > 0) score += eng.score * 0.3 // positive engagement
+      if (eng.score < 0) score -= Math.abs(eng.score) * 0.5 // negative engagement (disliked)
+    }
+  }
+  // Recency boost: newer stories get a small bonus
+  const ageHours = (Date.now() - story.latestSeen) / (60 * 60 * 1000)
+  if (ageHours < 6) score += 10
+  else if (ageHours < 24) score += 5
+  return score
+}
+
 export async function GET(req: NextRequest) {
   const t0 = Date.now()
   const secret = req.nextUrl.searchParams.get('secret') || ''
   const dryRun = req.nextUrl.searchParams.get('dry') === '1'
-  // ?forceEvening=1 — forces the evening briefing to ALL subscribed
-  // devices regardless of their local time. Used for emergency sends
-  // when a briefing was missed. Also clears the sentSlotsToday/evening
-  // flag so it can be sent again.
   const forceEvening = req.nextUrl.searchParams.get('forceEvening') === '1'
-  // ?forceSlot=morning|lunch|evening — forces a specific slot to ALL
-  // devices, bypassing the time window check.
   const forceSlot = req.nextUrl.searchParams.get('forceSlot') as Slot | null
 
   if (secret !== TRIGGER_TZ_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // ── Run the dispatch SYNCHRONOUSLY (not in after()) ──
-  // Previously this ran in after() (background callback), but Vercel
-  // Hobby kills the process shortly after the response is sent, so
-  // the background work never completed. Running synchronously means
-  // the HTTP request takes a few seconds, but cron-job.org has a 30s
-  // timeout which is plenty.
   console.log(`[trigger-tz] Starting at ${new Date().toISOString()} (dry=${dryRun})`)
 
   try {
-    // ── 1. Load ALL subscribed devices ──
+    // ── 1. Load ALL devices ──
     const devices = await firebaseRead<Record<string, {
-      pushSubscription?: {
-        endpoint: string
-        keys: { p256dh: string; auth: string }
-      }
+      pushSubscription?: { endpoint: string; keys: { p256dh: string; auth: string } }
       pushIsStandalone?: boolean
       timezone?: string
       interests?: string[]
       engagement?: Record<string, { score: number; clicks: number }>
-      sentSlotsToday?: Record<string, string> // slot → dateKey (when last sent)
+      sentSlotsToday?: Record<string, string>
+      countryCode?: string
     }>>('devices')
 
     if (!devices) {
-      console.log('[trigger-tz] No devices found')
       return NextResponse.json({ ok: true, message: 'No devices found', sent: 0, ts: Date.now() })
     }
 
-    // ── 2. For each device, check if it's time for a briefing ──
+    // ── 2. Determine which devices need notifications ──
     const toNotify: Array<{
       deviceId: string
       slot: Slot
@@ -188,34 +163,23 @@ export async function GET(req: NextRequest) {
       engagement: Record<string, { score: number; clicks: number }>
     }> = []
 
-    let totalDevices = 0
-    let skipNoSub = 0
-    let skipNotStandalone = 0
-    let skipNoTimezone = 0
-    let skipNotInWindow = 0
-    let skipAlreadySent = 0
+    let totalDevices = 0, skipNoSub = 0, skipNotStandalone = 0
+    let skipNoTimezone = 0, skipNotInWindow = 0, skipAlreadySent = 0
 
     for (const [deviceId, device] of Object.entries(devices)) {
       totalDevices++
-      // Skip devices without a push subscription
       if (!device?.pushSubscription?.endpoint) { skipNoSub++; continue }
-      // Skip browser tabs (only PWA gets notifications)
+      // Only skip EXPLICITLY false (not undefined — old PWA installs)
       if (device.pushIsStandalone === false) { skipNotStandalone++; continue }
 
-      // ── Force mode: skip all checks, send to ALL eligible devices ──
+      // Force mode: skip all checks
       if (forceEvening || forceSlot) {
         const forcedSlot: Slot = forceSlot || 'evening'
-        // Use the device's timezone for the dateKey, or UTC as fallback
         const deviceTimezone = device.timezone || 'UTC'
         const localInfo = getLocalTime(deviceTimezone)
-        const dateKey = localInfo?.dateKey || new Date().toISOString().slice(0, 10)
-
-        // Check if already sent (but in force mode, we OVERRIDE this)
-        // Clear the flag so it can be sent again
+        const dateKey = (localInfo?.dateKey || new Date().toISOString().slice(0, 10)) + '-forced'
         toNotify.push({
-          deviceId,
-          slot: forcedSlot,
-          dateKey: dateKey + '-forced', // Use a unique dateKey so it doesn't collide with normal sends
+          deviceId, slot: forcedSlot, dateKey,
           subscription: device.pushSubscription,
           interests: device.interests || [],
           engagement: device.engagement || {},
@@ -223,75 +187,52 @@ export async function GET(req: NextRequest) {
         continue
       }
 
-      // ── Normal mode: check timezone + time window ──
+      // Normal mode: check timezone + time window
       const deviceTimezone = device.timezone || 'UTC'
-      if (!device.timezone) {
-        skipNoTimezone++
-      }
+      if (!device.timezone) skipNoTimezone++
 
-      // Check if it's time for a briefing in this device's timezone
       const slotInfo = getSlotForLocalTime(deviceTimezone)
       if (!slotInfo) { skipNotInWindow++; continue }
 
       const { slot, dateKey } = slotInfo
 
-      // ── NEVER TWICE: check if this slot was already sent today ──
-      // Also: if the stored dateKey is from a PREVIOUS day (or from a
-      // UTC fallback that used a different date format), clear it so
-      // the user isn't permanently blocked from getting notifications.
+      // Never twice: check if already sent today
       const lastSentDate = device.sentSlotsToday?.[slot]
-      if (lastSentDate === dateKey) {
-        skipAlreadySent++; continue
-      }
-      // If the stored date is stale (not today), it's fine — the check
-      // above only blocks if it matches TODAY's dateKey. Stale entries
-      // from previous days naturally don't match.
+      if (lastSentDate === dateKey) { skipAlreadySent++; continue }
 
       toNotify.push({
-        deviceId,
-        slot,
-        dateKey,
+        deviceId, slot, dateKey,
         subscription: device.pushSubscription,
         interests: device.interests || [],
         engagement: device.engagement || {},
       })
     }
 
-    console.log(`[trigger-tz] ${toNotify.length} device(s) to notify (out of ${totalDevices} total. noSub=${skipNoSub} notStandalone=${skipNotStandalone} noTz(fallbackUTC)=${skipNoTimezone} notInWindow=${skipNotInWindow} alreadySent=${skipAlreadySent})`)
+    console.log(`[trigger-tz] ${toNotify.length} to notify (total=${totalDevices} noSub=${skipNoSub} notStandalone=${skipNotStandalone} noTz=${skipNoTimezone} notInWindow=${skipNotInWindow} alreadySent=${skipAlreadySent})`)
 
     if (toNotify.length === 0) {
-      console.log('[trigger-tz] No devices need notifications right now')
       return NextResponse.json({
-        ok: true,
-        message: 'No devices need notifications',
-        sent: 0,
+        ok: true, message: 'No devices need notifications', sent: 0,
         totalDevices,
         skipBreakdown: { skipNoSub, skipNotStandalone, skipNoTimezone, skipNotInWindow, skipAlreadySent },
         ts: Date.now(),
       })
     }
 
-    // ── 3. Fetch stories for the notification content ──
-    // Use the MOST COMMON country among devices to notify, so the stories
-    // are relevant to the majority. Fall back to GB.
-    let allStories: TopicArticle[] = []
-
-    // Determine the dominant country from devices to notify
-    // Declared OUTSIDE the try block so it's available even if the
-    // fetch fails (the catch block leaves allStories empty, but
-    // dominantCountry is still defined for the US filter check below).
+    // ── 3. Fetch stories ──
+    // Determine dominant country for story fetching
     const countryCounts: Record<string, number> = {}
     for (const target of toNotify) {
       const dev = devices[target.deviceId]
-      const cc = (dev as Record<string, unknown>)?.countryCode as string ||
-                 (dev as Record<string, unknown>)?.country as string || 'GB'
+      const cc = dev?.countryCode || 'GB'
       countryCounts[cc] = (countryCounts[cc] || 0) + 1
     }
     const dominantCountry = Object.entries(countryCounts)
       .sort((a, b) => b[1] - a[1])[0]?.[0] || 'GB'
 
+    let allStories: TopicArticle[] = []
     try {
-      const categories = ['mycountry', 'relevant', 'world', 'technology', 'business', 'science']
+      const categories = ['mycountry', 'relevant', 'world', 'technology', 'business', 'science', 'top']
       const results = await Promise.allSettled(
         categories.map(async (cat) => {
           const newsRes = await fetch(
@@ -306,15 +247,11 @@ export async function GET(req: NextRequest) {
         }),
       )
       for (const result of results) {
-        if (result.status === 'fulfilled') {
-          allStories.push(...result.value)
-        }
+        if (result.status === 'fulfilled') allStories.push(...result.value)
       }
-    } catch {
-      // continue without stories
-    }
+    } catch { /* continue */ }
 
-    // Dedup by topicId
+    // Dedup
     const seenIds = new Set<string>()
     let candidates = allStories.filter((s) => {
       if (seenIds.has(s.topicId)) return false
@@ -322,67 +259,47 @@ export async function GET(req: NextRequest) {
       return true
     })
 
-    // ── Filter out US domestic politics for non-US users ──
-    // Only applies when the dominant country is NOT 'US'. US users should
-    // still get US politics notifications. The filter is comprehensive —
-    // catches Trump, Biden, US Congress, US elections, US states, US
-    // domestic policy, and any story that's clearly about US internal
-    // affairs with no international angle.
-    const isUSDominant = dominantCountry === 'US'
-    if (!isUSDominant) {
-      const usPoliticsPatterns = [
-        // Politicians
-        'trump', 'biden', 'harris', 'obama', 'sanders', 'desantis',
-        'mccarthy', 'pelosi', 'schumer', 'mcconnell', 'aoc',
-        'rand paul', 'fauci', 'pete hegseth', 'kash patel',
-        // Parties
-        'gop', 'republican', 'democrat', 'mag', 'maga',
-        // Government
-        'us congress', 'us senate', 'us house', 'scotus',
-        'us supreme court', 'white house', 'capitol', 'pentagon',
-        'senator', 'congressman', 'congresswoman', 'us governor',
-        'us poll', 'us approval', 'us election', 'us primary',
-        'senate hearing', 'house hearing', 'senate committee',
-        'house committee', 'fbi', 'cia', 'doj', 'attorney general',
-        'us federal', 'us state law', 'us military', 'us troops',
-        // US domestic news
-        'us border', 'us customs', 'us marshals', 'us citizen',
-        'us nationals', 'us embassy',
-        // US states/cities (when clearly domestic)
-        'new york', 'los angeles', 'chicago', 'houston', 'phoenix',
-        'philadelphia', 'san antonio', 'san diego', 'dallas',
-        'san jose', 'austin', 'jacksonville', 'fort worth',
-        'columbus', 'indianapolis', 'charlotte', 'san francisco',
-        'seattle', 'denver', 'boston', 'el paso', 'nashville',
-        'detroit', 'portland', 'memphis', 'oklahoma city',
-        'las vegas', 'louisville', 'baltimore', 'milwaukee',
-        'albuquerque', 'tucson', 'fresno',
-        // US-specific terms
-        'us weekly', 'us news', 'us marshals',
+    // ── US politics filter (non-US only) ──
+    if (dominantCountry !== 'US') {
+      const usPatterns = [
+        'trump', 'biden', 'harris', 'obama', 'gop', 'republican', 'democrat',
+        'us congress', 'us senate', 'us house', 'scotus', 'white house',
+        'capitol', 'pentagon', 'senator', 'congressman', 'us poll', 'us election',
+        'us primary', 'us governor', 'senate hearing', 'house hearing',
+        'fbi', 'cia', 'doj', 'us border', 'us military', 'us troops',
       ]
-      const beforeFilter = candidates.length
+      const before = candidates.length
       candidates = candidates.filter((s) => {
-        const titleLower = s.title.toLowerCase()
-        for (const pattern of usPoliticsPatterns) {
-          if (titleLower.includes(pattern)) return false
-        }
-        return true
+        const t = s.title.toLowerCase()
+        return !usPatterns.some((p) => t.includes(p))
       })
-      console.log(`[trigger-tz] US politics filter: ${beforeFilter} → ${candidates.length} (removed ${beforeFilter - candidates.length} US stories for non-US dominant country ${dominantCountry})`)
-    } else {
-      console.log('[trigger-tz] US dominant — skipping US politics filter')
+      console.log(`[trigger-tz] US filter: ${before} → ${candidates.length}`)
     }
 
     if (candidates.length === 0) {
-      console.log('[trigger-tz] No stories available (after US filter) — skipping all sends')
-      return NextResponse.json({ ok: true, message: 'No stories available after filtering', sent: 0, toNotify: toNotify.length, ts: Date.now() })
+      return NextResponse.json({ ok: true, message: 'No stories after filter', sent: 0, toNotify: toNotify.length, ts: Date.now() })
     }
 
-    // ── 4. Load global sent-history (never send the same story twice) ──
+    // ── 4. Load + prune global sent-history ──
     const globalHistory = await firebaseRead<Record<string, number>>('notification-sent-history') || {}
-    const sentSet = new Set(Object.keys(globalHistory))
+    const now = Date.now()
+    const sentSet = new Set<string>()
+    const prunedHistory: Record<string, number> = {}
+    let prunedCount = 0
+    for (const [topicId, ts] of Object.entries(globalHistory)) {
+      if (now - ts < HISTORY_MAX_AGE_MS) {
+        sentSet.add(topicId)
+        prunedHistory[topicId] = ts
+      } else {
+        prunedCount++
+      }
+    }
+    // Write pruned history back (removes old entries so the node doesn't grow forever)
+    if (prunedCount > 0 && !dryRun) {
+      await firebaseWrite('notification-sent-history', prunedHistory).catch(() => {})
+      console.log(`[trigger-tz] Pruned ${prunedCount} old entries from sent-history`)
+    }
 
-    // Filter out already-sent stories
     const freshStories = candidates.filter((s) => !sentSet.has(s.topicId))
 
     if (freshStories.length === 0) {
@@ -390,20 +307,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, message: 'All stories already sent', sent: 0, toNotify: toNotify.length, ts: Date.now() })
     }
 
-    // Pick the best story (highest coverage, freshest)
-    const bestStory = freshStories.sort((a, b) => {
-      if (b.coverage !== a.coverage) return b.coverage - a.coverage
-      return b.latestSeen - a.latestSeen
-    })[0]
-
-    console.log(`[trigger-tz] Best story: "${bestStory.title.slice(0, 60)}" (${bestStory.coverage} sources)`)
-
-    // ── 5. Send one push per device ──
+    // ── 5. Send PERSONALIZED push per device ──
+    // For each device, pick the BEST story based on their interests + engagement.
+    // This ensures users get stories they're more likely to click.
     const origin = PRODUCTION_ORIGIN
-    const imageUrl = bestStory.imageUrl
-      ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
-      : `${origin}/icon-512.png`
-
     const slotLabels: Record<Slot, string> = {
       morning: 'Morning Briefing',
       lunch: 'Lunch Briefing',
@@ -412,41 +319,54 @@ export async function GET(req: NextRequest) {
 
     let sentCount = 0
     let failedCount = 0
+    const allSentTopicIds = new Set<string>()
 
-    // Ensure VAPID is configured
     ensureVapid()
+
+    if (!VAPID_PRIVATE_KEY) {
+      console.warn('[trigger-tz] VAPID_PRIVATE_KEY not set — cannot send pushes')
+      return NextResponse.json({ ok: true, message: 'VAPID not configured', sent: 0, ts: Date.now() })
+    }
 
     for (const target of toNotify) {
       if (dryRun) {
-        console.log(`[trigger-tz] DRY RUN: would send ${target.slot} to device ${target.deviceId.slice(0, 8)} (tz: ${devices[target.deviceId]?.timezone})`)
+        console.log(`[trigger-tz] DRY RUN: would send ${target.slot} to ${target.deviceId.slice(0, 8)}`)
         continue
       }
 
       try {
-        // ── Double-check: re-read sentSlotsToday right before sending ──
-        // This catches the race condition where two cron runs overlap
-        // (30-min cron can overlap if the first run takes >30s).
+        // Race condition double-check
         const deviceNow = await firebaseRead<Record<string, string>>(
           `devices/${target.deviceId}/sentSlotsToday`
         )
         if (deviceNow?.[target.slot] === target.dateKey) {
-          console.log(`[trigger-tz] Race condition detected: ${target.slot} already sent to ${target.deviceId.slice(0, 8)} — skipping`)
+          console.log(`[trigger-tz] Race: ${target.slot} already sent to ${target.deviceId.slice(0, 8)}`)
           continue
         }
 
-        // ── Mark slot as sent BEFORE sending the push ──
-        // This prevents duplicate sends if the function is killed or
-        // the push takes too long. If the push fails, the slot is still
-        // marked (better to miss one notification than send 4 duplicates).
+        // Mark sent BEFORE push (prevents duplicates if function is killed)
         await firebaseWrite(
           `devices/${target.deviceId}/sentSlotsToday/${target.slot}`,
           target.dateKey,
         )
 
-        if (!VAPID_PRIVATE_KEY) {
-          console.warn('[trigger-tz] VAPID_PRIVATE_KEY not set — cannot send pushes')
-          break
-        }
+        // ── Pick the BEST story for THIS device ──
+        // Score each fresh story based on the device's interests + engagement.
+        // Stories already sent to OTHER devices in this run are deprioritized
+        // (so different users get different stories when possible).
+        const scored = freshStories.map((s) => ({
+          story: s,
+          score: scoreStoryForDevice(s, target.interests, target.engagement)
+            - (allSentTopicIds.has(s.topicId) ? 50 : 0), // deprioritize already-sent
+        }))
+        scored.sort((a, b) => b.score - a.score)
+        const bestStory = scored[0].story
+
+        allSentTopicIds.add(bestStory.topicId)
+
+        const imageUrl = bestStory.imageUrl
+          ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
+          : `${origin}/icon-512.png`
 
         const payload = JSON.stringify({
           title: slotLabels[target.slot],
@@ -465,29 +385,26 @@ export async function GET(req: NextRequest) {
         )
         sentCount++
 
-        // Small delay between sends
+        // Record in global history (so other devices don't get the same story)
+        await firebaseWrite(
+          `notification-sent-history/${bestStory.topicId}`,
+          now,
+        ).catch(() => {})
+
+        // Archive so notification link works forever
+        await firebaseWrite(`archive/${bestStory.topicId}`, {
+          ...bestStory,
+          archivedAt: now,
+        }).catch(() => {})
+
         await new Promise((r) => setTimeout(r, 100))
       } catch (err) {
         failedCount++
-        console.warn(`[trigger-tz] Failed to send to device ${target.deviceId.slice(0, 8)}:`, err instanceof Error ? err.message : err)
+        console.warn(`[trigger-tz] Failed: ${target.deviceId.slice(0, 8)}:`, err instanceof Error ? err.message : err)
       }
     }
 
-    // ── 6. Record the sent story in global history ──
-    if (!dryRun && sentCount > 0) {
-      await firebaseWrite(
-        `notification-sent-history/${bestStory.topicId}`,
-        Date.now(),
-      ).catch(() => {})
-
-      // Archive the topic so the notification link works forever
-      await firebaseWrite(`archive/${bestStory.topicId}`, {
-        ...bestStory,
-        archivedAt: Date.now(),
-      }).catch(() => {})
-    }
-
-    console.log(`[trigger-tz] Complete: ${sentCount} sent, ${failedCount} failed in ${Date.now() - t0}ms`)
+    console.log(`[trigger-tz] Complete: ${sentCount} sent, ${failedCount} failed, ${allSentTopicIds.size} unique stories in ${Date.now() - t0}ms`)
 
     return NextResponse.json({
       ok: true,
@@ -496,8 +413,9 @@ export async function GET(req: NextRequest) {
       failed: failedCount,
       toNotify: toNotify.length,
       totalDevices,
+      uniqueStories: allSentTopicIds.size,
       skipBreakdown: { skipNoSub, skipNotStandalone, skipNoTimezone, skipNotInWindow, skipAlreadySent },
-      bestStory: bestStory.title.slice(0, 80),
+      historyPruned: prunedCount,
       dryRun,
       ms: Date.now() - t0,
       ts: Date.now(),
