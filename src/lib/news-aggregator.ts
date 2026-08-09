@@ -350,23 +350,17 @@ function mergeNearDuplicateTopics(topics: TopicArticle[]): TopicArticle[] {
       }
 
       // Merge ONLY if BOTH conditions hold:
-      //   - Jaccard >= 0.15  (meaningful overall title similarity)
+      //   - Jaccard >= 0.12  (was 0.15 — lowered to catch more same-event stories)
       //   - shared significant keywords >= 3  (at least 3 event-specific words in common)
       //
       // This is STRICTER than the previous OR-based threshold (Jaccard >= 0.12
       // OR shared >= 2), which caused false-positive merges between unrelated
-      // stories that happened to share 2 generic news words (e.g. "huge" +
-      // "hands" merged a Barcola/PSG transfer story with a Gatwick water
-      // shortage story; "premier" + "league" + "clubs" merged it with a
-      // Premier League financial vote story).
+      // stories that happened to share 2 generic news words.
       //
       // With AND, both titles must share 3+ significant keywords AND have a
-      // Jaccard similarity >= 0.15. This catches genuine same-event stories
-      // with different wording (e.g. "Berlin Pride attack: Police hunt
-      // suspect" vs "German police hunt fugitive after van ramming at Pride"
-      // → shared=3, Jaccard=0.30 → MERGE) while rejecting unrelated stories
-      // that share a few common words.
-      if (sim >= 0.15 && shared >= 3) {
+      // Jaccard similarity >= 0.12. This catches genuine same-event stories
+      // with different wording while rejecting unrelated stories.
+      if (sim >= 0.12 && shared >= 3) {
         mergeIndices.push(j)
         merged[j] = true
       }
@@ -1899,7 +1893,7 @@ function clusterTopics(
   const assigned = new Array(articles.length).fill(false)
   const topics: TopicArticle[] = []
 
-  const JACCARD_THRESHOLD = 0.22
+  const JACCARD_THRESHOLD = 0.18 // was 0.22 — lowered to catch more same-event stories
   const SHARED_KW_THRESHOLD = 3
   const TIME_WINDOW_MS = 48 * 60 * 60 * 1000
 

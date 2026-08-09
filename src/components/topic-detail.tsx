@@ -242,13 +242,42 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
     }
   }, [topic.topicId, topic.articles, topic.coverage])
 
-  // Fetch neutral summary from LLM.
+  // Fetch neutral summary.
+  //
+  // OFFLINE SUPPORT: We try GET /api/summary?topicId=xxx FIRST. The
+  // Service Worker caches GET responses with SWR — so if the user has
+  // ever opened this topic before (online), the summary is cached and
+  // works OFFLINE. The POST endpoint (which generates new summaries)
+  // is NOT cached by the SW because it's a POST request.
+  //
+  // Flow:
+  //   1. GET /api/summary?topicId=xxx → if 200, use it (cached, offline-capable)
+  //   2. If 404 (not generated yet), POST to generate it (online only)
+  //   3. If POST also fails (offline + never cached), show error
   React.useEffect(() => {
     let cancelled = false
     setSummaryLoading(true)
     setSummaryError(null)
 
     ;(async () => {
+      // Step 1: Try GET first (SW-cached, works offline)
+      try {
+        const getRes = await fetch(`/api/summary?topicId=${encodeURIComponent(topic.topicId)}`, {
+          cache: 'no-store',
+        })
+        if (getRes.ok) {
+          const data = await getRes.json()
+          if (!cancelled && data.summary) {
+            setSummary(data.summary)
+            setSummaryLoading(false)
+            return
+          }
+        }
+      } catch {
+        // GET failed (offline + not cached, or network error) — fall through to POST
+      }
+
+      // Step 2: GET didn't find it — POST to generate (online only)
       try {
         const res = await fetch('/api/summary', {
           method: 'POST',

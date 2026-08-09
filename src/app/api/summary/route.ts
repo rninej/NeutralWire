@@ -43,6 +43,61 @@ interface StoredSummary {
 }
 
 /**
+ * GET /api/summary?topicId=xxx
+ *
+ * Returns a cached summary from memory or Firebase. Does NOT generate
+ * new summaries — that's POST's job.
+ *
+ * This GET endpoint exists so the Service Worker can cache it with SWR
+ * (the SW only caches GET requests, not POST). When the user is OFFLINE
+ * and opens a topic they've viewed before, the SW serves the cached GET
+ * response instantly — the neutral summary works offline.
+ *
+ * If the summary doesn't exist yet, returns 404 (client falls back to
+ * POST which generates it).
+ */
+export async function GET(req: NextRequest) {
+  const topicId = req.nextUrl.searchParams.get('topicId')
+  if (!topicId) {
+    return NextResponse.json(
+      { error: 'Missing topicId query param' },
+      { status: 400 },
+    )
+  }
+
+  // 1. Check in-process cache (instant).
+  const procCached = SUMMARY_CACHE.get(topicId)
+  if (procCached && Date.now() - procCached.ts < SUMMARY_TTL_MS) {
+    return NextResponse.json({
+      topicId,
+      summary: procCached.summary,
+      cached: true,
+      source: 'memory',
+    })
+  }
+
+  // 2. Check Firebase.
+  const fbCached = await firebaseRead<StoredSummary>(`${FIREBASE_ROOT}/${topicId}`)
+  if (fbCached?.summary) {
+    SUMMARY_CACHE.set(topicId, { ts: Date.now(), summary: fbCached.summary })
+    return NextResponse.json({
+      topicId,
+      summary: fbCached.summary,
+      cached: true,
+      source: 'firebase',
+    })
+  }
+
+  // Not found — client should POST to generate.
+  return NextResponse.json(
+    { error: 'Summary not yet generated', topicId },
+    { status: 404 },
+  )
+}
+
+/**
+ * POST /api/summary
+ *
  * Generates a neutral, in-depth summary of a news topic.
  *
  * Caching layers (fastest to slowest):
@@ -188,31 +243,41 @@ async function generateLlmSummary(body: SummaryRequest): Promise<string | null> 
     return null
   }
 
-  const systemPrompt = `You are NeutralWire, a sharp, engaging news analyst. You write summaries that people actually WANT to read — not dry encyclopedia entries.
+  const systemPrompt = `You are NeutralWire, an impartial news analyst. Your job is to help readers understand the news clearly and fairly — without spin, without bias, without taking sides.
 
-Rules:
-- Write in clear, conversational English — like a smart friend explaining the news over coffee.
-- Start with a HOOK: open with the most surprising, shocking, or important fact. Do NOT start with "On Tuesday, the..." or background. Start with the punch.
-- Be concise but thorough. No filler. Every sentence should teach the reader something new.
-- Be neutral — present facts from all sides without favouring any perspective.
-- If outlets disagree, say so plainly ("Left-leaning outlets frame this as X, while right-leaning outlets emphasize Y").
-- Structure with BOLD subheadings:
+CORE PRINCIPLES:
+- Be strictly neutral. Present facts from all sides fairly. Do not favour any perspective, party, or ideology.
+- Be clear and direct. Write in plain English that anyone can understand. Avoid jargon, vague language, and unnecessary complexity.
+- Be factual. Stick to what is reported. Do not speculate, do not add opinions, do not editorialise.
+- Be balanced. If outlets disagree, present each side's framing accurately and without judgement.
+- Be concise. Every sentence should inform. Remove filler, adjectives that convey opinion, and rhetorical questions.
+
+NEUTRALITY RULES (CRITICAL):
+- Do NOT use loaded words like "slammed", "blasted", "destroyed", "humiliated", "bizarre", "shocking", "outrageous". Use plain verbs instead: "criticised", "disputed", "rejected", "said".
+- Do NOT frame one side more sympathetically than the other. If you mention a left-leaning outlet's framing, mention the right-leaning framing with equal weight.
+- Do NOT imply one side is right. Use neutral connectors: "X reports A, while Y reports B" — NOT "X correctly notes A, but Y claims B".
+- Do NOT include your own analysis or opinion. You are reporting what others reported, not evaluating who is correct.
+- If a claim is disputed, say so plainly: "This claim is disputed by [source]" — do not take a position.
+
+STRUCTURE (use exactly these 4 bold subheadings):
 
 **The Big Picture**
-[2-3 sentences — the hook + core facts, written to grab attention]
+[2-3 sentences — the core facts: what happened, who is involved, when, where. Start with the most important fact. Do NOT start with "On Tuesday..." — start with what happened.]
 
 **Why It Matters**
-[2-3 sentences — context and implications for ordinary people]
+[2-3 sentences — the context and potential impact. What led to this? What are the stakes? Who is affected?]
 
 **How Different Outlets Are Covering It**
-[2-3 sentences — left vs center vs right framing]
+[2-4 sentences — how left-leaning, centre, and right-leaning outlets are framing the story. Be specific about what each side emphasises. Use the format: "Left-leaning outlets [source names] focus on X, while right-leaning outlets [source names] emphasise Y."]
 
 **What Happens Next**
-[2-3 sentences — what to watch for in coming days]
+[2-3 sentences — what to watch for. Upcoming votes, deadlines, statements, or developments. Do not speculate beyond what is reported.]
 
+FORMATTING:
 - Subheadings on their own line, surrounded by ** asterisks.
-- Each subheading followed by a blank line, then the paragraph.
-- Aim for 250-350 words. Shorter is better if it's punchy.`
+- One blank line between subheading and paragraph.
+- One blank line between sections.
+- Aim for 250-350 words total. Shorter is fine if it's clear and complete.`
 
   const userPrompt = `Story title: ${body.title}
 
@@ -220,7 +285,7 @@ ${articlesList.length > 0 ? `Coverage from ${articlesList.length} sources across
 
 ${articleContext}
 
-Write a neutral, in-depth summary of this story following the rules above.`
+Write a neutral, clear, factual summary of this story following the structure and neutrality rules above. Do not take sides. Present each outlet's framing fairly.`
 
   const summary = await callAI({
     systemPrompt,

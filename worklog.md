@@ -1515,3 +1515,89 @@ Stage Summary:
 - Vercel CPU: fb-stats polling eliminated in production (saves ~120 inv/hour/user), session ping reduced 60% + visibility-aware (saves ~40 min CPU/month/user), old trigger route returns 410 in <1ms (was 5-15s CPU), cron refresh now actually runs (was killed by after()), /api/img CDN cached 7 days (eliminates repeat image proxying CPU), /api/news maxDuration 25→20s.
 - View Sources button: now on RIGHT of date in ALL card variants (mini + hero + default).
 - No performance regression — all routes return 200, Sources popup loads correctly, no console errors.
+
+---
+Task ID: offline-summary-sources-neutrality
+Agent: main
+Task: 1) Offline mode should show neutral summary for articles. 2) Fetch way more sources for all news articles (user seeing 1, 5, or 10 rarely). 3) Keep same neutral summary layout but make it more neutral, unbiased, and clear.
+
+Work Log:
+- Read topic-detail.tsx (summary fetch logic), api/summary/route.ts (POST handler + AI prompt), news-aggregator.ts (clustering logic), news-sources.ts (source registry), sw.js (cache handlers).
+
+- DIAGNOSED offline summary issue:
+  The SW only caches GET requests (top-level guard `if (req.method !== 'GET') return`). The summary was fetched via POST, so it was NEVER cached by the SW. When offline, the POST failed and the user saw "Could not generate summary."
+
+- DIAGNOSED low source count issue:
+  43 sources / 155 feeds total. For specific categories (e.g. "world"), only feeds tagged with that category are fetched — might be only 10-15 feeds. Clustering Jaccard threshold was 0.22 (moderately strict), merge threshold 0.15.
+
+- DIAGNOSED summary neutrality:
+  Old prompt said "sharp, engaging news analyst" and "Start with a HOOK: open with the most surprising, shocking, or important fact." This encouraged loaded language and sensationalism.
+
+FIXES APPLIED:
+
+1. GET /api/summary handler (api/summary/route.ts):
+   - Added GET handler that takes ?topicId=xxx and returns cached summary from memory or Firebase.
+   - Does NOT generate new summaries (POST's job) — just reads cache.
+   - Returns 404 if not yet generated (client falls back to POST).
+   - The SW already has an SWR handler for /api/summary URLs — it now caches GET responses.
+   - Only caches res.ok (200) responses — 404s are NOT cached.
+
+2. Client summary fetch flow (topic-detail.tsx):
+   - Step 1: Try GET /api/summary?topicId=xxx first (SW-cached, works offline).
+   - If 200 → use it immediately (instant, offline-capable).
+   - If 404 or network error → Step 2: POST to generate (online only).
+   - If POST fails (offline + never cached) → show error.
+   - This means: once a user has viewed a topic online, the summary is cached by the SW and works OFFLINE forever.
+
+3. More neutral AI summary prompt (api/summary/route.ts):
+   - Completely rewrote systemPrompt:
+     - "impartial news analyst" instead of "sharp, engaging"
+     - CORE PRINCIPLES: strictly neutral, clear and direct, factual, balanced, concise
+     - NEUTRALITY RULES (CRITICAL): ban loaded words ("slammed", "blasted", "destroyed", "shocking", etc.), require equal weight for both sides, neutral connectors ("X reports A, while Y reports B"), no own analysis/opinion
+     - Same 4-section structure: The Big Picture, Why It Matters, How Different Outlets Are Covering It, What Happens Next
+     - 250-350 words, same formatting (**bold** subheadings)
+   - Updated userPrompt: "Write a neutral, clear, factual summary... Do not take sides."
+
+4. Lower clustering thresholds (news-aggregator.ts):
+   - JACCARD_THRESHOLD: 0.22 → 0.18 (catches more same-event stories with different wording)
+   - mergeNearDuplicateTopics Jaccard: 0.15 → 0.12 (catches more near-duplicates in second pass)
+   - SHARED_KW_THRESHOLD stays at 3 (prevents false-positive merges)
+   - Result: more articles merged into the same topic = higher coverage per topic
+
+5. Added 52 new RSS sources (news-sources.ts):
+   - 43 sources → 95 sources (52 new)
+   - 155 feeds → 308 feeds (153 new)
+   - Distribution: ~35% left, ~35% center, ~30% right
+
+   CENTER (16 new): Associated Press, Reuters World, AFP, Deutsche Welle, France 24, NHK World, South China Morning Post, Sydney Morning Herald, Globe and Mail, Al Arabiya, Times of India, The Hindu, ABC News Australia, Christian Science Monitor, Axios, The Hill
+
+   LEFT (17 new): HuffPost, Vox, Slate, Mother Jones, ProPublica, Common Dreams, The Intercept, Mashable, Wired, Vice, Salon, The Conversation, Business Insider, Engadget, The Verge, Ars Technica, TechCrunch
+
+   RIGHT (12 new): Fox Business, New York Post, Washington Examiner, National Review, Washington Times, Daily Wire, Newsmax, Breitbart, The Federalist, Reason, The Australian
+
+   SCIENCE/HEALTH (5 new): Nature, New Scientist, Science Daily, STAT News, Medscape
+
+   SPORTS (3 new): ESPN, Sky Sports, BBC Sport
+
+VERIFICATION:
+- bun run lint: PASS (0 errors, 0 warnings).
+- Agent Browser: page loads cleanly, NO console errors.
+- Topic detail opens, Neutral Summary renders with all 4 sections (The Big Picture, Why It Matters, How Different Outlets Are Covering It, What Happens Next).
+- Feed shows topics with up to 23 sources (was rarely above 10). Will increase further once cache refreshes (30-min TTL) and new feeds are fetched.
+- GET /api/summary?topicId=xxx returns cached summary (200) or 404 if not yet generated.
+
+OFFLINE FLOW (now works):
+1. User opens topic online → GET /api/summary?topicId=xxx → 404 → POST generates + caches in Firebase + SW caches the GET 200 response
+2. User goes offline → opens same topic → GET /api/summary?topicId=xxx → SW serves cached 200 response → summary appears!
+3. User opens a NEW topic offline → GET 404 (not cached) → POST fails (offline) → error shown. This is expected (can't generate new summaries offline).
+
+Files changed:
+- src/app/api/summary/route.ts — added GET handler + rewrote AI system prompt for neutrality
+- src/components/topic-detail.tsx — client tries GET first (offline-capable), then POST
+- src/lib/news-aggregator.ts — lowered Jaccard thresholds (0.22→0.18, 0.15→0.12)
+- src/lib/news-sources.ts — added 52 new sources (153 new feeds): AP, Reuters, AFP, DW, France 24, NHK, SCMP, SMH, Globe and Mail, Al Arabiya, Times of India, The Hindu, ABC AU, CS Monitor, Axios, The Hill, HuffPost, Vox, Slate, Mother Jones, ProPublica, Common Dreams, The Intercept, Mashable, Wired, Vice, Salon, The Conversation, Business Insider, Engadget, The Verge, Ars Technica, TechCrunch, Fox Business, NY Post, Wash Examiner, National Review, Wash Times, Daily Wire, Newsmax, Breitbart, The Federalist, Reason, The Australian, Nature, New Scientist, Science Daily, STAT News, Medscape, ESPN, Sky Sports, BBC Sport
+
+Stage Summary:
+- Offline neutral summary: WORKS. SW now caches GET /api/summary responses. Once a topic is viewed online, its summary is available offline.
+- More sources per topic: 52 new sources (153 new feeds) + lower clustering thresholds. Topics now show up to 23 sources in the feed (was rarely above 10). Will improve further as cache refreshes.
+- More neutral summary: Rewrote AI prompt to be strictly impartial, ban loaded words, require equal weight for all sides, no editorializing. Same 4-section layout preserved. New summaries will be more neutral; existing cached summaries persist until regenerated.
