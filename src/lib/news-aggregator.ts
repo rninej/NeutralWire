@@ -1307,20 +1307,34 @@ function makeConciseTitle(title: string): string {
   // Remove source prefixes: "BBC News - ", "The Guardian - ", "Reuters: "
   t = t.replace(/^(BBC News|The Guardian|Reuters|AP|AFP|CNN|Fox News|NBC News|CBS News|ABC News|NPR|CNBC|New York Times|Washington Post|Financial Times|The Economist|Al Jazeera|France 24|Deutsche Welle|Bloomberg)[\s:|-]+/i, '')
 
-  // Remove trailing live/update tags
+  // Remove trailing live/update tags (SHORT, known tags only — NOT greedy
+  // patterns that could eat the rest of the title).
   t = t.replace(/\s*[–-]\s*(live|live updates|live blog|video|analysis|opinion|report|explainer|podcast|poll|quiz|cartoon)\s*$/i, '')
 
-  // Remove trailing " | Source Name" or " - Source Name"
-  t = t.replace(/\s*[|\-]\s*[A-Z][\w\s]+$/, '')
-
-  // Remove " | ..." patterns (e.g. "Story | BBC")
-  t = t.replace(/\s*\|\s*[^|]+$/, '')
+  // Remove trailing " | Source Name" or " - Source Name" — but ONLY when
+  // the part after the separator is a SHORT source-name-like fragment
+  // (1-3 words, each starting with uppercase, no sentence-ending punctuation).
+  // This prevents the regex from eating long descriptive tails of titles.
+  // Old regex `[\w\s]+$` was greedy and matched any trailing words, causing
+  // titles like "Boris Johnson - Ministers to vote" → "Boris Johnson" (3 words).
+  // Now: only match 1-3 words that look like a source name (no lowercase
+  // sentence fragments).
+  t = t.replace(/\s*[|\-]\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})\s*$/, '')
 
   // Collapse multiple spaces
   t = t.replace(/\s+/g, ' ').trim()
 
   // Remove trailing punctuation that looks messy
   t = t.replace(/[,;:\s]+$/, '')
+
+  // SAFETY: if the result is now too short (less than 4 words and the
+  // original was longer), the regex above probably ate too much —
+  // return the original title instead. This prevents broken 3-word titles.
+  const originalWords = wordCount(title)
+  const resultWords = wordCount(t)
+  if (originalWords > 6 && resultWords < 4) {
+    return title.trim()
+  }
 
   return t
 }
@@ -1979,38 +1993,44 @@ function clusterTopics(
       if (a.iso > latestSeen) latestSeen = a.iso
     }
 
-    // ── Title selection: prefer BBC → center → shortest >10 chars ──
-    // 1. If BBC has an article in this cluster, use BBC's title
-    // 2. Otherwise, pick the shortest title from CENTER-leaning outlets (>10 chars)
-    // 3. If no center titles, pick the shortest title from ANY outlet (>10 chars)
+    // ── Title selection: prefer BBC → center → best quality ──
+    // Picks a title that is neither too short (broken/truncated) nor too
+    // long (verbose). Prefers titles with 5-20 words.
+    // 1. If BBC has an article in this cluster, use BBC's title (if >=5 words)
+    // 2. Otherwise, pick the best-length title from CENTER-leaning outlets
+    // 3. If no center titles, pick the best-length title from ANY outlet
     // 4. Fallback: use the first article's title
     {
       const clusterArtcls = clusterArticles
-      // Step 1: BBC
+      // Helper: score a title by length quality. Prefers 5-20 words.
+      const titleScore = (s: string): number => {
+        const wc = wordCount(s)
+        if (wc < 3) return -100 // too short (broken/truncated)
+        if (wc < 5) return -10  // short — deprioritize
+        if (wc <= 20) return 100 - Math.abs(wc - 10) * 2 // ideal range
+        return 50 // long but usable
+      }
+      // Step 1: BBC (if its title is good quality)
       const bbcArticle = clusterArtcls.find((a) => a.sourceId === 'bbc')
-      if (bbcArticle && bbcArticle.title.length > 10) {
+      if (bbcArticle && bbcArticle.title.length > 10 && titleScore(bbcArticle.title) > 0) {
         bestTitle = bbcArticle.title
         bestSummary = bbcArticle.description
       } else {
-        // Step 2: shortest center title >10 chars
-        const centerTitles = clusterArtcls.filter(
-          (a) => a.leaning === 'center' && a.title.length > 10,
-        )
-        if (centerTitles.length > 0) {
-          const shortest = centerTitles.reduce((a, b) =>
-            a.title.length <= b.title.length ? a : b,
-          )
-          bestTitle = shortest.title
-          bestSummary = shortest.description
+        // Step 2: best center title by score
+        const centerTitles = clusterArtcls
+          .filter((a) => a.leaning === 'center' && a.title.length > 10)
+          .sort((a, b) => titleScore(b.title) - titleScore(a.title))
+        if (centerTitles.length > 0 && titleScore(centerTitles[0].title) > 0) {
+          bestTitle = centerTitles[0].title
+          bestSummary = centerTitles[0].description
         } else {
-          // Step 3: shortest any title >10 chars
-          const anyTitles = clusterArtcls.filter((a) => a.title.length > 10)
+          // Step 3: best any title by score
+          const anyTitles = clusterArtcls
+            .filter((a) => a.title.length > 10)
+            .sort((a, b) => titleScore(b.title) - titleScore(a.title))
           if (anyTitles.length > 0) {
-            const shortest = anyTitles.reduce((a, b) =>
-              a.title.length <= b.title.length ? a : b,
-            )
-            bestTitle = shortest.title
-            bestSummary = shortest.description
+            bestTitle = anyTitles[0].title
+            bestSummary = anyTitles[0].description
           }
           // Step 4: fallback — bestTitle already set to first article's title
         }

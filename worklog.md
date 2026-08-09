@@ -1601,3 +1601,49 @@ Stage Summary:
 - Offline neutral summary: WORKS. SW now caches GET /api/summary responses. Once a topic is viewed online, its summary is available offline.
 - More sources per topic: 52 new sources (153 new feeds) + lower clustering thresholds. Topics now show up to 23 sources in the feed (was rarely above 10). Will improve further as cache refreshes.
 - More neutral summary: Rewrote AI prompt to be strictly impartial, ban loaded words, require equal weight for all sides, no editorializing. Same 4-section layout preserved. New summaries will be more neutral; existing cached summaries persist until regenerated.
+
+---
+Task ID: revert-summary-fix-titles
+Agent: main
+Task: Undo the neutral summary system to what it was before, and fix broken titles (3 words with the rest missing).
+
+Work Log:
+- Read api/summary/route.ts (current prompt), news-aggregator.ts (makeConciseTitle + title selection), gdelt-aggregator.ts (title selection).
+
+1. REVERTED summary prompt (api/summary/route.ts):
+   - Replaced the "impartial news analyst" systemPrompt back to the original "sharp, engaging news analyst" version with the HOOK rule, conversational tone, and "shorter is better if it's punchy" guidance.
+   - Reverted userPrompt back to "Write a neutral, in-depth summary of this story following the rules above."
+   - Kept the GET handler (for offline SW caching) — that was a separate fix from the previous task and the user didn't ask to remove it.
+
+2. FIXED broken titles (news-aggregator.ts, makeConciseTitle):
+   - Root cause: two greedy regexes were eating the tails of titles:
+     a) `/\s*[|\-]\s*[A-Z][\w\s]+$/` — matched any trailing words after " - " or " | ", e.g. "Boris Johnson - Ministers to vote" → "Boris Johnson" (3 words)
+     b) `/\s*\|\s*[^|]+$/` — matched anything after "|", e.g. "Congress passes bill | Senate vote" → "Congress passes bill" (3 words)
+   - Fix a: restricted to 1-3 words that look like source names (each starting uppercase): `/\s*[|\-]\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})\s*$/`
+   - Fix b: removed entirely (the fix a covers source-name suffixes safely)
+   - Added SAFETY net: if the result is <4 words AND the original was >6 words, return the original title unchanged. This prevents any future regex from producing broken 3-word titles.
+
+3. FIXED title selection (news-aggregator.ts + gdelt-aggregator.ts):
+   - Old logic: picked the SHORTEST title >10 chars from the cluster. This meant if makeConciseTitle mangled a title to "Boris Johnson" (11 chars), it would be selected.
+   - New logic: added a titleScore() function that prefers 5-20 word titles:
+     - <3 words → -100 (broken)
+     - <5 words → -10 (too short)
+     - 5-20 words → 100 - distance from 10 (ideal ~10 words)
+     - >20 words → 50 (long but usable)
+   - Title selection now sorts by score and only picks titles with score >0. If all titles are too short, falls back to the first article's title.
+   - Applied to BOTH news-aggregator.ts (RSS path) and gdelt-aggregator.ts (GDELT path).
+
+VERIFICATION:
+- bun run lint: PASS (0 errors, 0 warnings).
+- Agent Browser: page loads cleanly, NO console errors.
+- All 20+ titles in the feed are complete and well-formed (8-20 words). No broken 3-word titles.
+- Neutral Summary renders correctly with all 4 sections (The Big Picture, Why It Matters, How Different Outlets Are Covering It, What Happens Next).
+
+Files changed:
+- src/app/api/summary/route.ts — reverted systemPrompt + userPrompt to original "sharp, engaging" version (kept GET handler for offline support)
+- src/lib/news-aggregator.ts — fixed makeConciseTitle regexes (no longer greedy) + added safety net + rewrote title selection to use titleScore()
+- src/lib/gdelt-aggregator.ts — rewrote title selection to use titleScore() (was picking shortest >10 chars, now prefers 5-20 words)
+
+Stage Summary:
+- Summary prompt is back to the original engaging style with hooks and conversational tone.
+- Broken 3-word titles fixed: greedy regexes replaced with source-name-only patterns + safety net that returns the original title if the result is too short. Title selection now prefers 5-20 word titles instead of the shortest >10 chars.

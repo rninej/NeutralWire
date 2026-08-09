@@ -1072,33 +1072,39 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
       if (a.iso > latestSeen) latestSeen = a.iso
     }
 
-    // ── Title selection: prefer BBC → center → shortest >10 chars ──
+    // ── Title selection: prefer BBC → center → best quality ──
+    // Picks a title that is neither too short (broken/truncated) nor too
+    // long (verbose). Prefers titles with 5-20 words.
     {
-      // Step 1: BBC
+      // Helper: score a title by length quality. Prefers 5-20 words.
+      const titleScore = (s: string): number => {
+        const wc = s.trim().split(/\s+/).filter(Boolean).length
+        if (wc < 3) return -100 // too short (broken/truncated)
+        if (wc < 5) return -10  // short — deprioritize
+        if (wc <= 20) return 100 - Math.abs(wc - 10) * 2 // ideal range
+        return 50 // long but usable
+      }
+      // Step 1: BBC (if its title is good quality)
       const bbcArticle = clusterArticles.find((a) => a.sourceId === 'bbc' || a.sourceName === 'BBC')
-      if (bbcArticle && bbcArticle.title.length > 10) {
+      if (bbcArticle && bbcArticle.title.length > 10 && titleScore(bbcArticle.title) > 0) {
         bestTitle = bbcArticle.title
         bestSummary = bbcArticle.description
       } else {
-        // Step 2: shortest center title >10 chars
-        const centerTitles = clusterArticles.filter(
-          (a) => a.leaning === 'center' && a.title.length > 10,
-        )
-        if (centerTitles.length > 0) {
-          const shortest = centerTitles.reduce((a, b) =>
-            a.title.length <= b.title.length ? a : b,
-          )
-          bestTitle = shortest.title
-          bestSummary = shortest.description
+        // Step 2: best center title by score
+        const centerTitles = clusterArticles
+          .filter((a) => a.leaning === 'center' && a.title.length > 10)
+          .sort((a, b) => titleScore(b.title) - titleScore(a.title))
+        if (centerTitles.length > 0 && titleScore(centerTitles[0].title) > 0) {
+          bestTitle = centerTitles[0].title
+          bestSummary = centerTitles[0].description
         } else {
-          // Step 3: shortest any title >10 chars
-          const anyTitles = clusterArticles.filter((a) => a.title.length > 10)
+          // Step 3: best any title by score
+          const anyTitles = clusterArticles
+            .filter((a) => a.title.length > 10)
+            .sort((a, b) => titleScore(b.title) - titleScore(a.title))
           if (anyTitles.length > 0) {
-            const shortest = anyTitles.reduce((a, b) =>
-              a.title.length <= b.title.length ? a : b,
-            )
-            bestTitle = shortest.title
-            bestSummary = shortest.description
+            bestTitle = anyTitles[0].title
+            bestSummary = anyTitles[0].description
           }
         }
       }
