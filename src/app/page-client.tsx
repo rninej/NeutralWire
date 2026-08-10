@@ -62,6 +62,8 @@ import {
   type EngagementStats,
 } from '@/lib/user-interests'
 import { ScrollToTop } from '@/components/scroll-to-top'
+// NOTE: ScrollToTop is no longer mounted — user requested the floating
+// scroll-up button be removed. The component file is kept for reference.
 
 /**
  * Subscribe to push notifications via the Push API.
@@ -1892,10 +1894,6 @@ export default function Home() {
           NeutralWire
         </div>
       </footer>
-
-      {/* Floating scroll-to-top button — appears after the user scrolls
-          down 500px. Smoothly scrolls back to top when clicked. */}
-      <ScrollToTop showAfter={500} />
 
       {/* PWA install prompt (mobile only, dismissible) */}
       <PwaInstallPrompt />

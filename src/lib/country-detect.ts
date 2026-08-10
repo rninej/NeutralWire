@@ -345,7 +345,7 @@ const COUNTRY_SOURCES: Record<string, string[]> = {
   AU: ['bbc', 'theguardian', 'nytimes', 'aljazeera', 'cnbc'],
   IE: ['bbc', 'theguardian', 'ft'],
   NZ: ['bbc', 'theguardian', 'aljazeera'],
-  IN: ['bbc', 'aljazeera', 'reuters-algolia', 'nytimes', 'theguardian'],
+  IN: ['times-of-india', 'the-hindu', 'ndtv', 'indian-express', 'hindustan-times', 'economic-times', 'bbc', 'aljazeera', 'nytimes', 'theguardian'],
   HK: ['bbc', 'aljazeera', 'japantimes', 'france24', 'nytimes'],
   SG: ['bbc', 'aljazeera', 'japantimes', 'cnbc', 'ft'],
   JP: ['japantimes', 'bbc', 'aljazeera', 'nytimes', 'cnbc'],

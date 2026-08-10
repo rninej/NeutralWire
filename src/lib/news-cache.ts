@@ -181,17 +181,32 @@ export async function refreshCategory(
           const freshOldTopics = oldCached.topics.filter(
             (t) => now - t.latestSeen < 24 * 60 * 60 * 1000,
           )
-          // Merge: NEW topics first (fresh from GDELT/RSS), then old
-          // ones not already in the new set.
+
           const newTopicIds = new Set(agg.topics.map((t) => t.topicId))
           const preservedOldTopics = freshOldTopics.filter(
             (t) => !newTopicIds.has(t.topicId),
           )
-          // Cap total at 40 to avoid the cache growing forever
-          const finalTopics = [...agg.topics, ...preservedOldTopics].slice(0, 40)
+
+          // ── BAD FALLBACK DETECTION ──
+          // If the new fetch returned very few topics (< 5) AND we have
+          // a good set of old topics, the new fetch is likely a bad
+          // RSS fallback (GDELT timed out → RSS returned international
+          // news that the AI filter couldn't fully clean).
+          //
+          // In this case, put the OLD topics FIRST (they're verified
+          // good country news) and the new (possibly bad) topics at the
+          // END. This way users still see good country news at the top
+          // even when the latest refresh was a fallback failure.
+          //
+          // If the new fetch returned >= 5 topics, trust it — it's
+          // likely a good GDELT result. New topics go first (freshest).
+          const isNewFetchBad = agg.topics.length < 5 && preservedOldTopics.length >= 5
+          const finalTopics = isNewFetchBad
+            ? [...preservedOldTopics, ...agg.topics].slice(0, 40) // old first, new at end
+            : [...agg.topics, ...preservedOldTopics].slice(0, 40)  // new first (normal)
 
           console.log(
-            `[news-cache] mycountry merge: ${agg.topics.length} new + ${preservedOldTopics.length} preserved old = ${finalTopics.length} total (was ${oldCached.topics.length})`,
+            `[news-cache] mycountry merge: ${agg.topics.length} new + ${preservedOldTopics.length} preserved old = ${finalTopics.length} total (was ${oldCached.topics.length})${isNewFetchBad ? ' [BAD FALLBACK: old topics prioritized]' : ''}`,
           )
 
           await writeCachedNews(category, country, finalTopics, agg.articleCount, agg.sourceCount)
