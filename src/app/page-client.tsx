@@ -48,6 +48,7 @@ import type { TopicArticle } from '@/lib/news-aggregator'
 import type { CountryInfo } from '@/lib/country-detect'
 import { detectCountryClient, DEFAULT_COUNTRY } from '@/lib/country-detect'
 import { getDeviceId } from '@/lib/referral'
+import { trackPageView } from '@/lib/analytics-tracker'
 import { usePlatform } from '@/lib/use-platform'
 import {
   getInterests,
@@ -758,6 +759,11 @@ export default function Home() {
     const deviceId = getDeviceId()
     const urlParams = new URLSearchParams(window.location.search)
     const refCode = urlParams.get('ref')
+
+    // ── Analytics: track this page view ──
+    // Fire-and-forget beacon to /api/analytics/track. Throttled to once
+    // per session per path (see analytics-tracker.ts).
+    trackPageView(deviceId)
 
     // Track the referral click + register device.
     fetch('/api/referral/track', {
