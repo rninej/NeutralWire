@@ -679,7 +679,7 @@ function isAboutCountry(title: string, countryCode: string): boolean {
 
   const titleLower = ` ${title.toLowerCase()} `
 
-  // Step 1: Check if the title contains a UK keyword
+  // Step 1: Check if the title contains a country keyword
   let hasCountryKeyword = false
   for (const kw of keywords) {
     if (kw.length <= 3) {
@@ -690,12 +690,9 @@ function isAboutCountry(title: string, countryCode: string): boolean {
       if (titleLower.includes(kw)) { hasCountryKeyword = true; break }
     }
   }
-  // If it has a UK keyword → definitely keep (even if it also mentions
-  // a foreign country — e.g. "UK responds to Japan earthquake" is UK news)
   if (hasCountryKeyword) return true
 
-  // Step 2: No UK keyword found. Check if it's CLEARLY about another country.
-  // Comprehensive list of foreign country indicators (name, capital, adjective, demonym)
+  // Step 2: No country keyword found. Check if it's CLEARLY about another country.
   const foreignIndicators = [
     // Asia
     'japan', 'japanese', 'tokyo', 'china', 'chinese', 'beijing', 'shanghai',
@@ -742,6 +739,16 @@ function isAboutCountry(title: string, countryCode: string): boolean {
     // Oceania
     'australia', 'australian', 'canberra', 'sydney', 'melbourne',
     'new zealand', 'wellington',
+    // UK-specific terms (not country names but clearly UK — catches
+    // stories like "Thames Water", "Andy Burnham", "Heathrow" that
+    // don't contain a country name but are unmistakably UK)
+    'thames water', 'heathrow', 'gatwick', 'downing street',
+    'nhs', 'starmer', 'burnham', ' labour ', 'conservative party', 'tories',
+    'council tax', 'met police', 'ofsted', 'channel 4',
+    'uk government', 'uk parliament', 'westminster',
+    'great britain', 'british government', 'scottish parliament',
+    'welsh government', 'sinn fein', 'london underground',
+    'prince of wales', 'king charles', 'queen camilla', 'royal family',
   ]
 
   for (const kw of foreignIndicators) {
@@ -1215,6 +1222,70 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
         rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
         console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Keyword fallback kept ${rssResult.topics.length} stories`)
       }
+
+      // ── SECOND PASS: strict keyword filter ──
+      // The AI filter is smart but sometimes makes mistakes — it keeps
+      // UK/US stories that slipped through because the article body
+      // mentions India even though the title is about UK politics.
+      // The keyword filter is deterministic and strict: if a title
+      // contains a foreign country indicator (e.g. "England", "Burnham",
+      // "Thames Water", "Liverpool") AND no India keyword, it's removed.
+      //
+      // This second pass catches the AI's mistakes. It runs AFTER the AI
+      // filter, so it only removes stories the AI incorrectly kept.
+      const beforeSecondPass = rssResult.topics.length
+      rssResult.topics = rssResult.topics.filter((t) => isAboutCountry(t.title, cc))
+      const removed = beforeSecondPass - rssResult.topics.length
+      if (removed > 0) {
+        console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Second-pass keyword filter removed ${removed} non-country stories the AI missed`)
+      }
+
+      // ── THIRD PASS: hard UK/foreign blocklist ──
+      // For non-UK countries (IN, HK, SG, etc.): aggressively remove any
+      // story whose title contains unmistakable UK/foreign indicators.
+      // This is a SIMPLE, DIRECT string check — not dependent on the
+      // isAboutCountry function which may have subtle bugs.
+      //
+      // Only runs when the target country is NOT GB/UK (we don't want
+      // to remove UK stories from the UK feed!).
+      if (cc !== 'GB' && cc !== 'UK') {
+        const UK_BLOCKLIST = [
+          'england', 'english', 'britain', 'british', 'london', 'scotland',
+          'scottish', 'wales', 'welsh', 'northern ireland',
+          'thames water', 'heathrow', 'gatwick', 'westminster',
+          'downing street', 'nhs', 'starmer', 'burnham', ' labour ',
+          'conservative party', 'tories', 'council tax', 'met police',
+          'ofsted', 'channel 4', 'uk government', 'uk parliament',
+          'great britain', 'british government', 'scottish parliament',
+          'welsh government', 'sinn fein', 'london underground',
+          'prince of wales', 'king charles', 'queen camilla',
+          'royal family', 'buckingham', 'windsor',
+          'heathrow', 'network rail', 'hs2',
+          'barclays', 'lloyds', 'hsbc', 'tesco', 'sainsbury',
+          'manchester', 'birmingham', 'leeds', 'liverpool', 'bristol',
+          'sheffield', 'newcastle', 'brighton', 'oxford', 'cambridge',
+          'glasgow', 'aberdeen', 'cardiff', 'edinburgh', 'belfast',
+          'dublin', 'irish', 'ireland',
+          'kinahan', 'farage', 'reform uk',
+          'channel in one small boat', 'cross channel',
+          'duke of westminster',
+        ]
+        const beforeThirdPass = rssResult.topics.length
+        rssResult.topics = rssResult.topics.filter((t) => {
+          const titleLower = ` ${t.title.toLowerCase()} `
+          for (const kw of UK_BLOCKLIST) {
+            if (titleLower.includes(kw)) {
+              console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): THIRD-PASS REMOVED "${t.title.slice(0, 60)}" (matched "${kw}")`)
+              return false
+            }
+          }
+          return true
+        })
+        const removedThird = beforeThirdPass - rssResult.topics.length
+        if (removedThird > 0) {
+          console.log(`[gdelt-ai-filter] ${cc} (RSS fallback): Third-pass UK blocklist removed ${removedThird} stories`)
+        }
+      }
     }
 
     return rssResult
@@ -1635,3 +1706,4 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
     sourceCount: new Set(articles.map((a) => a.sourceId)).size,
   }
 }
+// recompile check

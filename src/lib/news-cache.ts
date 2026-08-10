@@ -50,7 +50,11 @@ const FRESHNESS_WINDOW_MS = 48 * 60 * 60 * 1000 // keep topics younger than 48h 
 //   1 — initial (before Indian sources were added)
 //   2 — added NDTV, Indian Express, Hindustan Times, Economic Times +
 //       bad-fallback detection in merge + title quality scoring
-const CACHE_VERSION = 2
+//   3 — added second-pass keyword filter in RSS fallback
+//   4 — added THIRD-PASS hard UK blocklist in RSS fallback (catches
+//       "England", "Thames Water", "Burnham", "Kinahan", etc. that the
+//       isAboutCountry function missed)
+const CACHE_VERSION = 4
 
 // ---------- In-process refresh bookkeeping ----------
 const REFRESH_IN_FLIGHT = new Map<string, Promise<CategoryCachePayload | null>>()
