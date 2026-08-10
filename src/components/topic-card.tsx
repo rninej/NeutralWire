@@ -328,7 +328,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
       return wrapWithSwipe(
       <Card
         className={cn(
-          'h-full overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
+          'card-glass h-full overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
           !showImage && 'border-l-4 border-l-foreground/20',
           onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
         )}
@@ -383,7 +383,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   return wrapWithSwipe(
     <Card
       className={cn(
-        'h-full overflow-hidden p-0 gap-0 flex flex-col',
+        'card-glass h-full overflow-hidden p-0 gap-0 flex flex-col',
         onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
       )}
       onClick={handleCardClick}

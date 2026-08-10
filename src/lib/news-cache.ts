@@ -37,6 +37,21 @@ const MYCOUNTRY_STALE_MS = 30 * 60 * 1000 // 30 minutes — GDELT results are st
 const MIN_REFRESH_GAP_MS = 3 * 60 * 1000 // allow refresh every 3 min
 const FRESHNESS_WINDOW_MS = 48 * 60 * 60 * 1000 // keep topics younger than 48h when merging
 
+// ── CACHE VERSION ──
+// Bump this number when the news sources change (e.g. new Indian RSS feeds
+// added) or when the clustering logic changes. Old caches with a different
+// version are treated as STALE and REPLACED (not merged) on the next refresh.
+//
+// This is the mechanism that forces neutralwire.org to refresh its My Country
+// cache after a deploy — without it, old bad data (e.g. UK news in the India
+// feed) would persist for up to 24h via the merge logic.
+//
+// Version history:
+//   1 — initial (before Indian sources were added)
+//   2 — added NDTV, Indian Express, Hindustan Times, Economic Times +
+//       bad-fallback detection in merge + title quality scoring
+const CACHE_VERSION = 2
+
 // ---------- In-process refresh bookkeeping ----------
 const REFRESH_IN_FLIGHT = new Map<string, Promise<CategoryCachePayload | null>>()
 const LAST_REFRESH_AT = new Map<string, number>()
@@ -75,7 +90,9 @@ export async function readCachedNews(
 }
 
 /**
- * Write the cached payload for a category. Updates the updatedAt timestamp.
+ * Write the cached payload for a category. Updates the updatedAt timestamp
+ * and stamps the current CACHE_VERSION so future reads can detect when the
+ * cache is from an older source set.
  */
 export async function writeCachedNews(
   category: Category,
@@ -89,6 +106,7 @@ export async function writeCachedNews(
     sourceCount,
     articleCount,
     topics,
+    cacheVersion: CACHE_VERSION,
   }
   return firebaseWrite(cachePath(category, country), payload)
 }
@@ -97,10 +115,16 @@ export async function writeCachedNews(
  * Decide whether a cached payload is stale.
  * My Country uses a longer TTL (30 min) because GDELT results are stable
  * and frequent refreshes cause good stories to disappear.
+ *
+ * Also returns true if the cache VERSION doesn't match — this forces a
+ * full refresh (and skip-merge) when the source list or clustering logic
+ * has changed since the cache was written.
  */
 export function isStale(payload: CategoryCachePayload | null, category?: Category): boolean {
   if (!payload) return true
   if (typeof payload.updatedAt !== 'number') return true
+  // Version mismatch → stale (forces full refresh + skip merge)
+  if (payload.cacheVersion !== CACHE_VERSION) return true
   const ttl = category === 'mycountry' ? MYCOUNTRY_STALE_MS : STALE_MS
   return Date.now() - payload.updatedAt > ttl
 }
@@ -175,7 +199,20 @@ export async function refreshCategory(
       //   - The cache never shrinks below its previous good state
       if (category === 'mycountry') {
         const oldCached = await readCachedNews(category, country)
-        if (oldCached && oldCached.topics && oldCached.topics.length > 0) {
+
+        // ── SKIP MERGE if old cache is from a different version ──
+        // When the source list changes (CACHE_VERSION bumped), old cache
+        // data is from an old source set and may contain bad topics (e.g.
+        // UK news in the India feed because Indian RSS sources weren't
+        // configured yet). We do a FULL REPLACE instead of merging — this
+        // discards all old topics and writes only the fresh fetch.
+        // This is what makes neutralwire.org refresh My Country on the
+        // next visitor after a deploy.
+        if (oldCached && oldCached.cacheVersion !== CACHE_VERSION) {
+          console.log(
+            `[news-cache] mycountry: cache version mismatch (old=${oldCached.cacheVersion}, new=${CACHE_VERSION}) — full replace, skipping merge`,
+          )
+        } else if (oldCached && oldCached.topics && oldCached.topics.length > 0) {
           const now = Date.now()
           // Keep old topics that are still fresh (within 24h)
           const freshOldTopics = oldCached.topics.filter(

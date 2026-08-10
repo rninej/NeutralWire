@@ -62,6 +62,11 @@ export interface CategoryCachePayload {
   sourceCount: number
   articleCount: number
   topics: TopicArticle[]
+  /** Cache version — used to invalidate ALL caches when the source list
+   *  or clustering logic changes. If this doesn't match the current
+   *  CACHE_VERSION in news-cache.ts, the cache is treated as stale and
+   *  replaced (not merged) on the next refresh. */
+  cacheVersion?: number
 }
 
 // ---------- Per-feed cache (in-process) ----------

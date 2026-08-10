@@ -89,6 +89,21 @@ export function usePlatform(): Platform {
         PLATFORM_CLASS.other,
       )
       document.body.classList.add(PLATFORM_CLASS[detected])
+
+      // ── PWA standalone detection ──
+      // When the app is running as an installed PWA (standalone mode),
+      // add a `pwa` class to <body> so CSS can apply frosted glass to
+      // elements that only get glass in PWA mode (e.g. news cards).
+      // In a browser tab, glass on cards looks bad (transparent over
+      // solid bg), but in a PWA it looks like Android 17 frosted glass.
+      const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as Navigator & { standalone?: boolean }).standalone === true
+      if (isStandalone) {
+        document.body.classList.add('pwa')
+      } else {
+        document.body.classList.remove('pwa')
+      }
     }
   }, [])
 

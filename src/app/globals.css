@@ -197,6 +197,43 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+   Frosted glass news cards (PWA only — Android 17 / Material frosted style)
+   ─────────────────────────────────────────────────────────────────────────
+   Only applied when BOTH:
+     - body has `.pwa` class (app is running in standalone PWA mode)
+     - body has `.platform-android` or `.platform-apple` class
+
+   In a browser tab, cards keep their default solid background.
+   In a PWA, cards get a translucent frosted glass effect:
+     - Semi-transparent background (lets the page bg show through)
+     - Backdrop blur (frosts the content behind the card)
+     - Subtle saturation boost (makes colors pop)
+     - Thin border for definition
+
+   Dark mode: `.dark` is on <html>, `.pwa.platform-*` is on <body>.
+   The descendant selector `.dark .pwa.platform-android .card-glass` matches. */
+.pwa.platform-android .card-glass,
+.pwa.platform-apple .card-glass {
+  background: rgb(255 255 255 / 0.72);
+  backdrop-filter: blur(24px) saturate(135%);
+  -webkit-backdrop-filter: blur(24px) saturate(135%);
+  border-color: rgb(0 0 0 / 0.06);
+}
+.dark .pwa.platform-android .card-glass,
+.dark .pwa.platform-apple .card-glass {
+  background: rgb(22 22 26 / 0.60);
+  backdrop-filter: blur(24px) saturate(125%);
+  -webkit-backdrop-filter: blur(24px) saturate(125%);
+  border-color: rgb(255 255 255 / 0.08);
+}
+/* Apple PWA gets slightly more saturation (liquid glass style) */
+.pwa.platform-apple .card-glass {
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  border-color: rgb(255 255 255 / 0.10);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    Skeleton shimmer — a gradient sweep that moves left-to-right, replacing
    the plain `animate-pulse` for skeleton loading placeholders. Looks more
    premium than a flat opacity flicker.
