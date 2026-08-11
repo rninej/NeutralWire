@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { X, Heart, Check, ThumbsDown, Globe, Building2, FlaskConical, Stethoscope, Trophy, Cpu, Landmark, Newspaper } from 'lucide-react'
+import { X, Heart, Check, ThumbsDown, Globe, Building2, FlaskConical, Stethoscope, Trophy, Cpu, Landmark, Newspaper, Languages, ChevronDown } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,10 +11,13 @@ import {
   bumpEngagement,
 } from '@/lib/user-interests'
 import { getDeviceId } from '@/lib/referral'
+import { getCountryLanguage, ALL_LANGUAGES, type LanguageInfo } from '@/lib/country-languages'
 
 const ONBOARDED_KEY = 'neutralwire:onboarded'
 const ONBOARDING_DISMISSED_KEY = 'neutralwire:onboarding-dismissed-at'
 const ONBOARDING_DISMISS_DURATION = 1 * 60 * 60 * 1000 // 1 hour
+const LANGUAGE_SELECTED_KEY = 'neutralwire:language-selected'
+const SELECTED_LANGUAGE_KEY = 'neutralwire:language'
 const ARTICLES_OPENED_KEY = 'neutralwire:articles-opened'
 const DONATE_SHOWN_KEY = 'neutralwire:donate-shown-at'
 const DONATE_NEXT_KEY = 'neutralwire:donate-next-threshold'
@@ -59,6 +62,9 @@ const SUBTOPICS: SubtopicDef[] = [
  */
 export function PwaOnboarding() {
   const [showOnboarding, setShowOnboarding] = React.useState(false)
+  const [showLanguageSelect, setShowLanguageSelect] = React.useState(false)
+  const [countryLanguage, setCountryLanguage] = React.useState<LanguageInfo | null>(null)
+  const [selectedLanguage, setSelectedLanguage] = React.useState<string>('en')
   const [showDonate, setShowDonate] = React.useState(false)
   const [step, setStep] = React.useState<'likes' | 'dislikes'>('likes')
   const [likedIds, setLikedIds] = React.useState<Set<string>>(new Set())
@@ -74,6 +80,34 @@ export function PwaOnboarding() {
     const dismissedAt = localStorage.getItem(ONBOARDING_DISMISSED_KEY)
     const dismissedRecently = dismissedAt && (Date.now() - parseInt(dismissedAt, 10) < ONBOARDING_DISMISS_DURATION)
     if (!onboarded && !dismissedRecently) {
+      // ── Language selection check ──
+      // Before showing the personalization quiz, check if the user's
+      // country speaks a non-English language. If so, show the language
+      // selection popup FIRST.
+      const languageAlreadySelected = localStorage.getItem(LANGUAGE_SELECTED_KEY) === 'true'
+
+      if (!languageAlreadySelected) {
+        // Check the detected country from localStorage (set by page-client)
+        try {
+          const countryRaw = localStorage.getItem('neutralwire:country')
+          if (countryRaw) {
+            const countryData = JSON.parse(countryRaw)
+            const countryCode = countryData?.info?.code || ''
+            const lang = getCountryLanguage(countryCode)
+            if (lang) {
+              // Non-English country — show language popup
+              setCountryLanguage(lang)
+              setSelectedLanguage(lang.code) // default to country's language
+              setTimeout(() => setShowLanguageSelect(true), 1000)
+              return // don't show onboarding yet
+            }
+          }
+        } catch {
+          // country not detected yet — skip language popup
+        }
+      }
+
+      // English-speaking country or language already selected → show onboarding
       setTimeout(() => setShowOnboarding(true), 1500)
     }
 
@@ -160,12 +194,118 @@ export function PwaOnboarding() {
     window.open('https://ko-fi.com/neutralwire', '_blank')
   }
 
+  // ── Language selection handler ──
+  // Called when the user picks a language from the popup.
+  // Saves the choice and proceeds to the personalization quiz.
+  const handleLanguageSelect = (langCode: string) => {
+    localStorage.setItem(LANGUAGE_SELECTED_KEY, 'true')
+    localStorage.setItem(SELECTED_LANGUAGE_KEY, langCode)
+    setShowLanguageSelect(false)
+    // Now show the personalization quiz
+    setTimeout(() => setShowOnboarding(true), 300)
+  }
+
   const handleDonateDismiss = () => {
     const currentThreshold = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
     const newThreshold = currentThreshold === 0 ? INITIAL_THRESHOLD * 2 : currentThreshold * 2
     localStorage.setItem(DONATE_NEXT_KEY, String(newThreshold))
     localStorage.setItem(DONATE_SHOWN_KEY, String(Date.now()))
     setShowDonate(false)
+  }
+
+  // ── Language selection popup (PWA only, non-English countries) ──
+  // Shows BEFORE the personalization quiz. Two options:
+  //   1. English (top — default for the app)
+  //   2. Country's language (bottom — with a dropdown to pick a different language)
+  if (showLanguageSelect && countryLanguage) {
+    return (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95, y: 20 }}
+          transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
+          className="glass w-full max-w-md rounded-3xl bg-background/95 backdrop-blur-xl border border-border/50 shadow-2xl overflow-hidden"
+        >
+          {/* Header */}
+          <div className="relative bg-gradient-to-br from-foreground/5 to-foreground/10 px-6 pt-6 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-foreground text-background">
+                <Languages className="h-6 w-6" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold">Choose your language</h2>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  Select your preferred language for NeutralWire
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Language options */}
+          <div className="p-6 space-y-3">
+            {/* Option 1: English (top) */}
+            <button
+              onClick={() => handleLanguageSelect('en')}
+              className="w-full flex items-center gap-3 rounded-2xl border-2 border-border p-4 text-left hover:border-foreground/30 hover:bg-muted/50 transition-colors group"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 text-2xl">
+                🇬🇧
+              </div>
+              <div className="flex-1">
+                <div className="font-semibold">English</div>
+                <div className="text-sm text-muted-foreground">English</div>
+              </div>
+              <ChevronDown className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors -rotate-90" />
+            </button>
+
+            {/* Option 2: Country's language (bottom, with selector) */}
+            <div className="rounded-2xl border-2 border-border p-4">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 text-2xl">
+                  🌐
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold">{countryLanguage.nativeName}</div>
+                  <div className="text-sm text-muted-foreground">{countryLanguage.name}</div>
+                </div>
+              </div>
+
+              {/* Language selector dropdown */}
+              <div className="relative">
+                <select
+                  value={selectedLanguage}
+                  onChange={(e) => setSelectedLanguage(e.target.value)}
+                  className="w-full appearance-none rounded-xl border border-border bg-background px-4 py-2.5 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-foreground/20"
+                >
+                  {ALL_LANGUAGES.map((lang) => (
+                    <option key={lang.code} value={lang.code}>
+                      {lang.nativeName} ({lang.name})
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+              </div>
+
+              <Button
+                onClick={() => handleLanguageSelect(selectedLanguage)}
+                className="w-full mt-3"
+                size="sm"
+              >
+                Continue in {ALL_LANGUAGES.find((l) => l.code === selectedLanguage)?.nativeName || selectedLanguage}
+              </Button>
+            </div>
+          </div>
+
+          {/* Footer note */}
+          <div className="px-6 pb-6">
+            <p className="text-xs text-muted-foreground text-center">
+              You can change this later in settings
+            </p>
+          </div>
+        </motion.div>
+      </div>
+    )
   }
 
   // ── Onboarding popup ──
