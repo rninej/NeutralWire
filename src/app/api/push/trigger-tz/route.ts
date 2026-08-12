@@ -38,6 +38,52 @@ type Slot = keyof typeof SLOT_WINDOWS
 // future stories.
 const HISTORY_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
 
+/**
+ * Generate a SEMANTIC FINGERPRINT for a story title.
+ *
+ * This normalizes the title by:
+ *   1. Lowercasing
+ *   2. Removing all numbers (so "139 killed" and "169 killed" match)
+ *   3. Removing common articles/stopwords ("the", "a", "in", "of", etc.)
+ *   4. Sorting the remaining keywords alphabetically (so word order doesn't matter)
+ *
+ * Two stories about the SAME EVENT with different numbers/wording will
+ * produce the SAME fingerprint:
+ *   "At least 169 killed in Colombia's largest earthquake in years"
+ *   "At least 139 killed in Colombia's largest earthquake in years"
+ *   → both become: "colombia earthquake killed largest years"
+ *
+ * This prevents duplicate notifications when a story develops (death toll
+ * updates, headline rewording, etc.) — the second version is recognized
+ * as the same story and skipped.
+ */
+const FINGERPRINT_STOPWORDS = new Set([
+  'the', 'a', 'an', 'in', 'of', 'at', 'to', 'for', 'on', 'and', 'or',
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'by', 'with',
+  'from', 'as', 'its', 'it', 'that', 'this', 'these', 'those', 'has',
+  'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might',
+  'not', 'no', 'but', 'if', 'then', 'than', 'so', 'do', 'does', 'did',
+  'about', 'after', 'before', 'more', 'most', 'some', 'any', 'all',
+  'new', 'says', 'said', 'say', 'report', 'reports', 'amid', 'while',
+  'over', 'under', 'up', 'down', 'out', 'off', 'into', 'onto', 'upon',
+])
+
+function storyFingerprint(title: string): string {
+  const cleaned = title
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ') // remove numbers + punctuation
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter((w) => w.length >= 3 && !FINGERPRINT_STOPWORDS.has(w))
+    .sort()
+    .join(' ')
+  // Only return a fingerprint if we have at least 3 significant keywords
+  // (otherwise the fingerprint is too generic and might block unrelated stories)
+  const wordCount = cleaned.split(' ').filter(Boolean).length
+  return wordCount >= 3 ? cleaned : ''
+}
+
 function getLocalTime(timezone: string): { hour: number; minute: number; dateKey: string } | null {
   if (!timezone) return null
   try {
@@ -281,15 +327,19 @@ export async function GET(req: NextRequest) {
     }
 
     // ── 4. Load + prune global sent-history ──
+    // The sent-history tracks BOTH topicIds AND semantic fingerprints.
+    // topicIds catch exact duplicates (same story re-sent).
+    // Fingerprints catch semantic duplicates (same event, different numbers
+    // or wording — e.g. "139 killed" updated to "169 killed").
     const globalHistory = await firebaseRead<Record<string, number>>('notification-sent-history') || {}
     const now = Date.now()
     const sentSet = new Set<string>()
     const prunedHistory: Record<string, number> = {}
     let prunedCount = 0
-    for (const [topicId, ts] of Object.entries(globalHistory)) {
+    for (const [key, ts] of Object.entries(globalHistory)) {
       if (now - ts < HISTORY_MAX_AGE_MS) {
-        sentSet.add(topicId)
-        prunedHistory[topicId] = ts
+        sentSet.add(key)
+        prunedHistory[key] = ts
       } else {
         prunedCount++
       }
@@ -300,7 +350,17 @@ export async function GET(req: NextRequest) {
       console.log(`[trigger-tz] Pruned ${prunedCount} old entries from sent-history`)
     }
 
-    const freshStories = candidates.filter((s) => !sentSet.has(s.topicId))
+    // ── Filter fresh stories using BOTH topicId AND fingerprint ──
+    // A story is "fresh" if:
+    //   - Its topicId is NOT in sentSet (not the exact same story), AND
+    //   - Its fingerprint is NOT in sentSet (not a semantic duplicate)
+    // This prevents "139 killed" and "169 killed" from both being sent.
+    const freshStories = candidates.filter((s) => {
+      if (sentSet.has(s.topicId)) return false // exact duplicate
+      const fp = storyFingerprint(s.title)
+      if (fp && sentSet.has(fp)) return false // semantic duplicate
+      return true
+    })
 
     if (freshStories.length === 0) {
       console.log('[trigger-tz] All stories already sent — skipping')
@@ -320,6 +380,7 @@ export async function GET(req: NextRequest) {
     let sentCount = 0
     let failedCount = 0
     const allSentTopicIds = new Set<string>()
+    const allSentFingerprints = new Set<string>()
 
     ensureVapid()
 
@@ -354,15 +415,26 @@ export async function GET(req: NextRequest) {
         // Score each fresh story based on the device's interests + engagement.
         // Stories already sent to OTHER devices in this run are deprioritized
         // (so different users get different stories when possible).
-        const scored = freshStories.map((s) => ({
-          story: s,
-          score: scoreStoryForDevice(s, target.interests, target.engagement)
-            - (allSentTopicIds.has(s.topicId) ? 50 : 0), // deprioritize already-sent
-        }))
+        // ALSO deprioritize stories whose FINGERPRINT matches a story already
+        // sent in this run (catches "139 killed" vs "169 killed" — same event,
+        // different numbers, sent to different devices in the same cron run).
+        const scored = freshStories.map((s) => {
+          const fp = storyFingerprint(s.title)
+          const alreadySentTopic = allSentTopicIds.has(s.topicId)
+          const alreadySentFp = fp && allSentFingerprints.has(fp)
+          return {
+            story: s,
+            score: scoreStoryForDevice(s, target.interests, target.engagement)
+              - (alreadySentTopic ? 50 : 0)        // deprioritize exact dup
+              - (alreadySentFp ? 50 : 0),          // deprioritize semantic dup
+          }
+        })
         scored.sort((a, b) => b.score - a.score)
         const bestStory = scored[0].story
 
         allSentTopicIds.add(bestStory.topicId)
+        const bestFp = storyFingerprint(bestStory.title)
+        if (bestFp) allSentFingerprints.add(bestFp)
 
         const imageUrl = bestStory.imageUrl
           ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
@@ -385,11 +457,21 @@ export async function GET(req: NextRequest) {
         )
         sentCount++
 
-        // Record in global history (so other devices don't get the same story)
+        // Record BOTH topicId AND fingerprint in global history.
+        // topicId prevents exact duplicates (same story re-sent).
+        // fingerprint prevents semantic duplicates (same event, different
+        // numbers — e.g. "139 killed" → "169 killed" won't be sent again).
         await firebaseWrite(
           `notification-sent-history/${bestStory.topicId}`,
           now,
         ).catch(() => {})
+        const sentFp = storyFingerprint(bestStory.title)
+        if (sentFp) {
+          await firebaseWrite(
+            `notification-sent-history/${sentFp}`,
+            now,
+          ).catch(() => {})
+        }
 
         // Archive so notification link works forever
         await firebaseWrite(`archive/${bestStory.topicId}`, {
