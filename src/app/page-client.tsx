@@ -13,8 +13,7 @@ import {
   Info,
   Cloud,
   X,
-  DollarSign,
-  Heart,
+  UserCircle,
   WifiOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -38,7 +37,7 @@ import { TopicDetail } from '@/components/topic-detail'
 import { PwaInstallPrompt } from '@/components/pwa-install-prompt'
 import { IosNotificationPrompt } from '@/components/ios-notification-prompt'
 import { PwaOnboarding } from '@/components/pwa-onboarding'
-import { ReferralDialog } from '@/components/referral-dialog'
+import { UserPage } from '@/components/user-page'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
 import { CountryPicker } from '@/components/country-picker'
@@ -734,8 +733,8 @@ export default function Home() {
   // server-side, once per hour. When a user opens a topic, the summary
   // generates on-demand (1 call, cached forever in Firebase).
 
-  // --- Referral dialog state ---
-  const [referralOpen, setReferralOpen] = useState(false)
+  // --- User page state (account / referral / interests / themes) ---
+  const [userPageOpen, setUserPageOpen] = useState(false)
 
   // ── Offline mode detection ──
   // Tracks whether the browser is offline. When offline, a big banner is
@@ -1581,24 +1580,23 @@ export default function Home() {
           </Badge>
 
           <div className="ml-auto flex items-center gap-2">
-            <a
-              href="https://ko-fi.com/neutralwire"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-pink-500 hover:bg-pink-500/10 transition-colors"
-              title="Support NeutralWire on Ko-fi"
-            >
-              <Heart className="h-4 w-4 fill-pink-400 text-pink-500" strokeWidth={2} />
-              <span className="hidden sm:inline">Support</span>
-            </a>
+            {/* Account button — opens the user page (guest name, referrals,
+                personalization, themes, support). Replaces the old Heart +
+                DollarSign buttons (which opened the Ko-fi page + referral
+                dialog separately). All that functionality is now consolidated
+                into the user page. */}
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setReferralOpen(true)}
-              className="gap-1.5"
+              onClick={() => setUserPageOpen(true)}
+              // active:scale-95 + transition-transform = subtle tap-scale
+              // micro-interaction without needing a motion wrapper.
+              className="gap-1.5 transition-transform duration-150 active:scale-95"
+              aria-label="Open account"
+              title="Account, referrals, themes"
             >
-              <DollarSign className="h-4 w-4" />
-              <span className="hidden sm:inline">Refer</span>
+              <UserCircle className="h-5 w-5" />
+              <span className="hidden sm:inline">Account</span>
             </Button>
             <ThemeToggle />
           </div>
@@ -1900,8 +1898,12 @@ export default function Home() {
       <IosNotificationPrompt />
       <PwaOnboarding />
 
-      {/* Referral dialog */}
-      {referralOpen && <ReferralDialog onClose={() => setReferralOpen(false)} />}
+      {/* User page (account / referral / personalization / themes / support)
+          — wrapped in AnimatePresence so the entrance + exit animations
+          run (fade + slide up/down, matching the topic-detail overlay). */}
+      <AnimatePresence>
+        {userPageOpen && <UserPage onClose={() => setUserPageOpen(false)} />}
+      </AnimatePresence>
 
       {/* Detail overlay — wrapped in AnimatePresence so the TopicDetail
           can run its exit animation (slide-down + fade-out) when closing. */}
@@ -1957,15 +1959,22 @@ function CategoryTab({
     : CATEGORY_LABELS[cat]
 
   return (
-    <button
+    <motion.button
       type="button"
       onClick={onClick}
+      // Subtle tap scale on every tab — feels responsive on mobile.
+      whileTap={{ scale: 0.94 }}
+      transition={{ duration: 0.15, ease: 'easeOut' }}
       className={cn(
         // Smaller text + tighter padding on mobile so all 11 categories
         // (Relevant, UK, Top Stories, World, Politics, Business, Tech,
         // Science, Health, Sports, Blindspots) fit in 2 lines on a 320px
         // iPhone screen. sm: restores normal size on wider screens.
-        'relative inline-flex items-center gap-0.5 rounded-md whitespace-nowrap text-[10px] px-1.5 py-1 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors',
+        //
+        // The .tab-pill-text class adds a smooth color transition (0.2s
+        // ease-out) so the text color doesn't snap when active changes —
+        // it cross-fades alongside the sliding pill.
+        'relative inline-flex items-center gap-0.5 rounded-md whitespace-nowrap text-[10px] px-1.5 py-1 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors tab-pill-text',
         active
           ? 'text-background'
           : 'hover:bg-muted text-foreground/80',
@@ -1975,15 +1984,16 @@ function CategoryTab({
         // Sliding pill indicator — uses layoutId so Framer Motion animates
         // it from the previously-active tab's position to this one when the
         // active tab changes. Spring physics give it a snappy but smooth
-        // slide (≈250ms effective duration).
+        // slide (~280ms effective duration) with a small overshoot for a
+        // lively feel.
+        //
+        // Tuned for "premium tab bar" feel: stiffness 380 gives a fast
+        // initial sweep; damping 28 = one small bounce on landing (not
+        // too springy); mass 0.85 makes it feel light/snappy.
         <motion.span
           layoutId="category-tab-pill"
           className="absolute inset-0 rounded-md bg-foreground"
-          // Spring with a slight bounce — lower damping gives it one small
-          // overshoot when it lands on the new tab, making the slide feel
-          // alive rather than robotic. Stiffness stays high so the slide
-          // is fast (~250ms effective duration).
-          transition={{ type: 'spring', stiffness: 420, damping: 26, mass: 0.9 }}
+          transition={{ type: 'spring', stiffness: 380, damping: 28, mass: 0.85 }}
           style={{ zIndex: 0 }}
         />
       )}
@@ -2011,7 +2021,7 @@ function CategoryTab({
           </svg>
         </span>
       )}
-    </button>
+    </motion.button>
   )
 }
 

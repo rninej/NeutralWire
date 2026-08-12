@@ -479,6 +479,40 @@ export async function GET(req: NextRequest) {
           archivedAt: now,
         }).catch(() => {})
 
+        // ── Pre-generate the neutral summary for this story ──
+        // When the user clicks the notification, the topic detail opens
+        // and the neutral summary loads. If we generate it NOW (in the
+        // cron), the summary is already cached in Firebase by the time
+        // the user clicks — so the detail page loads instantly.
+        //
+        // We fire-and-forget this (don't await) so it doesn't slow down
+        // the push sending. The summary API deduplicates concurrent
+        // requests for the same topicId, so multiple cron runs won't
+        // generate the same summary twice.
+        try {
+          const articlesForSummary = (bestStory.articles || []).slice(0, 12).map((a) => ({
+            title: a.title,
+            description: a.description,
+            sourceName: a.sourceName,
+            leaning: a.leaning,
+          }))
+          if (articlesForSummary.length > 0 || bestStory.summary) {
+            fetch(`${PRODUCTION_ORIGIN}/api/summary`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                topicId: bestStory.topicId,
+                title: bestStory.title,
+                topicSummary: bestStory.summary || '',
+                articles: articlesForSummary,
+              }),
+              signal: AbortSignal.timeout(12000),
+            }).catch(() => {}) // fire-and-forget — don't block push sending
+          }
+        } catch {
+          // silent — summary generation is a nice-to-have, not critical
+        }
+
         await new Promise((r) => setTimeout(r, 100))
       } catch (err) {
         failedCount++

@@ -402,10 +402,14 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
       role="dialog"
       aria-modal="true"
       aria-label={topic.title}
-      initial={{ opacity: 0, y: 40 }}
+      // Smooth fade + subtle slide-up on open; reverse on close. The y
+      // offset is intentionally small (16px) so the transition reads as a
+      // FADE with a hint of motion, not a slide. Duration 0.28s is fast
+      // enough to feel responsive but slow enough to read as "polished".
+      initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 40 }}
-      transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
+      exit={{ opacity: 0, y: 16 }}
+      transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
     >
       {/* Sticky top bar: Close (left) | right group (ml-auto) → like/dislike + Share + Ask AI(sticky)
           The .glass class activates the platform-specific backdrop blur + bg
@@ -1109,39 +1113,41 @@ function SourceNameWithRating({
 }
 
 // ── Skeleton loader for the neutral summary ──
-// Shimmer effect that looks like the network is loading content,
-// while actually the AI is generating the summary in the background.
+// Uses the .shimmer class (gradient sweep, defined in globals.css) for a
+// more premium loading effect than the flat animate-pulse opacity flicker.
+// The shimmer runs on top of bg-muted so the lines have a base color, and
+// the gradient sweep adds a subtle "data is loading" sheen.
 function SummarySkeleton() {
   return (
     <div className="space-y-4">
       {/* Fake heading */}
       <div className="space-y-2">
-        <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+        <div className="h-4 w-32 shimmer rounded bg-muted" />
       </div>
       {/* Fake paragraph */}
       <div className="space-y-2">
-        <div className="h-3 w-full animate-pulse rounded bg-muted" />
-        <div className="h-3 w-full animate-pulse rounded bg-muted" />
-        <div className="h-3 w-4/5 animate-pulse rounded bg-muted" />
+        <div className="h-3 w-full shimmer rounded bg-muted" />
+        <div className="h-3 w-full shimmer rounded bg-muted" />
+        <div className="h-3 w-4/5 shimmer rounded bg-muted" />
       </div>
       {/* Fake heading */}
       <div className="space-y-2 pt-2">
-        <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+        <div className="h-4 w-28 shimmer rounded bg-muted" />
       </div>
       {/* Fake paragraph */}
       <div className="space-y-2">
-        <div className="h-3 w-full animate-pulse rounded bg-muted" />
-        <div className="h-3 w-full animate-pulse rounded bg-muted" />
-        <div className="h-3 w-3/4 animate-pulse rounded bg-muted" />
+        <div className="h-3 w-full shimmer rounded bg-muted" />
+        <div className="h-3 w-full shimmer rounded bg-muted" />
+        <div className="h-3 w-3/4 shimmer rounded bg-muted" />
       </div>
       {/* Fake heading */}
       <div className="space-y-2 pt-2">
-        <div className="h-4 w-36 animate-pulse rounded bg-muted" />
+        <div className="h-4 w-36 shimmer rounded bg-muted" />
       </div>
       {/* Fake paragraph */}
       <div className="space-y-2">
-        <div className="h-3 w-full animate-pulse rounded bg-muted" />
-        <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
+        <div className="h-3 w-full shimmer rounded bg-muted" />
+        <div className="h-3 w-5/6 shimmer rounded bg-muted" />
       </div>
     </div>
   )

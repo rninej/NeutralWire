@@ -189,13 +189,21 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   }
 
   // Stagger delay: cap so the last card in a long list isn't waiting seconds.
-  const staggerDelay = Math.min(index * 0.04, 0.32)
+  // 0.035s per card (was 0.04) — slightly smoother spread, still finishes
+  // within ~0.35s for the first 10 cards. Combined with the slightly longer
+  // duration (0.32s) and smaller y offset (6px), the entrance feels more
+  // relaxed and "premium" — like cards settling into place.
+  const staggerDelay = Math.min(index * 0.035, 0.30)
   const cardMotion = {
-    initial: { opacity: 0, y: 8 },
+    initial: { opacity: 0, y: 6 },
     animate: { opacity: 1, y: 0 },
-    transition: { duration: 0.3, delay: staggerDelay, ease: EASE_OUT },
-    whileHover: onOpenDetail ? { scale: 1.02 } : undefined,
-    whileTap: onOpenDetail ? { scale: 0.98 } : undefined,
+    transition: { duration: 0.32, delay: staggerDelay, ease: EASE_OUT },
+    // Hover lift: 1.02 scale + 2px translateY (via .card-lift CSS class).
+    // The .card-lift class also adds a 0.25s transition for transform +
+    // box-shadow so the lift + bias-tinted glow (from .card-glow) animate
+    // in together smoothly.
+    whileHover: onOpenDetail ? { scale: 1.015, y: -2 } : undefined,
+    whileTap: onOpenDetail ? { scale: 0.985 } : undefined,
   }
 
   // ── Card hover glow (desktop only — see .card-glow CSS rule) ──
@@ -253,13 +261,13 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
     // original behavior for any TopicCard used outside the main feed.
     if (!onDismiss) {
       return (
-        <motion.div {...cardMotion} className="group card-glow rounded-lg" style={glowStyle}>
+        <motion.div {...cardMotion} className="group card-glow card-lift rounded-lg" style={glowStyle}>
           {content}
         </motion.div>
       )
     }
     return (
-      <motion.div {...cardMotion} className="group card-glow rounded-lg" style={glowStyle}>
+      <motion.div {...cardMotion} className="group card-glow card-lift rounded-lg" style={glowStyle}>
         <div className="relative">
           {/* Red glow background — intensifies with swipe distance.
               Uses bg-red-500 (a solid red) with a motion-driven opacity

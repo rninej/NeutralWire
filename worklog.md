@@ -1741,3 +1741,227 @@ Stage Summary:
 - Time range selector: 24h / 7d / 30d / 90d.
 - Existing push notification diagnostics preserved in a collapsible section.
 - Analytics tracking is lightweight (sendBeacon, throttled, fire-and-forget).
+
+---
+Task ID: animations-account-themes
+Agent: main (Z.ai Code)
+Task: 1) Polish app animations throughout (tab switching, card hover, page transitions, stagger, button micro-interactions, search bar, theme toggle circular reveal, loading states). 2) Replace header money/dollar icon with an Account icon that opens a user page (guest name, referral, ultra-personalize feed, theme switcher). 3) Add 3 new themes (Midnight, Sepia, High Contrast) on top of Light + Dark. Preserve Ko-fi donation + referral tracking.
+
+Work Log:
+
+PART 1 — Animations (Framer Motion + CSS):
+
+1. Tab switching (page-client.tsx CategoryTab):
+   - Converted <button> → <motion.button> with whileTap={{ scale: 0.94 }}
+     for a subtle tap-scale micro-interaction.
+   - Added .tab-pill-text class (globals.css) for a 0.2s color cross-fade
+     so the text doesn't snap when active changes.
+   - Re-tuned sliding pill spring: stiffness 380, damping 28, mass 0.85
+     (was 420/26/0.9) — slightly more lively overshoot, ~280ms duration.
+
+2. Card hover (topic-card.tsx):
+   - Added .card-lift CSS class (globals.css): on hover (desktop only via
+     @media hover:hover), translateY(-2px) + box-shadow transition over
+     0.25s. Pairs with the existing .card-glow (bias-tinted halo) for a
+     combined lift + glow effect.
+   - whileHover changed from { scale: 1.02 } to { scale: 1.015, y: -2 }
+     (combined scale + lift, more subtle).
+   - whileTap changed from { scale: 0.98 } to { scale: 0.985 }.
+
+3. Page transitions (topic-detail.tsx):
+   - initial/animate/exit y: 40 → 16 (more fade, less slide).
+   - Duration 0.3 → 0.28 (slightly snappier).
+
+4. Stagger animations (topic-card.tsx):
+   - Per-card delay 0.04 → 0.035s, max 0.32 → 0.30s.
+   - Duration 0.3 → 0.32s, y offset 8 → 6px. Reads as cards "settling
+     into place" rather than popping in.
+
+5. Button micro-interactions (page-client.tsx, theme-toggle.tsx):
+   - Account button: added active:scale-95 + transition-transform
+     duration-150 (CSS-only tap scale, no JS overhead).
+   - ThemeToggle: same active:scale-95.
+   - ThemeSwitcher swatches: active:scale-95 on each theme button.
+   - Also defined .ripple + @keyframes nw-ripple CSS classes for a
+     material-style ripple, ready to use (not wired up to every button
+     since the tap-scale already gives responsive feedback).
+
+6. Search bar (page-client.tsx): already had a smooth expand/collapse
+   animation (height + opacity + scale, 220ms). Verified it still works
+   — no changes needed.
+
+7. Theme toggle circular reveal (NEW):
+   - Created src/lib/use-theme-reveal.ts with useThemeReveal() hook.
+   - Hook captures click position, sets --theme-reveal-x/y CSS vars on
+     <html>, then calls document.startViewTransition(() => setTheme(next))
+     if the View Transitions API is supported (Chrome/Edge/Safari 18+).
+     Falls back to instant switch on Firefox/older browsers.
+   - CSS in globals.css: ::view-transition-new(root) animates
+     clip-path: circle(0% → 150%) at the click point over 0.55s with
+     cubic-bezier(0.2, 0.6, 0.3, 1). The old snapshot stays visible
+     underneath so the new theme "wipes in" outward from the tap.
+
+8. Loading states (topic-detail.tsx):
+   - SummarySkeleton: replaced every animate-pulse with .shimmer class
+     (gradient sweep on top of bg-muted). More premium than flat
+     opacity flicker.
+   - LoadingState in page-client.tsx already uses .shimmer (verified).
+
+PART 2 — Account icon + user page:
+
+- Replaced the header's Heart (Ko-fi) + DollarSign (Refer) buttons with
+  a single UserCircle Account button. Clicking it opens the new
+  UserPage component as a full-screen overlay (motion.div with fade +
+  slide-up, wrapped in AnimatePresence for exit animation).
+
+- Created src/components/user-page.tsx (~490 lines, 6 staggered sections):
+  1. Guest name — calls getOrCreateGuestName() from src/lib/guest-name.ts.
+     Shows "Guest XXXX" (4 random digits, persisted in
+     localStorage:neutralwire:guest-name). Generated once on first visit.
+  2. Refer others — calls /api/referral/create + /api/referral/stats
+     (same endpoints as the old ReferralDialog). Shows referral code,
+     shareable link (/?ref=CODE), copy + share buttons, and live stats
+     (polls every 15s).
+  3. Ultra-personalize feed — 8 subtopic Switch toggles (world, politics,
+     business, technology, science, health, sports, top). Uses
+     setInterestsLocal + syncInterestsWithFirebase from
+     src/lib/user-interests.ts. Dispatches 'neutralwire:interests-changed'
+     event so the main feed re-personalizes immediately. "Reset
+     personalization" button clears all interests.
+  4. Theme — 5-theme grid using ThemeSwitcher from theme-toggle.tsx.
+     Each swatch shows a gradient preview + label + description; the
+     active theme gets a ring + checkmark. Clicking triggers the
+     circular reveal transition.
+  5. Notifications — Enable button (requests Notification.permission +
+     subscribes to push via /api/push/vapid + /api/push/subscribe) +
+     frequency selector (3 per day / All news). Mirrors the
+     NotificationEnabler logic from referral-dialog.tsx.
+  6. Support NeutralWire — Ko-fi link (moved from the header Heart
+     button). Pink button with Heart icon, opens ko-fi.com/neutralwire
+     in a new tab.
+
+- Each section animates in with a staggered fade + slide-up (delay
+  0/0.05/0.1/0.15/0.2/0.25s, 0.35s duration, ease [0.16, 1, 0.3, 1]).
+  Personalize toggles also stagger in (0.03s per row).
+
+PART 3 — Multi-theme system:
+
+- Extended next-themes (src/components/theme-provider.tsx):
+  - storageKey="neutralwire:theme" (was default 'theme').
+  - themes=['light','dark','midnight','sepia','high-contrast'].
+  - Removed disableTransitionOnChange (would interfere with View
+    Transitions — the snapshot-based transition already prevents
+    flashes without needing to disable CSS transitions).
+
+- Added 3 new theme variable blocks in globals.css:
+  - .midnight — very dark blue (oklch(0.16 0.025 250) bg, light blue
+    text). Easier on the eyes than pure dark for late-night reading.
+  - .sepia — warm cream/beige (oklch(0.94 0.025 75) bg, dark brown
+    text). Reduces blue light, e-reader feel.
+  - .high-contrast — pure black on white. Maximum legibility. Extra
+    overrides: * border-color forced to black; .glass/.card-glass
+    forced solid white (no backdrop-filter); .text-muted-foreground
+    forced near-black; *:focus-visible gets 3px solid black outline.
+
+- Extended all .dark CSS rules to also match .midnight (it's a dark
+  variant) for: .glass-frosted, .glass-liquid, .platform-android .glass,
+  .platform-apple .glass, .pwa.platform-* .card-glass, .shimmer,
+  .nw-scrollbar (all 4 variants). Midnight gets its own slightly blue-
+  tinted background variants (rgb(14 18 32 / ...) instead of rgb(18 18
+  20 / ...)).
+
+- Added .sepia .shimmer with a warm-tinted sweep (rgb(60 40 20 / ...))
+  so the loading shimmer matches the sepia aesthetic.
+
+- Created src/lib/use-theme-reveal.ts with:
+  - useThemeReveal() hook — wraps setTheme in a View Transitions API
+    circular reveal from the click point. Sets --theme-reveal-x/y CSS
+    vars on <html>, then calls document.startViewTransition(). Falls
+    back to instant switch on unsupported browsers.
+  - THEME_OPTIONS array — 5 themes with id/label/description/swatch
+    (CSS gradient for the preview circle).
+  - ThemeId type.
+
+- Updated src/components/theme-toggle.tsx:
+  - ThemeToggle (header) — quick-toggles light↔dark with circular
+    reveal + active:scale-95 tap micro-interaction.
+  - ThemeSwitcher (new export) — 2-3 col grid of theme swatches used
+    in the user page. Each button shows gradient + label + description
+    + active ring. Clicking triggers the circular reveal.
+
+PART 4 — Functionality preserved:
+
+- Ko-fi donation: moved into user page "Support NeutralWire" section.
+- Referral tracking: /api/referral/track still fires on every page load
+  (untouched). The referral code is created in the user page via
+  /api/referral/create (same endpoint the old ReferralDialog used).
+- Existing interests system: setInterestsLocal +
+  syncInterestsWithFirebase + the 'neutralwire:interests-changed' event
+  all still work. The main feed listens for the event and re-
+  personalizes immediately.
+- Existing platform glass theme: .glass / .glass-frosted / .glass-liquid
+  / .card-glass rules preserved; extended for .midnight.
+- Existing shimmer / card-glow / nw-scrollbar / scroll-top-enter CSS:
+  preserved; shimmer extended for .midnight + .sepia.
+- Existing swipe-to-dismiss in topic-card.tsx: wrapWithSwipe still
+  works; only the outer motion.div className got card-lift added.
+- Existing topic-detail animations: image zoom-in, sticky Ask AI,
+  like/dislike tap scale, share-button swap — all preserved.
+- referral-dialog.tsx file: kept as-is (no longer opened from the
+  header, but file + NotificationEnabler component still exist as
+  dead code; tree-shaking excludes it from the bundle since nothing
+  imports it).
+
+VERIFICATION:
+- bun run lint: PASS (0 errors, 0 warnings).
+- curl http://localhost:3000/ → HTTP 200 (was briefly 500 when I forgot
+  to export ThemeSwitcher from theme-toggle.tsx — fixed).
+- Agent Browser: page loads cleanly, NO console errors.
+- Clicked "Open account" → user page opens with all 6 sections:
+  Guest name "Guest 2468" + referral code/URL/stats + 8 personalization
+  toggles + 5 theme buttons + Enable notifications + Support NeutralWire.
+- Clicked "Midnight" → <html className="midnight"> + localStorage
+  neutralwire:theme = "midnight".
+- Clicked "Sepia" → <html className="sepia">.
+- Clicked "High Contrast" → <html className="high-contrast">.
+- Clicked "Light" → <html className="light"> (light variables apply via
+  :root selector).
+- Clicked "Politics" toggle → localStorage neutralwire:interests =
+  ["politics"].
+- Clicked "Close" → user page closes (exit animation runs).
+- Header ThemeToggle: click → dark, click → light.
+- Category tab click (Politics) → no errors; sliding pill animates.
+- Topic card click → topic detail opens (fade + slight slide); Close
+  → closes.
+
+Files changed:
+- src/lib/guest-name.ts (NEW, 67 lines)
+- src/lib/use-theme-reveal.ts (NEW, 95 lines)
+- src/components/user-page.tsx (NEW, 490 lines)
+- src/agent-ctx/animations-account-themes-main.md (NEW — work record)
+- src/app/globals.css (+ ~280 lines: 3 new theme blocks, glass/shimmer/
+  scrollbar extensions for .midnight + .sepia, High Contrast overrides,
+  ripple + theme-reveal + card-lift + tab-pill-text keyframes/classes)
+- src/components/theme-provider.tsx (rewritten, 47 lines)
+- src/components/theme-toggle.tsx (rewritten, 111 lines — added
+  ThemeSwitcher export)
+- src/app/page-client.tsx (4 edits — swapped icons, added UserPage
+  mount, motion.button for CategoryTab with smoother spring)
+- src/components/topic-card.tsx (3 edits — smoother stagger, whileHover
+  lift, card-lift class)
+- src/components/topic-detail.tsx (2 edits — smoother page transition,
+  shimmer skeleton)
+
+Stage Summary:
+- Animations: tab pill springs re-tuned, cards lift on hover, topic
+  detail fades in (less slide), stagger smoother, buttons tap-scale,
+  theme toggle does a circular reveal via View Transitions API,
+  skeletons shimmer.
+- Account icon: UserCircle replaces Heart + DollarSign in header.
+  Clicking opens a full-screen user page with 6 sections (guest name,
+  referral, ultra-personalize, theme, notifications, support).
+- Themes: 5 themes total (Light, Dark, Midnight, Sepia, High Contrast).
+  All persisted in localStorage:neutralwire:theme. Switching uses a
+  circular reveal animation in supported browsers.
+- Nothing broken: Ko-fi + referral + interests + glass + swipe-to-
+  dismiss + topic detail all still work.
