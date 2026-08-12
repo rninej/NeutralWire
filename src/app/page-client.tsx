@@ -14,6 +14,7 @@ import {
   Cloud,
   X,
   UserCircle,
+  Heart,
   WifiOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -1580,17 +1581,25 @@ export default function Home() {
           </Badge>
 
           <div className="ml-auto flex items-center gap-2">
+            {/* Donate button — opens Ko-fi in a new tab. Direct access to
+                the support page without opening the full user page. */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => window.open('https://ko-fi.com/neutralwire', '_blank')}
+              className="transition-transform duration-150 active:scale-95 hover:text-rose-500"
+              aria-label="Support NeutralWire on Ko-fi"
+              title="Support NeutralWire"
+            >
+              <Heart className="h-5 w-5" />
+            </Button>
+
             {/* Account button — opens the user page (guest name, referrals,
-                personalization, themes, support). Replaces the old Heart +
-                DollarSign buttons (which opened the Ko-fi page + referral
-                dialog separately). All that functionality is now consolidated
-                into the user page. */}
+                personalization, themes, support). */}
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setUserPageOpen(true)}
-              // active:scale-95 + transition-transform = subtle tap-scale
-              // micro-interaction without needing a motion wrapper.
               className="gap-1.5 transition-transform duration-150 active:scale-95"
               aria-label="Open account"
               title="Account, referrals, themes"
