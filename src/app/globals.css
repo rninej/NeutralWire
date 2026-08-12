@@ -557,11 +557,20 @@
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
-/* .dark / .midnight are on <html>, glass element is a descendant of <body>.
-   Both dark themes get the dark glass variant. Sepia + light keep the
+/* .dark / .midnight / .ocean / .forest / .sunset / .lavender / .rose / .mono
+   / .cyber / .gradient are on <html>, glass element is a descendant of <body>.
+   All dark-toned themes get the dark glass variant. Sepia + light keep the
    light variant. High-contrast is overridden separately (solid bg). */
 .dark .glass-frosted,
-.midnight .glass-frosted {
+.midnight .glass-frosted,
+.ocean .glass-frosted,
+.forest .glass-frosted,
+.sunset .glass-frosted,
+.lavender .glass-frosted,
+.rose .glass-frosted,
+.mono .glass-frosted,
+.cyber .glass-frosted,
+.gradient .glass-frosted {
   background: rgb(18 18 20 / 0.65);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
@@ -577,7 +586,15 @@
   border: 1px solid rgb(255 255 255 / 0.12);
 }
 .dark .glass-liquid,
-.midnight .glass-liquid {
+.midnight .glass-liquid,
+.ocean .glass-liquid,
+.forest .glass-liquid,
+.sunset .glass-liquid,
+.lavender .glass-liquid,
+.rose .glass-liquid,
+.mono .glass-liquid,
+.cyber .glass-liquid,
+.gradient .glass-liquid {
   background: rgb(22 22 26 / 0.55);
   backdrop-filter: blur(30px) saturate(150%);
   -webkit-backdrop-filter: blur(30px) saturate(150%);
@@ -599,11 +616,9 @@
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
-/* Dark mode: .dark / .midnight are on <html>, .platform-android is on <body> */
-.dark .platform-android .glass,
-.midnight .platform-android .glass,
-.platform-android .dark .glass,
-.platform-android .midnight .glass {
+/* Dark mode: dark-toned theme classes are on <html>, .platform-android is on <body> */
+:is(.dark, .midnight, .ocean, .forest, .sunset, .lavender, .rose, .mono, .cyber, .gradient) .platform-android .glass,
+.platform-android :is(.dark, .midnight, .ocean, .forest, .sunset, .lavender, .rose, .mono, .cyber, .gradient) .glass {
   background: rgb(18 18 20 / 0.65);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
@@ -619,10 +634,8 @@
   border: 1px solid rgb(255 255 255 / 0.12);
   box-shadow: 0 8px 32px -8px rgb(0 0 0 / 0.08);
 }
-.dark .platform-apple .glass,
-.midnight .platform-apple .glass,
-.platform-apple .dark .glass,
-.platform-apple .midnight .glass {
+:is(.dark, .midnight, .ocean, .forest, .sunset, .lavender, .rose, .mono, .cyber, .gradient) .platform-apple .glass,
+.platform-apple :is(.dark, .midnight, .ocean, .forest, .sunset, .lavender, .rose, .mono, .cyber, .gradient) .glass {
   background: rgb(22 22 26 / 0.55);
   backdrop-filter: blur(30px) saturate(150%);
   -webkit-backdrop-filter: blur(30px) saturate(150%);
@@ -657,10 +670,8 @@
   -webkit-backdrop-filter: blur(24px) saturate(135%);
   border-color: rgb(0 0 0 / 0.06);
 }
-.dark .pwa.platform-android .card-glass,
-.dark .pwa.platform-apple .card-glass,
-.midnight .pwa.platform-android .card-glass,
-.midnight .pwa.platform-apple .card-glass {
+:is(.dark, .midnight, .ocean, .forest, .sunset, .lavender, .rose, .mono, .cyber, .gradient) .pwa.platform-android .card-glass,
+:is(.dark, .midnight, .ocean, .forest, .sunset, .lavender, .rose, .mono, .cyber, .gradient) .pwa.platform-apple .card-glass {
   background: rgb(22 22 26 / 0.60);
   backdrop-filter: blur(24px) saturate(125%);
   -webkit-backdrop-filter: blur(24px) saturate(125%);

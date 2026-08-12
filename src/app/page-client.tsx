@@ -50,6 +50,7 @@ import { detectCountryClient, DEFAULT_COUNTRY } from '@/lib/country-detect'
 import { getDeviceId } from '@/lib/referral'
 import { trackPageView } from '@/lib/analytics-tracker'
 import { usePlatform } from '@/lib/use-platform'
+import { restoreGradient } from '@/lib/use-theme-reveal'
 import {
   getInterests,
   getEngagement,
@@ -183,6 +184,15 @@ export default function Home() {
   // elements. The return value is unused here — the side effect of
   // setting the body class is what matters.
   usePlatform()
+
+  // ── Restore saved gradient on mount ──
+  // If the user previously applied a custom gradient theme, re-apply it
+  // so it persists across page refreshes. The solid theme is handled by
+  // next-themes (stored in localStorage:neutralwire:theme), but the
+  // gradient overlay needs manual restoration.
+  useEffect(() => {
+    restoreGradient()
+  }, [])
 
   // --- Country detection ---
   const [country, setCountry] = useState<CountryInfo | null>(null)

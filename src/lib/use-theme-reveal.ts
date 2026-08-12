@@ -30,12 +30,25 @@ export function useThemeReveal() {
       const x = event?.clientX ?? window.innerWidth / 2
       const y = event?.clientY ?? window.innerHeight / 2
 
-      // Set the reveal origin as CSS custom properties on <html>. The
-      // ::view-transition-new(root) rule in globals.css uses these in its
-      // clip-path: circle(150% at var(--theme-reveal-x) var(--theme-reveal-y)).
+      // Set the reveal origin as CSS custom properties on <html>.
       const root = document.documentElement
       root.style.setProperty('--theme-reveal-x', `${x}px`)
       root.style.setProperty('--theme-reveal-y', `${y}px`)
+
+      // ── Clear gradient when switching to a solid theme ──
+      // When the user picks a solid theme (light, dark, ocean, etc.),
+      // remove any active gradient overlay so they don't stack.
+      // The only exception is theme 'gradient' itself (used internally
+      // by the gradient presets, which manage the gradient separately).
+      if (nextTheme !== 'gradient') {
+        root.classList.remove('gradient-theme')
+        root.style.removeProperty('--gradient-bg')
+        try {
+          localStorage.removeItem('neutralwire:gradient')
+          // Notify gradient preset components to update their active state
+          window.dispatchEvent(new CustomEvent('neutralwire:gradient-changed'))
+        } catch {}
+      }
 
       // If the browser supports the View Transitions API, wrap the theme
       // change in a transition so the new theme "wipes in" from the click
@@ -56,6 +69,30 @@ export function useThemeReveal() {
     },
     [setTheme],
   )
+}
+
+/**
+ * Restore a saved gradient on page load.
+ *
+ * Call this in a useEffect on mount (e.g. in layout or page-client).
+ * If the user previously applied a gradient (stored in localStorage),
+ * this re-applies it: adds the 'gradient-theme' class to <html> and
+ * sets the --gradient-bg CSS variable.
+ *
+ * This makes gradients persist across page refreshes.
+ */
+export function restoreGradient() {
+  if (typeof window === 'undefined') return
+  try {
+    const saved = localStorage.getItem('neutralwire:gradient')
+    if (saved) {
+      const root = document.documentElement
+      root.classList.add('gradient-theme')
+      root.style.setProperty('--gradient-bg', saved)
+    }
+  } catch {
+    // localStorage might be blocked — silent
+  }
 }
 
 /**

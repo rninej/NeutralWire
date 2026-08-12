@@ -675,23 +675,32 @@ function GradientPreset({ id, label, gradient }: {
   const { setTheme } = useTheme()
   const [active, setActive] = React.useState(false)
 
-  React.useEffect(() => {
-    // Check if this gradient is the active one
+  // Check if this gradient is the active one on mount + when any gradient changes
+  const checkActive = React.useCallback(() => {
     try {
       const stored = localStorage.getItem('neutralwire:gradient')
       setActive(stored === gradient)
     } catch {}
   }, [gradient])
 
+  React.useEffect(() => {
+    checkActive()
+    // Listen for gradient changes from other components (CustomGradientMaker,
+    // other GradientPresets) so only one shows as active at a time.
+    window.addEventListener('neutralwire:gradient-changed', checkActive)
+    return () => window.removeEventListener('neutralwire:gradient-changed', checkActive)
+  }, [checkActive])
+
   const handleClick = () => {
     try {
-      // Set dark theme as the base
+      // Set dark theme as the base (clears any solid theme via next-themes)
       setTheme('dark')
       // Apply the gradient
       document.documentElement.classList.add('gradient-theme')
       document.documentElement.style.setProperty('--gradient-bg', gradient)
       localStorage.setItem('neutralwire:gradient', gradient)
-      setActive(true)
+      // Notify all gradient components to update their active state
+      window.dispatchEvent(new CustomEvent('neutralwire:gradient-changed'))
     } catch {}
   }
 
@@ -741,6 +750,8 @@ function CustomGradientMaker() {
       document.documentElement.classList.add('gradient-theme')
       document.documentElement.style.setProperty('--gradient-bg', gradient)
       localStorage.setItem('neutralwire:gradient', gradient)
+      // Notify all gradient components to update their active state
+      window.dispatchEvent(new CustomEvent('neutralwire:gradient-changed'))
     } catch {}
   }
 
