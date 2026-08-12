@@ -1582,16 +1582,17 @@ export default function Home() {
 
           <div className="ml-auto flex items-center gap-2">
             {/* Donate button — opens Ko-fi in a new tab. Direct access to
-                the support page without opening the full user page. */}
+                the support page without opening the full user page.
+                Always red (rose-500) so it stands out as a donation CTA. */}
             <Button
               variant="ghost"
               size="icon"
               onClick={() => window.open('https://ko-fi.com/neutralwire', '_blank')}
-              className="transition-transform duration-150 active:scale-95 hover:text-rose-500"
+              className="transition-transform duration-150 active:scale-95 text-rose-500 hover:text-rose-600"
               aria-label="Support NeutralWire on Ko-fi"
               title="Support NeutralWire"
             >
-              <Heart className="h-5 w-5" />
+              <Heart className="h-5 w-5" fill="currentColor" />
             </Button>
 
             {/* Account button — opens the user page (guest name, referrals,

@@ -32,6 +32,8 @@ import {
 } from '@/lib/user-interests'
 import { getOrCreateGuestName } from '@/lib/guest-name'
 import { ThemeSwitcher } from '@/components/theme-toggle'
+import { GRADIENT_PRESETS } from '@/lib/use-theme-reveal'
+import { useTheme } from 'next-themes'
 
 interface UserPageProps {
   onClose: () => void
@@ -513,7 +515,27 @@ export function UserPage({ onClose }: UserPageProps) {
               Pick a color scheme. Switching uses a circular reveal from where
               you tap.
             </p>
+
+            {/* Solid themes */}
             <ThemeSwitcher />
+
+            {/* Gradient presets */}
+            <div className="mt-5">
+              <h3 className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Gradient Backgrounds
+              </h3>
+              <p className="mb-3 text-xs text-muted-foreground">
+                Pick a gradient to overlay on the dark theme.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {GRADIENT_PRESETS.map((g) => (
+                  <GradientPreset key={g.id} id={g.id} label={g.label} gradient={g.gradient} />
+                ))}
+              </div>
+            </div>
+
+            {/* Custom gradient maker */}
+            <CustomGradientMaker />
           </Card>
         </motion.div>
 
@@ -641,3 +663,161 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 // Re-export so consumers can use AnimatePresence with the user page (the
 // exit animation needs to be wrapped).
 export const UserPageAnimatePresence = AnimatePresence
+
+// ── Gradient preset button ──
+// Shows the gradient as a swatch; clicking it applies the gradient as a
+// background overlay on top of the dark theme.
+function GradientPreset({ id, label, gradient }: {
+  id: string
+  label: string
+  gradient: string
+}) {
+  const { setTheme } = useTheme()
+  const [active, setActive] = React.useState(false)
+
+  React.useEffect(() => {
+    // Check if this gradient is the active one
+    try {
+      const stored = localStorage.getItem('neutralwire:gradient')
+      setActive(stored === gradient)
+    } catch {}
+  }, [gradient])
+
+  const handleClick = () => {
+    try {
+      // Set dark theme as the base
+      setTheme('dark')
+      // Apply the gradient
+      document.documentElement.classList.add('gradient-theme')
+      document.documentElement.style.setProperty('--gradient-bg', gradient)
+      localStorage.setItem('neutralwire:gradient', gradient)
+      setActive(true)
+    } catch {}
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className={cn(
+        'group relative flex flex-col items-center gap-1.5 rounded-lg border p-2 transition-all active:scale-95',
+        active
+          ? 'border-foreground ring-2 ring-foreground/20'
+          : 'border-border hover:border-foreground/30',
+      )}
+    >
+      <span
+        className="h-10 w-full rounded-md"
+        style={{ background: gradient }}
+        aria-hidden
+      />
+      <span className="text-[10px] font-medium">{label}</span>
+      {active && (
+        <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-background text-[8px] font-bold">
+          ✓
+        </span>
+      )}
+    </button>
+  )
+}
+
+// ── Custom gradient maker ──
+// Lets the user pick 2-3 colors + angle and creates a custom gradient.
+function CustomGradientMaker() {
+  const { setTheme } = useTheme()
+  const [color1, setColor1] = React.useState('#1a1a2e')
+  const [color2, setColor2] = React.useState('#16213e')
+  const [color3, setColor3] = React.useState('#0f3460')
+  const [useThirdColor, setUseThirdColor] = React.useState(true)
+  const [angle, setAngle] = React.useState(135)
+
+  const gradient = useThirdColor
+    ? `linear-gradient(${angle}deg, ${color1} 0%, ${color2} 50%, ${color3} 100%)`
+    : `linear-gradient(${angle}deg, ${color1} 0%, ${color2} 100%)`
+
+  const handleApply = () => {
+    try {
+      setTheme('dark')
+      document.documentElement.classList.add('gradient-theme')
+      document.documentElement.style.setProperty('--gradient-bg', gradient)
+      localStorage.setItem('neutralwire:gradient', gradient)
+    } catch {}
+  }
+
+  return (
+    <div className="mt-5">
+      <h3 className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+        Custom Gradient Maker
+      </h3>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Pick your own colors + angle to create a unique gradient background.
+      </p>
+
+      {/* Live preview */}
+      <div
+        className="mb-3 h-16 w-full rounded-lg border border-border"
+        style={{ background: gradient }}
+      />
+
+      {/* Color pickers */}
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        <div>
+          <label className="text-[10px] text-muted-foreground block mb-1">Color 1</label>
+          <input
+            type="color"
+            value={color1}
+            onChange={(e) => setColor1(e.target.value)}
+            className="w-full h-9 rounded-md border border-border cursor-pointer bg-transparent"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] text-muted-foreground block mb-1">Color 2</label>
+          <input
+            type="color"
+            value={color2}
+            onChange={(e) => setColor2(e.target.value)}
+            className="w-full h-9 rounded-md border border-border cursor-pointer bg-transparent"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] text-muted-foreground block mb-1">
+            Color 3 {useThirdColor ? '' : '(off)'}
+          </label>
+          <input
+            type="color"
+            value={color3}
+            onChange={(e) => setColor3(e.target.value)}
+            disabled={!useThirdColor}
+            className={cn(
+              'w-full h-9 rounded-md border border-border cursor-pointer bg-transparent',
+              !useThirdColor && 'opacity-30',
+            )}
+          />
+        </div>
+      </div>
+
+      {/* Toggle 3rd color + angle slider */}
+      <div className="flex items-center gap-4 mb-3">
+        <label className="flex items-center gap-2 text-xs">
+          <Switch checked={useThirdColor} onCheckedChange={setUseThirdColor} />
+          <span>3rd color</span>
+        </label>
+        <label className="flex items-center gap-2 text-xs flex-1">
+          <span className="text-muted-foreground whitespace-nowrap">Angle: {angle}°</span>
+          <input
+            type="range"
+            min={0}
+            max={360}
+            value={angle}
+            onChange={(e) => setAngle(Number(e.target.value))}
+            className="flex-1 accent-foreground"
+          />
+        </label>
+      </div>
+
+      <Button onClick={handleApply} size="sm" className="w-full">
+        Apply Custom Gradient
+      </Button>
+    </div>
+  )
+}

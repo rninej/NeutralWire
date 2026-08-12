@@ -30,15 +30,18 @@ export function ThemeToggle() {
   // For the icon, use resolvedTheme (handles 'system' by returning the
   // actual computed theme). For the click behavior, use theme (the user's
   // explicit selection).
-  const isDark = mounted && (resolvedTheme === 'dark' || resolvedTheme === 'midnight')
+  // Any dark-toned theme (dark, midnight, ocean, forest, sunset, lavender,
+  // rose, mono, cyber, gradient) should show the Sun icon (indicating
+  // "currently dark, click for light").
+  const darkThemes = ['dark', 'midnight', 'ocean', 'forest', 'sunset', 'lavender', 'rose', 'mono', 'cyber', 'gradient']
+  const isDark = mounted && darkThemes.includes(resolvedTheme || '')
 
   const handleToggle = (e: React.MouseEvent) => {
-    // Simple 2-state toggle: light ↔ dark. If the user has a custom theme
-    // (midnight / sepia / high-contrast), we still toggle to dark (the most
-    // common alternative to light). They can pick a specific theme in the
-    // user page → Theme Switcher.
+    // Simple 2-state toggle: light ↔ dark. If the user has a dark-toned
+    // custom theme (midnight, ocean, forest, etc.), toggle to light.
+    // If they're on light/sepia/high-contrast, toggle to dark.
     const current = theme || resolvedTheme
-    const next = current === 'dark' || current === 'midnight' ? 'light' : 'dark'
+    const next = darkThemes.includes(current || '') ? 'light' : 'dark'
     setThemeWithReveal(next, e)
   }
 

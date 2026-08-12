@@ -68,7 +68,6 @@ export const THEME_OPTIONS = [
     id: 'light',
     label: 'Light',
     description: 'Default bright white',
-    // A small CSS gradient swatch shown next to each theme option.
     swatch: 'linear-gradient(135deg, #ffffff 50%, #e5e5e5 50%)',
   },
   {
@@ -95,6 +94,69 @@ export const THEME_OPTIONS = [
     description: 'Pure black on white',
     swatch: 'linear-gradient(135deg, #ffffff 50%, #000000 50%)',
   },
+  {
+    id: 'ocean',
+    label: 'Ocean',
+    description: 'Deep teal/cyan',
+    swatch: 'linear-gradient(135deg, #0d3b4f 50%, #1a6b8a 50%)',
+  },
+  {
+    id: 'forest',
+    label: 'Forest',
+    description: 'Deep green, nature',
+    swatch: 'linear-gradient(135deg, #1a3326 50%, #2d6b3f 50%)',
+  },
+  {
+    id: 'sunset',
+    label: 'Sunset',
+    description: 'Warm orange/pink',
+    swatch: 'linear-gradient(135deg, #4a2010 50%, #c8533a 50%)',
+  },
+  {
+    id: 'lavender',
+    label: 'Lavender',
+    description: 'Soft purple',
+    swatch: 'linear-gradient(135deg, #3a2a4f 50%, #7a5aa8 50%)',
+  },
+  {
+    id: 'rose',
+    label: 'Rose',
+    description: 'Soft pink/red',
+    swatch: 'linear-gradient(135deg, #3a1a1f 50%, #b8405a 50%)',
+  },
+  {
+    id: 'mono',
+    label: 'Mono',
+    description: 'Pure grayscale',
+    swatch: 'linear-gradient(135deg, #2a2a2a 50%, #6a6a6a 50%)',
+  },
+  {
+    id: 'cyber',
+    label: 'Cyber',
+    description: 'Neon green on dark',
+    swatch: 'linear-gradient(135deg, #0a1a0f 50%, #00ff7f 50%)',
+  },
 ] as const
 
-export type ThemeId = (typeof THEME_OPTIONS)[number]['id']
+/**
+ * Gradient presets — pre-made gradient backgrounds that can be applied on
+ * top of any dark theme. Each preset is a CSS gradient string.
+ * When the user picks a gradient, we:
+ *   1. Set the theme to 'dark' (as the base)
+ *   2. Set --gradient-bg CSS variable on <html>
+ *   3. Add 'gradient-theme' class to <html>
+ */
+export const GRADIENT_PRESETS = [
+  { id: 'aurora', label: 'Aurora', gradient: 'linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)' },
+  { id: 'sunset-blend', label: 'Sunset', gradient: 'linear-gradient(135deg, #2b1055 0%, #7597de 100%)' },
+  { id: 'fire', label: 'Fire', gradient: 'linear-gradient(135deg, #2b0a0a 0%, #8b0000 50%, #ff4500 100%)' },
+  { id: 'ocean-deep', label: 'Deep Ocean', gradient: 'linear-gradient(135deg, #000428 0%, #004e92 100%)' },
+  { id: 'forest-mist', label: 'Forest Mist', gradient: 'linear-gradient(135deg, #134e5e 0%, #71b280 100%)' },
+  { id: 'purple-haze', label: 'Purple Haze', gradient: 'linear-gradient(135deg, #1a0033 0%, #4b0082 50%, #8a2be2 100%)' },
+  { id: 'peach', label: 'Peach', gradient: 'linear-gradient(135deg, #614385 0%, #5f72bd 100%)' },
+  { id: 'mint', label: 'Mint', gradient: 'linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%)' },
+  { id: 'rose-gold', label: 'Rose Gold', gradient: 'linear-gradient(135deg, #4b1f3a 0%, #c08597 100%)' },
+  { id: 'steel', label: 'Steel', gradient: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)' },
+] as const
+
+export type ThemeId = string

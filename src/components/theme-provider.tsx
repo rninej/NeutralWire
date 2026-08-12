@@ -6,26 +6,23 @@ import { ThemeProvider as NextThemesProvider } from 'next-themes'
 /**
  * Theme provider wrapper around next-themes.
  *
- * Supports 5 themes:
+ * Supports 13 solid themes + custom gradient themes:
  *   - light (default)
  *   - dark
  *   - midnight (very dark blue)
  *   - sepia (warm beige)
  *   - high-contrast (pure black on white)
+ *   - ocean (deep teal/cyan)
+ *   - forest (deep green)
+ *   - sunset (warm orange/pink)
+ *   - lavender (soft purple)
+ *   - rose (soft pink/red)
+ *   - mono (pure grayscale)
+ *   - cyber (dark with neon green)
+ *   - gradient (custom gradient — set via --gradient-bg CSS variable)
  *
  * Each theme name is applied as a class on <html> (attribute="class"). The
- * corresponding CSS variables are defined in src/app/globals.css
- * (.dark, .midnight, .sepia, .high-contrast blocks).
- *
- * The theme is persisted in localStorage under `neutralwire:theme` (overriding
- * next-themes' default 'theme' key) so it doesn't collide with other apps
- * on the same domain.
- *
- * `disableTransitionOnChange` is intentionally NOT set — it would interfere
- * with the circular reveal View Transition we use when switching themes
- * (see useThemeReveal hook in src/components/theme-toggle.tsx). Theme flashes
- * are prevented by the View Transition's snapshot, not by CSS transition
- * disabling.
+ * corresponding CSS variables are defined in src/app/globals.css.
  */
 export function ThemeProvider({
   children,
@@ -37,7 +34,11 @@ export function ThemeProvider({
       defaultTheme="system"
       enableSystem
       storageKey="neutralwire:theme"
-      themes={['light', 'dark', 'midnight', 'sepia', 'high-contrast']}
+      themes={[
+        'light', 'dark', 'midnight', 'sepia', 'high-contrast',
+        'ocean', 'forest', 'sunset', 'lavender', 'rose', 'mono', 'cyber',
+        'gradient',
+      ]}
       {...props}
     >
       {children}

@@ -256,6 +256,278 @@
   outline-offset: 2px !important;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   ADDITIONAL THEMES — more color schemes for the user to choose from.
+   Each theme overrides the full set of CSS variables.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* OCEAN — deep teal/cyan, calming blue-green */
+.ocean {
+  --background: oklch(0.21 0.04 220);
+  --foreground: oklch(0.92 0.02 200);
+  --card: oklch(0.25 0.04 220);
+  --card-foreground: oklch(0.92 0.02 200);
+  --popover: oklch(0.25 0.04 220);
+  --popover-foreground: oklch(0.92 0.02 200);
+  --primary: oklch(0.65 0.15 200);
+  --primary-foreground: oklch(0.15 0.04 220);
+  --secondary: oklch(0.30 0.04 220);
+  --secondary-foreground: oklch(0.92 0.02 200);
+  --muted: oklch(0.30 0.04 220);
+  --muted-foreground: oklch(0.65 0.03 200);
+  --accent: oklch(0.35 0.05 200);
+  --accent-foreground: oklch(0.92 0.02 200);
+  --destructive: oklch(0.55 0.20 25);
+  --border: oklch(0.35 0.04 220);
+  --input: oklch(0.30 0.04 220);
+  --ring: oklch(0.65 0.15 200);
+  --chart-1: oklch(0.65 0.15 200);
+  --chart-2: oklch(0.60 0.15 160);
+  --chart-3: oklch(0.70 0.12 220);
+  --chart-4: oklch(0.55 0.18 280);
+  --chart-5: oklch(0.65 0.15 180);
+  --sidebar: oklch(0.23 0.04 220);
+  --sidebar-foreground: oklch(0.92 0.02 200);
+  --sidebar-primary: oklch(0.65 0.15 200);
+  --sidebar-primary-foreground: oklch(0.15 0.04 220);
+  --sidebar-accent: oklch(0.30 0.04 220);
+  --sidebar-accent-foreground: oklch(0.92 0.02 200);
+  --sidebar-border: oklch(0.35 0.04 220);
+  --sidebar-ring: oklch(0.65 0.15 200);
+}
+
+/* FOREST — deep green, nature-inspired */
+.forest {
+  --background: oklch(0.20 0.03 150);
+  --foreground: oklch(0.90 0.03 140);
+  --card: oklch(0.24 0.03 150);
+  --card-foreground: oklch(0.90 0.03 140);
+  --popover: oklch(0.24 0.03 150);
+  --popover-foreground: oklch(0.90 0.03 140);
+  --primary: oklch(0.60 0.15 145);
+  --primary-foreground: oklch(0.15 0.03 150);
+  --secondary: oklch(0.28 0.03 150);
+  --secondary-foreground: oklch(0.90 0.03 140);
+  --muted: oklch(0.28 0.03 150);
+  --muted-foreground: oklch(0.62 0.03 140);
+  --accent: oklch(0.32 0.04 145);
+  --accent-foreground: oklch(0.90 0.03 140);
+  --destructive: oklch(0.55 0.20 25);
+  --border: oklch(0.33 0.03 150);
+  --input: oklch(0.28 0.03 150);
+  --ring: oklch(0.60 0.15 145);
+  --chart-1: oklch(0.60 0.15 145);
+  --chart-2: oklch(0.55 0.15 180);
+  --chart-3: oklch(0.65 0.12 100);
+  --chart-4: oklch(0.50 0.18 50);
+  --chart-5: oklch(0.60 0.15 160);
+  --sidebar: oklch(0.22 0.03 150);
+  --sidebar-foreground: oklch(0.90 0.03 140);
+  --sidebar-primary: oklch(0.60 0.15 145);
+  --sidebar-primary-foreground: oklch(0.15 0.03 150);
+  --sidebar-accent: oklch(0.28 0.03 150);
+  --sidebar-accent-foreground: oklch(0.90 0.03 140);
+  --sidebar-border: oklch(0.33 0.03 150);
+  --sidebar-ring: oklch(0.60 0.15 145);
+}
+
+/* SUNSET — warm orange/pink, evening vibe */
+.sunset {
+  --background: oklch(0.25 0.04 30);
+  --foreground: oklch(0.93 0.02 40);
+  --card: oklch(0.30 0.04 30);
+  --card-foreground: oklch(0.93 0.02 40);
+  --popover: oklch(0.30 0.04 30);
+  --popover-foreground: oklch(0.93 0.02 40);
+  --primary: oklch(0.65 0.18 30);
+  --primary-foreground: oklch(0.15 0.04 30);
+  --secondary: oklch(0.35 0.04 30);
+  --secondary-foreground: oklch(0.93 0.02 40);
+  --muted: oklch(0.35 0.04 30);
+  --muted-foreground: oklch(0.65 0.03 40);
+  --accent: oklch(0.38 0.05 350);
+  --accent-foreground: oklch(0.93 0.02 40);
+  --destructive: oklch(0.55 0.20 25);
+  --border: oklch(0.38 0.04 30);
+  --input: oklch(0.35 0.04 30);
+  --ring: oklch(0.65 0.18 30);
+  --chart-1: oklch(0.65 0.18 30);
+  --chart-2: oklch(0.60 0.15 350);
+  --chart-3: oklch(0.70 0.15 60);
+  --chart-4: oklch(0.55 0.18 305);
+  --chart-5: oklch(0.65 0.18 15);
+  --sidebar: oklch(0.27 0.04 30);
+  --sidebar-foreground: oklch(0.93 0.02 40);
+  --sidebar-primary: oklch(0.65 0.18 30);
+  --sidebar-primary-foreground: oklch(0.15 0.04 30);
+  --sidebar-accent: oklch(0.35 0.04 30);
+  --sidebar-accent-foreground: oklch(0.93 0.02 40);
+  --sidebar-border: oklch(0.38 0.04 30);
+  --sidebar-ring: oklch(0.65 0.18 30);
+}
+
+/* LAVENDER — soft purple, calming */
+.lavender {
+  --background: oklch(0.28 0.03 300);
+  --foreground: oklch(0.92 0.02 300);
+  --card: oklch(0.32 0.03 300);
+  --card-foreground: oklch(0.92 0.02 300);
+  --popover: oklch(0.32 0.03 300);
+  --popover-foreground: oklch(0.92 0.02 300);
+  --primary: oklch(0.65 0.15 300);
+  --primary-foreground: oklch(0.15 0.03 300);
+  --secondary: oklch(0.38 0.03 300);
+  --secondary-foreground: oklch(0.92 0.02 300);
+  --muted: oklch(0.38 0.03 300);
+  --muted-foreground: oklch(0.65 0.03 300);
+  --accent: oklch(0.40 0.04 320);
+  --accent-foreground: oklch(0.92 0.02 300);
+  --destructive: oklch(0.55 0.20 25);
+  --border: oklch(0.40 0.03 300);
+  --input: oklch(0.38 0.03 300);
+  --ring: oklch(0.65 0.15 300);
+  --chart-1: oklch(0.65 0.15 300);
+  --chart-2: oklch(0.60 0.15 220);
+  --chart-3: oklch(0.70 0.15 330);
+  --chart-4: oklch(0.55 0.18 180);
+  --chart-5: oklch(0.65 0.15 350);
+  --sidebar: oklch(0.30 0.03 300);
+  --sidebar-foreground: oklch(0.92 0.02 300);
+  --sidebar-primary: oklch(0.65 0.15 300);
+  --sidebar-primary-foreground: oklch(0.15 0.03 300);
+  --sidebar-accent: oklch(0.38 0.03 300);
+  --sidebar-accent-foreground: oklch(0.92 0.02 300);
+  --sidebar-border: oklch(0.40 0.03 300);
+  --sidebar-ring: oklch(0.65 0.15 300);
+}
+
+/* ROSE — soft pink/red, warm and cozy */
+.rose {
+  --background: oklch(0.25 0.03 15);
+  --foreground: oklch(0.93 0.02 15);
+  --card: oklch(0.30 0.03 15);
+  --card-foreground: oklch(0.93 0.02 15);
+  --popover: oklch(0.30 0.03 15);
+  --popover-foreground: oklch(0.93 0.02 15);
+  --primary: oklch(0.65 0.18 15);
+  --primary-foreground: oklch(0.15 0.03 15);
+  --secondary: oklch(0.35 0.03 15);
+  --secondary-foreground: oklch(0.93 0.02 15);
+  --muted: oklch(0.35 0.03 15);
+  --muted-foreground: oklch(0.65 0.03 15);
+  --accent: oklch(0.38 0.04 350);
+  --accent-foreground: oklch(0.93 0.02 15);
+  --destructive: oklch(0.55 0.20 25);
+  --border: oklch(0.38 0.03 15);
+  --input: oklch(0.35 0.03 15);
+  --ring: oklch(0.65 0.18 15);
+  --chart-1: oklch(0.65 0.18 15);
+  --chart-2: oklch(0.60 0.15 350);
+  --chart-3: oklch(0.70 0.15 60);
+  --chart-4: oklch(0.55 0.18 300);
+  --chart-5: oklch(0.65 0.15 30);
+  --sidebar: oklch(0.27 0.03 15);
+  --sidebar-foreground: oklch(0.93 0.02 15);
+  --sidebar-primary: oklch(0.65 0.18 15);
+  --sidebar-primary-foreground: oklch(0.15 0.03 15);
+  --sidebar-accent: oklch(0.35 0.03 15);
+  --sidebar-accent-foreground: oklch(0.93 0.02 15);
+  --sidebar-border: oklch(0.38 0.03 15);
+  --sidebar-ring: oklch(0.65 0.18 15);
+}
+
+/* MONO — pure grayscale, minimal */
+.mono {
+  --background: oklch(0.22 0 0);
+  --foreground: oklch(0.90 0 0);
+  --card: oklch(0.27 0 0);
+  --card-foreground: oklch(0.90 0 0);
+  --popover: oklch(0.27 0 0);
+  --popover-foreground: oklch(0.90 0 0);
+  --primary: oklch(0.75 0 0);
+  --primary-foreground: oklch(0.15 0 0);
+  --secondary: oklch(0.32 0 0);
+  --secondary-foreground: oklch(0.90 0 0);
+  --muted: oklch(0.32 0 0);
+  --muted-foreground: oklch(0.60 0 0);
+  --accent: oklch(0.38 0 0);
+  --accent-foreground: oklch(0.90 0 0);
+  --destructive: oklch(0.55 0.20 25);
+  --border: oklch(0.38 0 0);
+  --input: oklch(0.32 0 0);
+  --ring: oklch(0.75 0 0);
+  --chart-1: oklch(0.75 0 0);
+  --chart-2: oklch(0.60 0 0);
+  --chart-3: oklch(0.50 0 0);
+  --chart-4: oklch(0.40 0 0);
+  --chart-5: oklch(0.70 0 0);
+  --sidebar: oklch(0.24 0 0);
+  --sidebar-foreground: oklch(0.90 0 0);
+  --sidebar-primary: oklch(0.75 0 0);
+  --sidebar-primary-foreground: oklch(0.15 0 0);
+  --sidebar-accent: oklch(0.32 0 0);
+  --sidebar-accent-foreground: oklch(0.90 0 0);
+  --sidebar-border: oklch(0.38 0 0);
+  --sidebar-ring: oklch(0.75 0 0);
+}
+
+/* CYBER — dark with neon green accents */
+.cyber {
+  --background: oklch(0.15 0.02 150);
+  --foreground: oklch(0.85 0.15 150);
+  --card: oklch(0.18 0.02 150);
+  --card-foreground: oklch(0.85 0.15 150);
+  --popover: oklch(0.18 0.02 150);
+  --popover-foreground: oklch(0.85 0.15 150);
+  --primary: oklch(0.75 0.25 150);
+  --primary-foreground: oklch(0.10 0.02 150);
+  --secondary: oklch(0.25 0.03 150);
+  --secondary-foreground: oklch(0.85 0.15 150);
+  --muted: oklch(0.25 0.03 150);
+  --muted-foreground: oklch(0.55 0.10 150);
+  --accent: oklch(0.30 0.04 150);
+  --accent-foreground: oklch(0.85 0.15 150);
+  --destructive: oklch(0.55 0.25 25);
+  --border: oklch(0.30 0.05 150);
+  --input: oklch(0.25 0.03 150);
+  --ring: oklch(0.75 0.25 150);
+  --chart-1: oklch(0.75 0.25 150);
+  --chart-2: oklch(0.70 0.20 180);
+  --chart-3: oklch(0.80 0.15 90);
+  --chart-4: oklch(0.65 0.25 300);
+  --chart-5: oklch(0.75 0.20 160);
+  --sidebar: oklch(0.16 0.02 150);
+  --sidebar-foreground: oklch(0.85 0.15 150);
+  --sidebar-primary: oklch(0.75 0.25 150);
+  --sidebar-primary-foreground: oklch(0.10 0.02 150);
+  --sidebar-accent: oklch(0.25 0.03 150);
+  --sidebar-accent-foreground: oklch(0.85 0.15 150);
+  --sidebar-border: oklch(0.30 0.05 150);
+  --sidebar-ring: oklch(0.75 0.25 150);
+}
+
+/* ── GRADIENT THEMES ──
+   These themes apply a gradient background to the body. The CSS variables
+   stay the same (dark theme base), but the body gets a gradient overlay.
+   The gradient is applied via a pseudo-element so it doesn't interfere
+   with content rendering. */
+
+/* Custom gradient support — applied via inline CSS variable.
+   When the user picks a gradient theme, we set:
+     --gradient-bg: linear-gradient(...)
+   on <html> and the body::before pseudo-element renders it. */
+.gradient-theme {
+  position: relative;
+}
+.gradient-theme body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: var(--gradient-bg, none);
+  z-index: -1;
+  pointer-events: none;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -631,3 +903,21 @@
   transition: color 0.2s ease-out;
 }
 
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Image color preservation — images should NEVER be filtered or tinted
+   by theme CSS. This ensures news photos always show in full color,
+   regardless of the active theme (sepia, midnight, high-contrast, etc.).
+   ───────────────────────────────────────────────────────────────────────── */
+img {
+  /* Force images to always render in full color — no theme-based filters */
+  filter: none !important;
+  -webkit-filter: none !important;
+}
+
+/* In sepia theme, ensure card backgrounds behind images are solid (not
+   semi-transparent) so the warm bg doesn't create a color cast on photos. */
+.sepia .card-glass,
+.sepia [class*="card"] {
+  background: var(--card) !important;
+}
