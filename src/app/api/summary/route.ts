@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { callAI } from '@/lib/ai-providers'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import type { TopicArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,6 +41,49 @@ interface StoredSummary {
   generatedAt: number
   title: string
   sourceCount: number
+}
+
+/**
+ * Fetch a topic from Firebase (archive + cache categories) for summary
+ * generation. Used when the client sends a summary request with no
+ * articles (e.g. topic loaded from a slim=1 feed).
+ *
+ * Checks in order:
+ *   1. archive/<topicId> (permanent storage — always exists for notified topics)
+ *   2. newsCache/<category>/topics (live cache — checks most common categories)
+ *
+ * Returns the topic with articles, or null if not found.
+ */
+async function fetchTopicForSummary(topicId: string): Promise<TopicArticle | null> {
+  // 1. Check archive first (most likely for topics that were sent via push)
+  try {
+    const archived = await firebaseRead<TopicArticle & { archivedAt?: number }>(`archive/${topicId}`)
+    if (archived) return archived
+  } catch {
+    // silent
+  }
+
+  // 2. Check live cache categories
+  const cacheCategories = [
+    'relevant', 'top', 'world', 'politics', 'business',
+    'technology', 'science', 'health', 'sports',
+    'relevant__GB', 'relevant__US', 'relevant__IN',
+    'mycountry__GB', 'mycountry__US', 'mycountry__IN',
+    'blindspots',
+  ]
+  for (const cat of cacheCategories) {
+    try {
+      const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${cat}`)
+      if (payload?.topics) {
+        const found = payload.topics.find((t) => t.topicId === topicId)
+        if (found) return found
+      }
+    } catch {
+      // continue to next category
+    }
+  }
+
+  return null
 }
 
 /**
@@ -112,20 +156,40 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as SummaryRequest
-    // Allow requests with no articles IF we have a topicSummary to fall
-    // back on (e.g. topic loaded from archive without the full articles array).
     if (!body.topicId || !body.title) {
       return NextResponse.json(
         { error: 'Missing required fields: topicId, title' },
         { status: 400 },
       )
     }
-    // If we have NO articles AND no topicSummary, we can't generate anything.
+
+    // ── If no articles AND no topicSummary, look up the topic from Firebase ──
+    // This happens when the topic was loaded from a slim=1 feed (articles
+    // stripped for size). The client sends topicId + title but no article
+    // content. Instead of returning 400, we fetch the full topic from
+    // Firebase (archive first, then cache categories) and use its articles.
     if (!body.articles?.length && !body.topicSummary) {
-      return NextResponse.json(
-        { error: 'Missing articles and topicSummary — need at least one' },
-        { status: 400 },
-      )
+      console.log(`[api/summary] No articles + no topicSummary for ${body.topicId} — fetching from Firebase...`)
+      const fetchedTopic = await fetchTopicForSummary(body.topicId)
+      if (fetchedTopic) {
+        body.articles = (fetchedTopic.articles || []).slice(0, 12).map((a) => ({
+          title: a.title,
+          description: a.description,
+          sourceName: a.sourceName,
+          leaning: a.leaning,
+        }))
+        body.topicSummary = fetchedTopic.summary || ''
+        console.log(`[api/summary] Found topic in Firebase: ${body.articles.length} articles, topicSummary: ${body.topicSummary ? 'yes' : 'no'}`)
+      }
+      // If still no articles + no topicSummary after Firebase lookup,
+      // we can't generate anything — return 422 (not 400) so the client
+      // knows this is a content issue, not a bad request.
+      if (!body.articles?.length && !body.topicSummary) {
+        return NextResponse.json(
+          { error: 'Topic not found in Firebase — no content available', topicId: body.topicId },
+          { status: 422 },
+        )
+      }
     }
 
     // 1. Check in-process cache (instant).

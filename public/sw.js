@@ -138,6 +138,11 @@ async function sweepCache(cacheName, maxEntries) {
  */
 async function putWithEviction(cacheName, request, response, maxEntries) {
   try {
+    // Skip non-http(s) requests (chrome-extension://, moz-extension://, etc.)
+    // The Cache API only supports http(s) URLs — trying to cache other
+    // schemes throws "Request scheme 'chrome-extension' is unsupported".
+    const url = request.url || ''
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return
     const cache = await caches.open(cacheName)
     await cache.put(request, response)
     // Check count and evict if over the cap
