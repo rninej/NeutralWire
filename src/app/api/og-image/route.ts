@@ -29,21 +29,35 @@ export const maxDuration = 15
  *   /api/og-image?topicId=abc123
  */
 export async function GET(req: NextRequest) {
-  const topicId = req.nextUrl.searchParams.get('topicId') || ''
+  const sp = req.nextUrl.searchParams
+  const topicId = sp.get('topicId') || ''
   if (!topicId) {
     return NextResponse.json({ error: 'Missing topicId' }, { status: 400 })
   }
 
-  try {
-    // ── 1. Fetch the topic from Firebase ──
-    let topic: (TopicArticle & { archivedAt?: number }) | null = null
-    try {
-      topic = await firebaseRead<TopicArticle & { archivedAt?: number }>(`archive/${topicId}`)
-    } catch {
-      // silent
-    }
+  // ── Allow override params for faster notification image generation ──
+  // When the cron trigger sends a push notification, it passes the bias
+  // counts + imageUrl directly so the OG image route doesn't need to
+  // read from Firebase. This saves ~200ms per notification.
+  const overrideTitle = sp.get('title')
+  const overrideImageUrl = sp.get('imageUrl')
+  const overrideLeanLeft = sp.get('leanLeft')
+  const overrideLeanCenter = sp.get('leanCenter')
+  const overrideLeanRight = sp.get('leanRight')
+  const hasOverrides = overrideLeanLeft !== null && overrideLeanRight !== null
 
-    if (!topic) {
+  try {
+    // ── 1. Fetch the topic from Firebase (skip if overrides provided) ──
+    let topic: (TopicArticle & { archivedAt?: number }) | null = null
+
+    if (!hasOverrides) {
+      try {
+        topic = await firebaseRead<TopicArticle & { archivedAt?: number }>(`archive/${topicId}`)
+      } catch {
+        // silent
+      }
+
+      if (!topic) {
       // Check ALL live news cache categories (not just a few) so every
       // topic can be found for OG image generation.
       const cacheCategories = [
@@ -76,6 +90,24 @@ export async function GET(req: NextRequest) {
           }
         }
       }
+    }
+    } // end if (!hasOverrides)
+
+    // If overrides were provided, construct a minimal topic object
+    if (!topic && hasOverrides) {
+      topic = {
+        topicId,
+        title: overrideTitle || '',
+        summary: '',
+        imageUrl: overrideImageUrl || null,
+        coverage: 0,
+        leanLeft: parseInt(overrideLeanLeft || '0', 10),
+        leanCenter: parseInt(overrideLeanCenter || '0', 10),
+        leanRight: parseInt(overrideLeanRight || '0', 10),
+        firstSeen: Date.now(),
+        latestSeen: Date.now(),
+        articles: [],
+      } as TopicArticle
     }
 
     if (!topic) {

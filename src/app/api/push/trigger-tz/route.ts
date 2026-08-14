@@ -436,9 +436,13 @@ export async function GET(req: NextRequest) {
         const bestFp = storyFingerprint(bestStory.title)
         if (bestFp) allSentFingerprints.add(bestFp)
 
-        const imageUrl = bestStory.imageUrl
-          ? `${origin}/api/img?url=${encodeURIComponent(bestStory.imageUrl)}`
-          : `${origin}/icon-512.png`
+        // ── Use the OG share image as the notification image ──
+        // The /api/og-image endpoint generates an image with the article's
+        // photo + NEUTRALWIRE banner + bias bar (left/center/right
+        // percentages). This is the same image used for social share
+        // previews. Using it as the notification image gives users a
+        // rich preview with the bias visualization before they tap.
+        const ogImageUrl = `${origin}/api/og-image?topicId=${encodeURIComponent(bestStory.topicId)}&title=${encodeURIComponent(bestStory.title.slice(0, 80))}&leanLeft=${bestStory.leanLeft}&leanCenter=${bestStory.leanCenter}&leanRight=${bestStory.leanRight}&imageUrl=${encodeURIComponent(bestStory.imageUrl || '')}`
 
         const payload = JSON.stringify({
           title: slotLabels[target.slot],
@@ -446,7 +450,7 @@ export async function GET(req: NextRequest) {
           url: `/?topic=${bestStory.topicId}`,
           icon: '/icon-192.png',
           badge: '/icon-192.png',
-          image: imageUrl,
+          image: ogImageUrl,
           tag: `briefing-${target.slot}`,
           notifId: `tz_${target.dateKey}_${target.slot}_${target.deviceId.slice(-6)}`,
         })

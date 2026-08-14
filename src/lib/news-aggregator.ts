@@ -2088,8 +2088,11 @@ export async function aggregateCategory(
   const feeds = feedsForCategory(category, {
     countrySourceIds: options.countrySourceIds,
   })
+  // Reduced from 18s to 12s — with 100+ feeds, 18s was causing the cron
+  // refresh to hit 28-30s (cron-job.org times out at 30s). 12s is enough
+  // for all fast feeds; slow feeds just get skipped (cached fallback).
   const ac = new AbortController()
-  const timeout = setTimeout(() => ac.abort(), 18000)
+  const timeout = setTimeout(() => ac.abort(), 12000)
 
   try {
     const results = await Promise.all(
