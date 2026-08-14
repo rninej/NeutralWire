@@ -172,6 +172,12 @@ export async function POST(req: NextRequest) {
           summary = generateExtractiveSummary(body)
         }
 
+        // If the summary is empty (no articles + no topicSummary), don't
+        // persist it. Return null so the client knows to show the error.
+        if (!summary || summary.trim().length === 0) {
+          return null
+        }
+
         // Persist to Firebase so other instances/users get it instantly.
         const stored: StoredSummary = {
           summary,
@@ -191,6 +197,15 @@ export async function POST(req: NextRequest) {
 
     try {
       const summary = await generatePromise
+      // If summary generation returned null (no articles + no topicSummary),
+      // return a 422 so the client knows to hide the summary section
+      // instead of showing "Could not generate summary".
+      if (!summary) {
+        return NextResponse.json(
+          { error: 'No content available to generate summary', topicId: body.topicId },
+          { status: 422 },
+        )
+      }
       return NextResponse.json({
         topicId: body.topicId,
         summary,
@@ -320,8 +335,23 @@ Write a neutral, in-depth summary of this story following the rules above.`
 function generateExtractiveSummary(body: SummaryRequest): string {
   const { title } = body
   const articles = Array.isArray(body.articles) ? body.articles : []
-  if (articles.length === 0) {
-    return title
+
+  // If we have NO articles AND no topicSummary, we can't generate anything
+  // meaningful. Return null to signal the caller to show the error.
+  if (articles.length === 0 && !body.topicSummary) {
+    return ''
+  }
+
+  // If we have no articles but DO have a topicSummary, use it as the
+  // core facts. This happens for archived topics without the full
+  // articles array.
+  if (articles.length === 0 && body.topicSummary) {
+    const sections: string[] = []
+    sections.push(`**The Big Picture**\n\n${truncateClean(body.topicSummary, 300)}`)
+    sections.push(`**Why It Matters**\n\nThis story was covered by NeutralWire. The summary above provides the key facts.`)
+    sections.push(`**How Different Outlets Are Covering It**\n\nSource details are no longer available for this archived story.`)
+    sections.push(`**What Happens Next**\n\nFor the latest developments, check the original sources linked below.`)
+    return sections.join('\n\n')
   }
 
   // Sort articles by description length (longest first) to find the most informative.
@@ -330,11 +360,12 @@ function generateExtractiveSummary(body: SummaryRequest): string {
   )
 
   // Paragraph 1: Core facts — use the longest description, truncated cleanly.
+  // If ALL descriptions are empty, fall back to the topicSummary, then to
+  // the first article's title. This prevents the summary from being just
+  // the topic title repeated.
   const coreArticle = sorted[0]
-  const coreFacts = truncateClean(
-    coreArticle?.description || coreArticle?.title || title,
-    300,
-  )
+  const coreText = coreArticle?.description || body.topicSummary || coreArticle?.title || title
+  const coreFacts = truncateClean(coreText, 300)
 
   // Paragraph 2: Additional context from center-leaning sources.
   const centerArticles = articles.filter((a) => a.leaning === 'center')

@@ -616,30 +616,44 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
           </div>
         </div>
 
-        {/* Neutral in-depth summary */}
-        <Card className="mb-6 p-5 md:p-6">
-          <div className="mb-4 flex items-center gap-2">
-            <TrendingUp className="h-5 w-5 text-muted-foreground" />
-            <h2 className="text-base font-bold">Neutral Summary</h2>
-            <button
-              ref={askAiButtonRef}
-              onClick={() => setAskAiOpen(true)}
-              className="ml-auto flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity"
-            >
-              <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
-                <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
-                Ask AI
-              </span>
-            </button>
-          </div>
-          {summaryLoading ? (
-            <SummarySkeleton />
-          ) : summaryError ? (
-            <div className="flex items-center gap-2 py-4 text-base text-muted-foreground">
-              <AlertCircle className="h-5 w-5" />
-              Could not generate summary. Showing original descriptions below.
+        {/* Neutral in-depth summary — hidden entirely if generation fails.
+            Previously showed "Could not generate summary. Showing original
+            descriptions below." — now we just hide the card so the user
+            sees the article descriptions directly without an error message. */}
+        {summaryLoading ? (
+          <Card className="mb-6 p-5 md:p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-muted-foreground" />
+              <h2 className="text-base font-bold">Neutral Summary</h2>
+              <button
+                ref={askAiButtonRef}
+                onClick={() => setAskAiOpen(true)}
+                className="ml-auto flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity"
+              >
+                <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
+                  <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
+                  Ask AI
+                </span>
+              </button>
             </div>
-          ) : (
+            <SummarySkeleton />
+          </Card>
+        ) : summary && !summaryError ? (
+          <Card className="mb-6 p-5 md:p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-muted-foreground" />
+              <h2 className="text-base font-bold">Neutral Summary</h2>
+              <button
+                ref={askAiButtonRef}
+                onClick={() => setAskAiOpen(true)}
+                className="ml-auto flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity"
+              >
+                <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
+                  <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
+                  Ask AI
+                </span>
+              </button>
+            </div>
             <motion.div
               className="space-y-4 text-base leading-relaxed text-foreground/90 md:text-[17px] md:leading-[1.7]"
               initial={{ opacity: 0, y: 6 }}
@@ -718,8 +732,8 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
                 return elements
               })()}
             </motion.div>
-          )}
-        </Card>
+          </Card>
+        ) : null}
 
         {/* Sources grouped by leaning */}
         <div id="all-sources" className="space-y-4 scroll-mt-20">
