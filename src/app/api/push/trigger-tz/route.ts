@@ -449,7 +449,10 @@ export async function GET(req: NextRequest) {
           body: bestStory.title.slice(0, 100),
           url: `/?topic=${bestStory.topicId}`,
           icon: '/icon-192.png',
-          badge: '/icon-192.png',
+          // Badge icon MUST be monochrome (white on transparent) for Android.
+          // Android applies its own tint and shows a white square if the badge
+          // icon has color. This is the NW monogram in white silhouette.
+          badge: '/badge-96.png',
           image: ogImageUrl,
           tag: `briefing-${target.slot}`,
           notifId: `tz_${target.dateKey}_${target.slot}_${target.deviceId.slice(-6)}`,

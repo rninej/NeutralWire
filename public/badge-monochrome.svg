@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <!-- Monochrome NW badge for Android status bar.
+       Android requires the badge icon to be WHITE on TRANSPARENT.
+       The system applies its own tinting based on the theme.
+       This is a simplified NW monogram — just the letter strokes,
+       no background fill (transparent so the status bar shows through). -->
+  <path d="M 45 140 L 45 52 L 82 140 L 82 52"
+        fill="none" stroke="#ffffff" stroke-width="12"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 82 52 L 106 140 L 130 75 L 154 140 L 154 52"
+        fill="none" stroke="#ffffff" stroke-width="12"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

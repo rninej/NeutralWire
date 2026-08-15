@@ -407,7 +407,9 @@ self.addEventListener('push', (event) => {
     body: 'New update',
     url: '/',
     icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    // Badge icon MUST be monochrome (white on transparent) for Android.
+    // Android shows a white square if the badge has color.
+    badge: '/badge-96.png',
     image: null,
     tag: 'neutralwire',
     notifId: null,

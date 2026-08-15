@@ -3,7 +3,7 @@
  *
  * Call order (first that works wins, all in parallel):
  * 1. Gemini — multiple models in parallel (free, with optional Google Search)
- * 2. Groq — llama-3.3-70b-versatile + openai/gpt-oss-120b (free)
+ * 2. Groq — openai/gpt-oss-120b + qwen/qwen3.6-27b (free)
  * 3. OpenRouter — google/gemma-4-26b-a4b-it:free (last resort)
  *
  * For compound (web search) fallback:
@@ -14,6 +14,16 @@
  * Each provider has a 4s timeout. We use Promise.any() so the FIRST provider
  * to return a valid answer wins; the rest are abandoned. This keeps total
  * response time low even when some providers are slow or rate-limited.
+ *
+ * ── AUTO-DEPRECATION DETECTION ──
+ * When a model returns 404 or a "deprecation"/"decommissioned"/"not found"
+ * error, it's automatically added to the `deprecatedModels` set and skipped
+ * for ALL future calls in this server instance. This means when Groq,
+ * Gemini, or OpenRouter retire a model, the fallback chain adapts
+ * automatically — no code change needed.
+ *
+ * The deprecated set is per-instance (cleared on server restart). For
+ * permanent removal, update the model lists below.
  */
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || ''
@@ -32,21 +42,34 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 // gemini-2.5-flash/flash-lite are marked "no longer available to new users"
 // but may still work on some accounts — kept as last resort.
 const GEMINI_MODELS = [
-  'gemini-3.5-flash',
-  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
   'gemini-2.5-pro',
   'gemini-2.0-flash',
   'gemini-2.0-flash-001',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
 ]
 
 // ── Groq models ──
-const GROQ_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b']
+// Updated 2025: llama-3.3-70b-versatile is being retired by Groq.
+// Replaced with openai/gpt-oss-120b (the recommended migration target)
+// and qwen/qwen3.6-27b (alternative for Llama 3.3 70B workloads).
+// Source: https://console.groq.com/docs/deprecations
+const GROQ_MODELS = [
+  'openai/gpt-oss-120b',
+  'qwen/qwen3.6-27b',
+  'openai/gpt-oss-20b',
+]
 
 // Track rate-limited models to skip them in future calls (per-process)
 const rateLimitedModels = new Map<string, number>()
 const RATE_LIMIT_COOLDOWN_MS = 60 * 1000
+
+// ── Auto-deprecation detection ──
+// When a model returns 404 or a deprecation error, it's added here and
+// skipped for ALL future calls in this server instance. This makes the
+// fallback chain self-healing — when a provider retires a model, the
+// system automatically stops using it without needing a code update.
+const deprecatedModels = new Set<string>()
 
 const OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it:free'
 const GROQ_COMPOUND_MODEL = 'compound-beta'
@@ -62,6 +85,40 @@ let lastProvider = 'none'
 
 export function getLastProvider(): string {
   return lastProvider
+}
+
+/**
+ * Check if a model has been auto-deprecated (returned 404 or deprecation
+ * error in a previous call). Deprecated models are skipped entirely.
+ */
+function isDeprecated(key: string): boolean {
+  return deprecatedModels.has(key)
+}
+
+/**
+ * Mark a model as deprecated based on the API response.
+ *
+ * Triggers on:
+ *   - HTTP 404 (model not found)
+ *   - HTTP 400 with "deprecat" / "decommission" / "not available" in the error
+ *   - Any response containing "has been deprecated" or "is no longer supported"
+ */
+function checkDeprecation(key: string, status: number, errText: string): boolean {
+  const lowerErr = errText.toLowerCase()
+  if (
+    status === 404 ||
+    (status === 400 && (lowerErr.includes('deprecat') || lowerErr.includes('decommission') || lowerErr.includes('not available'))) ||
+    lowerErr.includes('has been deprecated') ||
+    lowerErr.includes('is no longer supported') ||
+    lowerErr.includes('model_not_found')
+  ) {
+    if (!deprecatedModels.has(key)) {
+      deprecatedModels.add(key)
+      console.warn(`[ai] Auto-deprecated ${key} (status ${status}: ${errText.slice(0, 100)})`)
+    }
+    return true
+  }
+  return false
 }
 
 /**
@@ -83,19 +140,23 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   const maxTokens = opts.maxTokens ?? 400
   const candidates: Array<Promise<string | null>> = []
 
-  // 1. Fire off the first available Gemini model
+  // 1. Fire off the first available Gemini model (skip deprecated + rate-limited)
   const firstGemini = GEMINI_MODELS.find((m) => {
-    const limitedAt = rateLimitedModels.get(`gemini-${m}`)
+    const key = `gemini-${m}`
+    if (isDeprecated(key)) return false
+    const limitedAt = rateLimitedModels.get(key)
     return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
   })
   if (firstGemini && GEMINI_API_KEY) {
     candidates.push(callGemini(opts.systemPrompt, opts.userPrompt, firstGemini, false, maxTokens))
   }
 
-  // 2. Fire off the first available Groq model
+  // 2. Fire off the first available Groq model (skip deprecated + rate-limited)
   if (GROQ_API_KEY) {
     const firstGroq = GROQ_MODELS.find((m) => {
-      const limitedAt = rateLimitedModels.get(`groq-${m}`)
+      const key = `groq-${m}`
+      if (isDeprecated(key)) return false
+      const limitedAt = rateLimitedModels.get(key)
       return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
     })
     if (firstGroq) {
@@ -104,14 +165,11 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   }
 
   // 3. Fire off OpenRouter (last resort but parallel for speed)
-  if (OPENROUTER_API_KEY) {
+  if (OPENROUTER_API_KEY && !isDeprecated('openrouter')) {
     candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, false, maxTokens))
   }
 
   // 4. Race them — first NON-NULL answer wins.
-  // We can't use Promise.any directly because it returns the first resolved
-  // value even if it's null. Instead, we wrap each promise to reject on null
-  // so Promise.any only resolves when a real answer comes through.
   if (candidates.length > 0) {
     const wrappedCandidates = candidates.map((p, i) =>
       p.then((result) => {
@@ -134,7 +192,9 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   // 5. Sequential retry: try remaining Gemini models not yet tried
   for (const model of GEMINI_MODELS) {
     if (model === firstGemini) continue
-    const limitedAt = rateLimitedModels.get(`gemini-${model}`)
+    const key = `gemini-${model}`
+    if (isDeprecated(key)) continue
+    const limitedAt = rateLimitedModels.get(key)
     if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
 
     const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model, false, maxTokens)
@@ -146,7 +206,9 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
 
   // 6. Try remaining Groq models
   for (const model of GROQ_MODELS) {
-    const limitedAt = rateLimitedModels.get(`groq-${model}`)
+    const key = `groq-${model}`
+    if (isDeprecated(key)) continue
+    const limitedAt = rateLimitedModels.get(key)
     if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
 
     const answer = await callGroq(opts.systemPrompt, opts.userPrompt, model, maxTokens)
@@ -171,20 +233,22 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
 
   // 1. Fire off the first available Gemini model WITH Google Search
   const firstGemini = GEMINI_MODELS.find((m) => {
-    const limitedAt = rateLimitedModels.get(`gemini-${m}`)
+    const key = `gemini-${m}`
+    if (isDeprecated(key)) return false
+    const limitedAt = rateLimitedModels.get(key)
     return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
   })
   if (firstGemini && GEMINI_API_KEY) {
     candidates.push(callGemini(opts.systemPrompt, opts.userPrompt, firstGemini, true))
   }
 
-  // 2. Groq compound-beta in parallel
-  if (GROQ_API_KEY) {
+  // 2. Groq compound-beta in parallel (skip if deprecated)
+  if (GROQ_API_KEY && !isDeprecated('groq-compound-beta')) {
     candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, GROQ_COMPOUND_MODEL))
   }
 
   // 3. OpenRouter with web search in parallel
-  if (OPENROUTER_API_KEY) {
+  if (OPENROUTER_API_KEY && !isDeprecated('openrouter')) {
     candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, true))
   }
 
@@ -204,7 +268,9 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
   // 5. Sequential retry on remaining Gemini models WITH search
   for (const model of GEMINI_MODELS) {
     if (model === firstGemini) continue
-    const limitedAt = rateLimitedModels.get(`gemini-${model}`)
+    const key = `gemini-${model}`
+    if (isDeprecated(key)) continue
+    const limitedAt = rateLimitedModels.get(key)
     if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
 
     const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model, true)
@@ -250,12 +316,18 @@ async function callGroq(
     clearTimeout(timeout)
 
     if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      const key = `groq-${model}`
+
       if (res.status === 429) {
-        rateLimitedModels.set(`groq-${model}`, Date.now())
+        rateLimitedModels.set(key, Date.now())
         console.warn(`[ai] Groq ${model} rate-limited`)
       } else {
-        const errText = await res.text().catch(() => '')
-        console.warn(`[ai] Groq ${model} ${res.status}: ${errText.slice(0, 200)}`)
+        // Check for deprecation — auto-deprecate if detected
+        checkDeprecation(key, res.status, errText)
+        if (!deprecatedModels.has(key)) {
+          console.warn(`[ai] Groq ${model} ${res.status}: ${errText.slice(0, 200)}`)
+        }
       }
       return null
     }
@@ -278,7 +350,6 @@ async function callGemini(
 ): Promise<string | null> {
   if (!GEMINI_API_KEY) return null
   const controller = new AbortController()
-  // Search-enabled calls get a slightly longer timeout (search takes time)
   const timeoutMs = useSearch ? 6000 : 4000
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
@@ -293,8 +364,6 @@ async function callGemini(
         temperature: 0.5,
       },
     }
-    // Only attach the googleSearch tool when explicitly requested.
-    // Attaching it for every call makes simple questions slow.
     if (useSearch) {
       body.tools = [{ googleSearch: {} }]
     }
@@ -309,19 +378,22 @@ async function callGemini(
     clearTimeout(timeout)
 
     if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      const key = `gemini-${model}`
+
       if (res.status === 429) {
-        rateLimitedModels.set(`gemini-${model}`, Date.now())
+        rateLimitedModels.set(key, Date.now())
         console.warn(`[ai] Gemini ${model} rate-limited`)
       } else {
-        const errText = await res.text().catch(() => '')
-        console.warn(`[ai] Gemini ${model} ${res.status}: ${errText.slice(0, 200)}`)
+        checkDeprecation(key, res.status, errText)
+        if (!deprecatedModels.has(key)) {
+          console.warn(`[ai] Gemini ${model} ${res.status}: ${errText.slice(0, 200)}`)
+        }
       }
       return null
     }
 
     const data = await res.json()
-    // Gemini may return text in parts[0].text or parts[1].text (when
-    // grounding metadata is included). Try both.
     const parts = data.candidates?.[0]?.content?.parts || []
     for (const part of parts) {
       if (part.text) return part.text.trim()
@@ -372,7 +444,10 @@ async function callOpenRouter(
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '')
-      console.warn(`[ai] OpenRouter ${res.status} (web=${useWebSearch}): ${errText.slice(0, 200)}`)
+      checkDeprecation('openrouter', res.status, errText)
+      if (!deprecatedModels.has('openrouter')) {
+        console.warn(`[ai] OpenRouter ${res.status} (web=${useWebSearch}): ${errText.slice(0, 200)}`)
+      }
       return null
     }
 
