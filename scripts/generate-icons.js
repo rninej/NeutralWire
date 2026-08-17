@@ -30,6 +30,32 @@ async function generateIcons() {
   await sharp(svgPath).resize(32, 32).png().toFile(path.join(publicDir, 'favicon-32.png'))
 
   console.log('Icons generated: NW text on black background (maskable-safe)')
+
+  // ── Generate monochrome notification badge icons ──
+  // Android requires the notification badge (status bar icon) to be
+  // MONOCHROME (white on transparent). If it has color, Android shows
+  // a white square. If it 404s, Android shows a default bell icon.
+  //
+  // The badge is a simplified NW monogram drawn as SVG paths — just the
+  // white strokes, NO background fill (transparent so the status bar
+  // shows through). Android applies its own tint based on the theme.
+  const badgeSvg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <path d="M 45 140 L 45 52 L 82 140 L 82 52" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 82 52 L 106 140 L 130 75 L 154 140 L 154 52" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`
+
+  const badgeSvgPath = path.join(publicDir, 'badge-monochrome.svg')
+  fs.writeFileSync(badgeSvgPath, badgeSvg)
+
+  // Generate at multiple densities for different Android screen sizes
+  await sharp(badgeSvgPath).resize(24, 24).png().toFile(path.join(publicDir, 'badge-24.png'))
+  await sharp(badgeSvgPath).resize(48, 48).png().toFile(path.join(publicDir, 'badge-48.png'))
+  await sharp(badgeSvgPath).resize(72, 72).png().toFile(path.join(publicDir, 'badge-72.png'))
+  await sharp(badgeSvgPath).resize(96, 96).png().toFile(path.join(publicDir, 'badge-96.png'))
+  await sharp(badgeSvgPath).resize(192, 192).png().toFile(path.join(publicDir, 'badge-192.png'))
+
+  console.log('Badge icons generated: 24, 48, 72, 96, 192 (monochrome NW)')
 }
 
 generateIcons().catch(console.error)
