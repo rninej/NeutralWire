@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { Category } from '@/lib/news-sources'
-import { aggregateCategory } from '@/lib/news-aggregator'
+import { aggregateCategory, shortenLongTitles, type TopicArticle } from '@/lib/news-aggregator'
+import { aggregateMyCountryViaGdelt } from '@/lib/gdelt-aggregator'
 import { refreshCategory } from '@/lib/news-cache'
 import { sourcesForCountry } from '@/lib/country-detect'
 
@@ -50,55 +51,82 @@ export async function GET(req: NextRequest) {
   }
 
   const countrySourceIds = sourcesForCountry('GB')
-  let topicCount = 0
-  let errorMsg: string | null = null
+  const results: Array<{ category: string; topics: number; ms: number; error?: string }> = []
   let timedOut = false
 
-  try {
-    // ── Race the refresh against a 20s deadline ──
-    // If the refresh takes longer than 20s, we abort and return a partial
-    // result. The old cache data remains (not overwritten), so users still
-    // see news — just slightly older. The next cron run will try again.
-    const refreshPromise = refreshCategory('relevant', 'GB', async () => {
-      return aggregateCategory('relevant', {
-        limit: 60,
-        minCoverage: 1,
-        countrySourceIds,
-        countryCode: 'GB',
-      })
-    })
+  // ── Refresh ALL main categories in sequence (not parallel — saves CPU) ──
+  // Each category takes ~3-8s. We have 20s deadline. Can refresh ~3-4
+  // categories per run. The cron runs every 60 min, so we ROTATE through
+  // categories — each one gets refreshed every ~2-3 hours.
+  //
+  // Priority order (most-viewed first):
+  //   1. relevant/GB (default landing page — ALWAYS refresh)
+  //   2. Rotate through: world, politics, business, technology, science, health, sports
+  //   3. mycountry/GB (GDELT — takes longer, do last)
+  const hour = new Date().getUTCHours()
+  const rotation = ['world', 'politics', 'business', 'technology', 'science', 'health', 'sports']
+  const rotatedCategory = rotation[hour % rotation.length]
 
-    const deadlinePromise = new Promise<{ topics: never[] } | null>((resolve) => {
-      setTimeout(() => resolve(null), DEADLINE_MS)
-    })
+  const categoriesToRefresh = [
+    { cat: 'relevant' as Category, country: 'GB', isMyCountry: false },
+    { cat: rotatedCategory as Category, country: '', isMyCountry: false },
+    { cat: 'mycountry' as Category, country: 'GB', isMyCountry: true },
+  ]
 
-    const result = await Promise.race([refreshPromise, deadlinePromise])
-
-    if (result === null) {
+  for (const { cat, country, isMyCountry } of categoriesToRefresh) {
+    // Check deadline
+    if (Date.now() - t0 > DEADLINE_MS) {
       timedOut = true
-      console.warn(`[cron/refresh-all] Timed out after ${DEADLINE_MS}ms — returning partial result`)
-    } else {
-      topicCount = result?.topics?.length || 0
+      break
     }
-  } catch (err) {
-    errorMsg = err instanceof Error ? err.message : String(err)
-    console.warn(`[cron/refresh-all] relevant/GB failed:`, err)
+
+    const catStart = Date.now()
+    let topicCount = 0
+    let errorMsg: string | null = null
+
+    try {
+      const refreshPromise = refreshCategory(cat, country, async () => {
+        if (isMyCountry) {
+          const gdeltResult = await aggregateMyCountryViaGdelt(country, 60)
+          await shortenLongTitles(gdeltResult.topics)
+          return gdeltResult
+        }
+        return aggregateCategory(cat, {
+          limit: 60,
+          minCoverage: 1,
+          countrySourceIds: isMyCountry ? countrySourceIds : [],
+          countryCode: country,
+        })
+      })
+
+      const deadlinePromise = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), DEADLINE_MS - (Date.now() - t0))
+      })
+
+      const result = await Promise.race([refreshPromise, deadlinePromise])
+      topicCount = result?.topics?.length || 0
+    } catch (err) {
+      errorMsg = err instanceof Error ? err.message : String(err)
+      console.warn(`[cron/refresh-all] ${cat}/${country} failed:`, err)
+    }
+
+    results.push({
+      category: cat + (country ? `/${country}` : ''),
+      topics: topicCount,
+      ms: Date.now() - catStart,
+      error: errorMsg || undefined,
+    })
   }
 
   const ms = Date.now() - t0
-  console.log(`[cron/refresh-all] relevant/GB: ${topicCount} topics in ${ms}ms${timedOut ? ' (TIMED OUT)' : ''}`)
+  console.log(`[cron/refresh-all] ${results.length} categories in ${ms}ms${timedOut ? ' (TIMED OUT)' : ''}`)
 
   return NextResponse.json({
     ok: true,
-    message: timedOut
-      ? 'Refresh timed out — old cache retained'
-      : errorMsg
-        ? 'Refresh completed with error'
-        : 'Refresh complete',
-    topics: topicCount,
-    ms,
+    message: timedOut ? 'Refresh timed out — partial results' : 'Refresh complete',
+    results,
     timedOut,
-    error: errorMsg,
+    ms,
     ts: Date.now(),
   })
 }

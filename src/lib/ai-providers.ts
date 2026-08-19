@@ -88,6 +88,41 @@ export function getLastProvider(): string {
 }
 
 /**
+ * Strip chain-of-thought / thinking / reasoning from AI responses.
+ *
+ * Some models (especially Groq's gpt-oss and Gemini's thinking models)
+ * include their internal reasoning in the output. This shows up as:
+ *   - <think>...</think> tags
+ *   - <reasoning>...</reasoning> tags
+ *   - <thinking>...</thinking> tags
+ *   - Plain text rambling before the actual summary
+ *
+ * This function removes all of those and returns only the clean summary.
+ */
+function stripThinking(text: string): string {
+  let cleaned = text
+  // Remove <think>...</think>, <reasoning>...</reasoning>, <thinking>...</thinking>
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '')
+  cleaned = cleaned.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+  cleaned = cleaned.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+  // Remove unclosed thinking tags (model started thinking but didn't close)
+  cleaned = cleaned.replace(/<think>[\s\S]*$/gi, '')
+  cleaned = cleaned.replace(/<reasoning>[\s\S]*$/gi, '')
+  // If the response has thinking as plain text before **The Big Picture**,
+  // strip everything before the first ** heading
+  const firstHeading = cleaned.indexOf('**')
+  if (firstHeading > 0) {
+    const beforeHeading = cleaned.slice(0, firstHeading).trim()
+    // Only strip if the text before the heading looks like thinking
+    // (not empty, not already a heading)
+    if (beforeHeading.length > 20 && !beforeHeading.startsWith('**')) {
+      cleaned = cleaned.slice(firstHeading)
+    }
+  }
+  return cleaned.trim()
+}
+
+/**
  * Check if a model has been auto-deprecated (returned 404 or deprecation
  * error in a previous call). Deprecated models are skipped entirely.
  */
@@ -333,7 +368,7 @@ async function callGroq(
     }
 
     const data = await res.json()
-    return data.choices?.[0]?.message?.content?.trim() || null
+    return stripThinking(data.choices?.[0]?.message?.content?.trim() || '') || null
   } catch {
     clearTimeout(timeout)
     return null
@@ -396,7 +431,7 @@ async function callGemini(
     const data = await res.json()
     const parts = data.candidates?.[0]?.content?.parts || []
     for (const part of parts) {
-      if (part.text) return part.text.trim()
+      if (part.text) return stripThinking(part.text.trim())
     }
     return null
   } catch {
@@ -452,7 +487,7 @@ async function callOpenRouter(
     }
 
     const data = await res.json()
-    return data.choices?.[0]?.message?.content?.trim() || null
+    return stripThinking(data.choices?.[0]?.message?.content?.trim() || '') || null
   } catch (err) {
     clearTimeout(timeout)
     console.warn('[ai] OpenRouter failed:', err instanceof Error ? err.message : err)

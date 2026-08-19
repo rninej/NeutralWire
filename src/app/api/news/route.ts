@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { after } from 'next/server'
 import type { Category } from '@/lib/news-sources'
 import { NEWS_SOURCES } from '@/lib/news-sources'
 import { aggregateCategory, shortenLongTitles, type TopicArticle } from '@/lib/news-aggregator'
@@ -155,34 +154,41 @@ export async function GET(req: NextRequest) {
   // 3. Cache exists.
   const truncated = applyFilters(cached.topics, limit, minCoverage, offset, slim)
 
-  // 4. Background refresh if stale.
+  // 4. Refresh if stale.
+  // CRITICAL: Previously used `after()` for background refresh, but Vercel
+  // Hobby KILLS `after()` callbacks as soon as the response is sent. This
+  // meant stale categories NEVER got refreshed — users always saw old news.
+  //
+  // FIX: For first-page requests (offset=0), do a SYNCHRONOUS refresh when
+  // the cache is stale. The user sees a brief loading state, then gets
+  // FRESH news. For infinite scroll (offset>0), serve stale cache (don't
+  // block scrolling with a slow refresh).
   const stale = isStale(cached, category)
   if (stale && canRefresh(category, country)) {
-    if (wait) {
-      const fresh = await refreshCategory(category, country, async () => aggregate())
-      if (fresh) {
-        return NextResponse.json({
-          category,
-          country,
-          countryName,
-          topics: applyFilters(fresh.topics, limit, minCoverage, offset, slim),
-          cached: false,
-          fresh: true,
-          sourceCount: fresh.sourceCount,
-          articleCount: fresh.articleCount,
-          fetchedAt: new Date(fresh.updatedAt).toISOString(),
-          ms: Date.now() - t0,
-        })
-      }
-    } else {
-      after(async () => {
-        try {
-          await refreshCategory(category, country, async () => aggregate())
-        } catch (err) {
-          console.warn(`[api/news] background refresh ${category}/${country} failed:`, err)
+    if (offset === 0 || wait) {
+      // First page or explicit wait → synchronous refresh (user gets fresh news)
+      try {
+        const fresh = await refreshCategory(category, country, async () => aggregate())
+        if (fresh) {
+          return NextResponse.json({
+            category,
+            country,
+            countryName,
+            topics: applyFilters(fresh.topics, limit, minCoverage, offset, slim),
+            cached: false,
+            fresh: true,
+            sourceCount: fresh.sourceCount,
+            articleCount: fresh.articleCount,
+            fetchedAt: new Date(fresh.updatedAt).toISOString(),
+            ms: Date.now() - t0,
+          })
         }
-      })
+      } catch (err) {
+        console.warn(`[api/news] synchronous refresh ${category}/${country} failed:`, err)
+        // Fall through to serve stale cache
+      }
     }
+    // For offset > 0: serve stale cache (don't block infinite scroll)
   }
 
   // Add CDN cache headers so repeated requests (bots, SW, multiple users)

@@ -48,13 +48,12 @@ const FRESHNESS_WINDOW_MS = 48 * 60 * 60 * 1000 // keep topics younger than 48h 
 //
 // Version history:
 //   1 — initial (before Indian sources were added)
-//   2 — added NDTV, Indian Express, Hindustan Times, Economic Times +
-//       bad-fallback detection in merge + title quality scoring
-//   3 — added second-pass keyword filter in RSS fallback
-//   4 — added THIRD-PASS hard UK blocklist in RSS fallback (catches
-//       "England", "Thames Water", "Burnham", "Kinahan", etc. that the
-//       isAboutCountry function missed)
-const CACHE_VERSION = 4
+//   2 — added NDTV, Indian Express, Hindustan Times, Economic Times
+//   3 — added second-pass keyword filter
+//   4 — added third-pass UK blocklist
+//   5 — synchronous refresh on stale cache (was using after() which Vercel kills)
+//       + cron now rotates through ALL categories (was only relevant/GB)
+const CACHE_VERSION = 5
 
 // ---------- In-process refresh bookkeeping ----------
 const REFRESH_IN_FLIGHT = new Map<string, Promise<CategoryCachePayload | null>>()

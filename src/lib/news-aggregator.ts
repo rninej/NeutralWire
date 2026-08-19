@@ -1912,7 +1912,7 @@ function clusterTopics(
   const assigned = new Array(articles.length).fill(false)
   const topics: TopicArticle[] = []
 
-  const JACCARD_THRESHOLD = 0.18 // was 0.22 — lowered to catch more same-event stories
+  const JACCARD_THRESHOLD = 0.15 // was 0.18 — lowered to catch more same-event stories
   const SHARED_KW_THRESHOLD = 3
   const TIME_WINDOW_MS = 48 * 60 * 60 * 1000
 
