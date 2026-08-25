@@ -57,4 +57,10 @@ skills/
 tool-results/
 upload/
 upload/
-*.png
+# Ignore test screenshots in download/ but NOT app icons/badges in public/
+download/*.png
+# Exception: PWA icons and badges MUST be tracked
+!public/badge-*.png
+!public/icon-*.png
+!public/apple-touch-icon.png
+!public/favicon-*.png
