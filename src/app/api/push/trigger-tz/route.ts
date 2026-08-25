@@ -24,14 +24,29 @@ const PRODUCTION_ORIGIN =
 
 const TRIGGER_TZ_SECRET = 'nw-tz-trigger-9f3a7c2e1b8d4f6a'
 
-// ── Briefing windows (LOCAL time, 2h wide for 30-min cron) ──
-const SLOT_WINDOWS = {
-  morning: { startHour: 6, startMinute: 30, endHour: 8, endMinute: 30 },
-  lunch: { startHour: 11, startMinute: 30, endHour: 13, endMinute: 30 },
-  evening: { startHour: 18, startMinute: 30, endHour: 20, endMinute: 30 },
+// ── Briefing targets (LOCAL time) ──
+// The user wants notifications at EXACTLY:
+//   Morning: 8:00 AM
+//   Lunch: 1:00 PM (13:00)
+//   Evening: 8:00 PM (20:00)
+//
+// The cron runs every 30 minutes. We use a ±15 minute window around each
+// target (7:45-8:15, 12:45-13:15, 19:45-20:15) so the cron catches the
+// target time on one of its 30-minute passes.
+//
+// This is EXACT — no DST issues because we use Intl.DateTimeFormat with
+// the device's IANA timezone (e.g. "Asia/Kolkata", "Europe/London").
+// The IANA timezone database automatically handles DST transitions.
+const SLOT_TARGETS = {
+  morning: { hour: 8, minute: 0 },
+  lunch: { hour: 13, minute: 0 },
+  evening: { hour: 20, minute: 0 },
 } as const
 
-type Slot = keyof typeof SLOT_WINDOWS
+// ±15 minute window around each target
+const SLOT_WINDOW_MINUTES = 15
+
+type Slot = keyof typeof SLOT_TARGETS
 
 // Max age for global sent-history entries (14 days). Entries older than
 // this are pruned so the history doesn't grow forever and block all
@@ -104,17 +119,28 @@ function getLocalTime(timezone: string): { hour: number; minute: number; dateKey
   }
 }
 
+/**
+ * Check if the current local time is within ±15 minutes of a slot target.
+ *
+ * Example: morning target is 8:00. Window is 7:45-8:15.
+ * The cron runs every 30 min, so it will hit either 7:46, 8:01, or 8:16
+ * (depending on offset). The ±15 window ensures we catch the target on
+ * one of these passes.
+ *
+ * DST is handled automatically by Intl.DateTimeFormat with the IANA
+ * timezone — the database knows when DST starts/ends for each timezone.
+ */
 function isInSlotWindow(hour: number, minute: number, slot: Slot): boolean {
-  const win = SLOT_WINDOWS[slot]
+  const target = SLOT_TARGETS[slot]
   const currentMin = hour * 60 + minute
-  return currentMin >= win.startHour * 60 + win.startMinute &&
-         currentMin <= win.endHour * 60 + win.endMinute
+  const targetMin = target.hour * 60 + target.minute
+  return Math.abs(currentMin - targetMin) <= SLOT_WINDOW_MINUTES
 }
 
 function getSlotForLocalTime(timezone: string): { slot: Slot; dateKey: string } | null {
   const local = getLocalTime(timezone)
   if (!local) return null
-  for (const slot of Object.keys(SLOT_WINDOWS) as Slot[]) {
+  for (const slot of Object.keys(SLOT_TARGETS) as Slot[]) {
     if (isInSlotWindow(local.hour, local.minute, slot)) {
       return { slot, dateKey: local.dateKey }
     }
