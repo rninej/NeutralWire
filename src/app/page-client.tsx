@@ -1616,13 +1616,8 @@ export default function Home() {
           </Badge>
 
           <div className="ml-auto flex items-center gap-1.5">
-            {/* Country picker — merged into the right-side button group.
-                Compact pill showing the country flag + code. */}
-            <CountryPicker country={country} onChange={handleCountryChange} />
-
-            {/* Donate button — opens Ko-fi in a new tab. Direct access to
-                the support page without opening the full user page.
-                Always red (rose-500) so it stands out as a donation CTA. */}
+            {/* Donate button — opens Ko-fi in a new tab.
+                Always red (rose-500) so it stands out. */}
             <Button
               variant="ghost"
               size="icon"
@@ -1634,19 +1629,33 @@ export default function Home() {
               <Heart className="h-5 w-5" fill="currentColor" />
             </Button>
 
-            {/* Account button — opens the user page (guest name, referrals,
-                personalization, themes, support). */}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setUserPageOpen(true)}
-              className="gap-1.5 transition-transform duration-150 active:scale-95"
-              aria-label="Open account"
-              title="Account, referrals, themes"
-            >
-              <UserCircle className="h-5 w-5" />
-              <span className="hidden sm:inline">Account</span>
-            </Button>
+            {/* Combined Account + Country button group — looks like one
+                pill-shaped button with 2 sub-buttons separated by a divider.
+                Left half: Account (opens user page)
+                Right half: Country (opens country picker)
+                Order: Account → Country → Theme */}
+            <div className="flex items-center rounded-full border border-border bg-muted/50 overflow-hidden">
+              {/* Account sub-button */}
+              <button
+                onClick={() => setUserPageOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-muted transition-colors active:scale-95"
+                aria-label="Open account"
+                title="Account, referrals, themes"
+              >
+                <UserCircle className="h-4 w-4" />
+              </button>
+
+              {/* Divider */}
+              <div className="h-4 w-px bg-border" />
+
+              {/* Country sub-button — opens the country picker popover */}
+              <CountryPicker
+                country={country}
+                onChange={handleCountryChange}
+                compact
+              />
+            </div>
+
             <ThemeToggle />
           </div>
         </div>

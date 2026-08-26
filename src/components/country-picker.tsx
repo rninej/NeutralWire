@@ -18,9 +18,13 @@ import {
 interface CountryPickerProps {
   country: CountryInfo | null
   onChange: (country: CountryInfo) => void
+  /** When true, renders as a compact borderless sub-button (for use
+   *  inside a combined button group). No outline, no MapPin icon,
+   *  just the flag + code. */
+  compact?: boolean
 }
 
-export function CountryPicker({ country, onChange }: CountryPickerProps) {
+export function CountryPicker({ country, onChange, compact = false }: CountryPickerProps) {
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
 
@@ -38,16 +42,29 @@ export function CountryPicker({ country, onChange }: CountryPickerProps) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 gap-1.5 px-2 text-[11px] font-normal"
-          title={`Detected: ${current.name}. Click to change.`}
-        >
-          <MapPin className="h-3 w-3" />
-          <span className="font-semibold">{current.code}</span>
-          <ChevronDown className="h-3 w-3 opacity-60" />
-        </Button>
+        {compact ? (
+          /* Compact mode: borderless sub-button for use inside a combined
+             button group. Shows just the flag + code, no border/icons. */
+          <button
+            type="button"
+            className="flex items-center gap-1 px-2.5 py-1.5 hover:bg-muted transition-colors active:scale-95 text-xs font-medium"
+            title={`Detected: ${current.name}. Click to change.`}
+          >
+            <span className="text-sm leading-none">{current.flag}</span>
+            <span className="font-semibold">{current.code}</span>
+          </button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-[11px] font-normal"
+            title={`Detected: ${current.name}. Click to change.`}
+          >
+            <MapPin className="h-3 w-3" />
+            <span className="font-semibold">{current.code}</span>
+            <ChevronDown className="h-3 w-3 opacity-60" />
+          </Button>
+        )}
       </PopoverTrigger>
       <PopoverContent className="w-64 p-0" align="start">
         <div className="border-b p-2">
