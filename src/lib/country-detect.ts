@@ -239,7 +239,7 @@ export async function detectCountryClient(): Promise<CountryInfo | null> {
  * Force a fresh client-side detection (bypasses cache).
  * Tries multiple CORS-friendly geolocation APIs in order.
  */
-async function detectCountryClientFresh(): Promise<CountryInfo | null> {
+export async function detectCountryClientFresh(): Promise<CountryInfo | null> {
   // 1. ipwho.is — CORS-friendly, free, no key. Returns city + region too.
   try {
     const res = await fetch('https://ipwho.is/', {

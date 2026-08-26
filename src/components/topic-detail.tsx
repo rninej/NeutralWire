@@ -978,10 +978,106 @@ function AskAiPanel({
         <div className="flex flex-1 flex-col overflow-hidden px-4 pt-4" style={{ minHeight: 0 }}>
           <div className="flex-1 space-y-3 overflow-y-auto pb-4" style={{ minHeight: 0 }}>
           {messages.length === 0 && (
-            <div className="text-xs text-muted-foreground">
-              Ask any question about this news story. The AI has access to
-              the full article coverage and can search the web for context.
-            </div>
+            <>
+              <div className="text-xs text-muted-foreground">
+                Ask any question about this news story. The AI has access to
+                the full article coverage and can search the web for context.
+              </div>
+              {/* Quick action chips — common questions users can tap instead of typing.
+                  These are cached server-side (same question + topicId = same answer
+                  fetched from Firebase), so they're instant + save AI costs. */}
+              <div className="flex flex-wrap gap-2 pt-1">
+                {[
+                  { label: 'Explain to a beginner', icon: '🎓', question: 'Explain this story to a beginner in simple terms. What happened and why does it matter?' },
+                  { label: 'Key arguments', icon: '⚖️', question: 'What are the key arguments from different sides about this story?' },
+                  { label: 'Fact-check sources', icon: '🔍', question: 'Fact-check the claims in this story. Are the sources reliable? What might be missing?' },
+                ].map((chip) => (
+                  <button
+                    key={chip.label}
+                    onClick={() => {
+                      setInput(chip.question)
+                      // Send immediately
+                      setTimeout(() => {
+                        const question = chip.question
+                        if (!question || loading) return
+                        setInput('')
+                        setMessages((m) => [...m, { role: 'user', content: question }])
+                        setLoading(true)
+                        const deviceId = getDeviceId()
+                        if (deviceId) {
+                          bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'ai').catch(() => {})
+                          setTimeout(() => {
+                            window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
+                          }, 300)
+                        }
+                        const minDelay = new Promise((resolve) => setTimeout(resolve, 1500))
+                        ;(async () => {
+                          try {
+                            const controller = new AbortController()
+                            const clientTimeout = setTimeout(() => controller.abort(), 12000)
+                            const [_, res] = await Promise.all([
+                              minDelay,
+                              fetch('/api/ask-ai', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  question,
+                                  topicTitle: topic.title,
+                                  topicSummary: summary || topic.summary || '',
+                                  topicArticles: (topic.articles || []).map((a) => ({
+                                    title: a.title,
+                                    source: a.sourceName,
+                                    leaning: a.leaning,
+                                  })),
+                                  debug: debugMode,
+                                }),
+                                signal: controller.signal,
+                              }),
+                            ])
+                            clearTimeout(clientTimeout)
+                            if (!res.ok) {
+                              let errorMsg = 'The AI service is busy right now. Please try again.'
+                              try {
+                                const errData = await res.json()
+                                if (errData?.error) errorMsg = errData.error
+                              } catch {
+                                if (res.status === 504) errorMsg = 'The AI took too long to respond. Please try a shorter question.'
+                              }
+                              setMessages((m) => [...m, { role: 'assistant', content: errorMsg }])
+                              return
+                            }
+                            const data = await res.json()
+                            if (data.answer) {
+                              setMessages((m) => [...m, { role: 'assistant', content: data.answer, model: data.model }])
+                            } else {
+                              setMessages((m) => [...m, { role: 'assistant', content: data.error || 'Sorry, I could not answer that.', model: data.model }])
+                            }
+                          } catch (err) {
+                            const isAbort = err instanceof Error && err.name === 'AbortError'
+                            setMessages((m) => [
+                              ...m,
+                              {
+                                role: 'assistant',
+                                content: isAbort
+                                  ? 'The AI is taking too long to respond. Please try a shorter or simpler question.'
+                                  : 'Connection error. Please check your internet and try again.',
+                              },
+                            ])
+                          } finally {
+                            setLoading(false)
+                          }
+                        })()
+                      }, 0)
+                    }}
+                    disabled={loading}
+                    className="flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-3 py-1.5 text-xs font-medium hover:bg-muted hover:border-foreground/30 transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    <span className="text-sm">{chip.icon}</span>
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </>
           )}
           {messages.map((msg, i) => (
             <div key={i}>

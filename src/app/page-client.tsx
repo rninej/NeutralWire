@@ -46,11 +46,12 @@ import { SearchResults } from '@/components/search-results'
 import { cn } from '@/lib/utils'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import type { CountryInfo } from '@/lib/country-detect'
-import { detectCountryClient, DEFAULT_COUNTRY } from '@/lib/country-detect'
+import { detectCountryClient, detectCountryClientFresh, DEFAULT_COUNTRY } from '@/lib/country-detect'
 import { getDeviceId } from '@/lib/referral'
 import { trackPageView } from '@/lib/analytics-tracker'
 import { usePlatform } from '@/lib/use-platform'
 import { restoreGradient } from '@/lib/use-theme-reveal'
+import { archiveTopicsInBackground } from '@/lib/background-archiver'
 import {
   getInterests,
   getEngagement,
@@ -994,23 +995,42 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      // Check localStorage for a manual override first.
-      try {
-        const manual = localStorage.getItem('neutralwire:country-manual')
-        if (manual) {
+      // Always re-detect the user's country on page open — even if they
+      // previously had a manual override, we check if they've moved.
+      // This handles the case where a user travels to a different country
+      // and their old country selection is no longer relevant.
+      //
+      // If the user has a MANUAL override (they explicitly picked a country),
+      // we still detect the new country and compare. If they're different,
+      // we DON'T auto-switch (respect the manual choice) — but we could
+      // show a notification. For now, manual overrides always win.
+      const manual = localStorage.getItem('neutralwire:country-manual')
+
+      // Force a fresh detection (bypass cache) on every page load
+      const client = await detectCountryClientFresh()
+      if (cancelled) return
+
+      if (manual) {
+        // User has a manual override — respect it, but update the
+        // auto-detected cache so it's fresh for next time
+        try {
           const parsed = JSON.parse(manual) as CountryInfo
-          if (!cancelled) {
-            setCountry(parsed)
-            return
+          setCountry(parsed)
+          // Update the auto-detected cache (without overriding manual)
+          if (client) {
+            localStorage.setItem(
+              'neutralwire:country',
+              JSON.stringify({ ts: Date.now(), info: client }),
+            )
           }
+          return
+        } catch {
+          // invalid manual override — fall through to auto-detect
         }
-      } catch {
-        // ignore
       }
 
-      // Client-side auto-detection (ipwho.is → reallyfreegeoip → cloudflare trace).
-      const client = await detectCountryClient()
-      if (!cancelled) setCountry(client || DEFAULT_COUNTRY)
+      // No manual override — use the freshly detected country
+      setCountry(client || DEFAULT_COUNTRY)
     })()
     return () => {
       cancelled = true
@@ -1366,6 +1386,14 @@ export default function Home() {
           }, 0)
         }
 
+        // ── Background: archive all topics so sources persist forever ──
+        // The client sends each topic to /api/archive-topic which saves
+        // the full topic (with articles) to Firebase. This runs on the
+        // user's device — spreads work across users, saves Vercel CPU.
+        // Only archives topics that haven't been archived yet (tracked
+        // in localStorage).
+        archiveTopicsInBackground(allTopics)
+
         // If there's a ?topic= URL param (from a shared link), auto-open
         // that topic's detail view.
         const urlParams = new URLSearchParams(window.location.search)
@@ -1565,9 +1593,6 @@ export default function Home() {
             </motion.span>
           </a>
 
-          {/* Country picker (clickable, with manual override) */}
-          <CountryPicker country={country} onChange={handleCountryChange} />
-
           {/* Cache indicator */}
           <Badge
             variant="outline"
@@ -1590,7 +1615,11 @@ export default function Home() {
             )}
           </Badge>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1.5">
+            {/* Country picker — merged into the right-side button group.
+                Compact pill showing the country flag + code. */}
+            <CountryPicker country={country} onChange={handleCountryChange} />
+
             {/* Donate button — opens Ko-fi in a new tab. Direct access to
                 the support page without opening the full user page.
                 Always red (rose-500) so it stands out as a donation CTA. */}

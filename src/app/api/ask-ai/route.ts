@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { callAI, callAICompound, getLastProvider } from '@/lib/ai-providers'
-import { firebaseWrite } from '@/lib/firebase-server'
+import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-// Vercel Hobby max is 10s. Keep at 10 to match Hobby; the AI chain is
-// optimized to fit within this budget (parallel calls, 4s per provider).
 export const maxDuration = 10
 
 interface AskAiRequest {
@@ -18,22 +16,27 @@ interface AskAiRequest {
 }
 
 /**
+ * Simple hash for cache keys (not crypto-secure, just for dedup).
+ */
+function hash(s: string): string {
+  let h = 0
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
+  }
+  return 'qa_' + (h >>> 0).toString(36)
+}
+
+/**
  * Ask AI about a news story.
  *
- * Provider chain (all in parallel, first that works wins):
- * 1. Gemini (multiple models, NO google search by default)
- * 2. Groq (llama-3.3-70b, gpt-oss-120b)
- * 3. OpenRouter (gemma free)
- *
- * If the model outputs ({/compound}), it re-routes to compound (web search):
- * 1. Gemini (WITH google search)
- * 2. Groq compound-beta
- * 3. OpenRouter with web plugin
- *
- * Total budget: ~9s to fit within Vercel Hobby's 10s maxDuration.
+ * Caching: common questions (like "Explain to a beginner") are cached
+ * per-topicTitle in Firebase. When a user clicks a quick-action chip,
+ * the server checks Firebase first — if the same question was already
+ * answered for the same topic, it returns the cached answer instantly
+ * (no AI call needed). This saves costs since many users ask the same
+ * questions.
  */
 export async function POST(req: NextRequest) {
-  // Hard deadline: 9s (leaves 1s for response serialization)
   const deadline = Date.now() + 9000
 
   try {
@@ -41,6 +44,24 @@ export async function POST(req: NextRequest) {
 
     if (!body.question || !body.topicTitle) {
       return NextResponse.json({ error: 'Missing question or topic' }, { status: 400 })
+    }
+
+    // ── Check Firebase cache first ──
+    // Cache key is a hash of question + topicTitle. This means the same
+    // question for the same topic always returns the same cached answer.
+    const cacheKey = hash(body.question.toLowerCase().trim() + '|' + body.topicTitle.toLowerCase().trim())
+    try {
+      const cached = await firebaseRead<{ answer: string; model?: string }>(`ask-ai-cache/${cacheKey}`)
+      if (cached?.answer) {
+        return NextResponse.json({
+          answer: cached.answer,
+          qaId: cacheKey,
+          model: cached.model || 'cached',
+          cached: true,
+        })
+      }
+    } catch {
+      // cache miss — continue to AI
     }
 
     const articleContext = (body.topicArticles || [])
@@ -114,16 +135,17 @@ ${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
       )
     }
 
-    // Store Q&A in Firebase (fire-and-forget, don't block response)
-    const qaId = `qa_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    void firebaseWrite(`ask-ai/${qaId}`, {
-      question: body.question,
+    // Store Q&A in Firebase cache (using the hash key so repeated questions
+    // for the same topic return the cached answer — saves AI costs).
+    void firebaseWrite(`ask-ai-cache/${cacheKey}`, {
       answer,
+      question: body.question,
       topicTitle: body.topicTitle,
+      model: modelUsed,
       timestamp: Date.now(),
     })
 
-    return NextResponse.json({ answer, qaId, model: modelUsed })
+    return NextResponse.json({ answer, qaId: cacheKey, model: modelUsed })
   } catch (err) {
     console.error('[ask-ai] error:', err)
     return NextResponse.json(
