@@ -161,8 +161,8 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
    *    [ ≡ Sources | ⇗ ]
    *  Left sub-button opens the frosted-glass sources popup; right
    *  sub-button shares (green check for 2s on clipboard copy).
-   *  `compact` = icon-only (mini cards); otherwise the left sub-button
-   *  also shows a "Sources" label. */
+   *  The "Sources" label shows on EVERY card size (mini included) —
+   *  `compact` only scales the pill down slightly for mini cards. */
   const sourcesSharePill = (compact = false) => (
     <div
       className={cn(
@@ -180,9 +180,7 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
         title="View all sources for this story"
       >
         <Layers className="h-3 w-3 text-foreground/80" />
-        {!compact && (
-          <span className="text-[10px] font-medium text-foreground/80">Sources</span>
-        )}
+        <span className="text-[10px] font-medium text-foreground/80">Sources</span>
       </button>
       {/* Divider — same as the header pill */}
       <div className="h-3.5 w-px bg-border" />
@@ -475,7 +473,8 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
               {mounted ? formatTime(topic.latestSeen) : ''}
             </span>
             {/* Combined Sources | Share pill — same design as the header's
-                account|country pill. Icon-only on mini cards (space). */}
+                account|country pill. Slightly scaled down on mini cards;
+                the "Sources" label shows on every size. */}
             {sourcesSharePill(true)}
           </div>
           <h3 className="font-bold text-sm leading-tight line-clamp-3">

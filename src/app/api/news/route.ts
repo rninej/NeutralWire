@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { after } from 'next/server'
 import type { Category } from '@/lib/news-sources'
 import { NEWS_SOURCES } from '@/lib/news-sources'
 import { aggregateCategory, shortenLongTitles, type TopicArticle } from '@/lib/news-aggregator'
@@ -20,9 +21,10 @@ import {
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-// Cap CPU time. Cache hits are <100ms. A cold aggregate (RSS/GDELT)
-// takes 5-15s. 20s is a safe ceiling (was 25s — reduced to save CPU).
-export const maxDuration = 20
+// Cap CPU time. Cache hits are <200ms. A cold aggregate (RSS/GDELT) takes
+// 5-15s, and the background `after()` refresh on a stale cache needs the
+// same. 30s covers both the cold path and the post-response refresh.
+export const maxDuration = 30
 
 /**
  * Cache-first news endpoint.
@@ -32,20 +34,21 @@ export const maxDuration = 20
  *      country from request headers (server-side, ip-api.com).
  *   2. Read Firebase cache for the (category, country) pair.
  *   3. If fresh: return it (fast).
- *   4. If stale: return it immediately AND kick off a background refresh.
+ *   4. If stale: return the stale cache INSTANTLY and refresh in the
+ *      background via `after()` (Fluid Compute keeps the function alive
+ *      until the refresh finishes — bounded by maxDuration).
  *   5. If missing: do a synchronous aggregate (one-time per country).
  *
  * Query params:
  *   - category: 'relevant' | 'mycountry' | 'top' | ... (default 'relevant')
  *   - country:  ISO 3166-1 alpha-2 code (overrides auto-detection)
- *   - limit, minCoverage, wait
+ *   - limit, minCoverage, offset, slim
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const category = (sp.get('category') || 'relevant') as Category
   const limit = Math.min(40, Math.max(5, Number(sp.get('limit') || '24')))
   const minCoverage = Math.max(1, Math.min(8, Number(sp.get('minCoverage') || '1')))
-  const wait = sp.get('wait') === '1'
   const slim = sp.get('slim') === '1' // strips articles array → ~80% smaller response
   const countryOverride = sp.get('country') || ''
   // Offset for infinite scroll — skip the first N topics and return the next N.
@@ -161,49 +164,37 @@ export async function GET(req: NextRequest) {
   // 3. Cache exists.
   const truncated = applyFilters(cached.topics, limit, minCoverage, offset, slim)
 
-  // 4. Refresh if stale.
-  // CRITICAL: Previously used `after()` for background refresh, but Vercel
-  // Hobby KILLS `after()` callbacks as soon as the response is sent. This
-  // meant stale categories NEVER got refreshed — users always saw old news.
+  // 4. Refresh if stale — IN THE BACKGROUND, never blocking the response.
   //
-  // FIX: For first-page requests (offset=0), do a SYNCHRONOUS refresh when
-  // the cache is stale. The user sees a brief loading state, then gets
-  // FRESH news. For infinite scroll (offset>0), serve stale cache (don't
-  // block scrolling with a slow refresh).
+  // CRITICAL FIX (the "20-second loading animation" bug): this route used
+  // to run a SYNCHRONOUS refresh when the cache was stale on first-page
+  // requests (offset=0). Every visitor then sat through the full RSS fetch
+  // (12s) + AI title shortening + image validation — 12-20s of skeletons
+  // on the homepage and every subtopic section.
+  //
+  // Now the (slightly old) cached news is returned INSTANTLY and the
+  // refresh runs AFTER the response via `after()` (the same mechanism
+  // /api/refresh already uses for archiving + summaries). With Fluid
+  // Compute the function stays alive until the pending work settles
+  // (bounded by maxDuration), so the Firebase cache really is updated.
+  // Freshness for the CURRENT visitor is restored by the client's silent
+  // /api/refresh call a few seconds later (see the auto-refresh effect in
+  // page-client.tsx) — and the next request serves the fresh cache.
+  //
+  // `canRefresh` rate-limits (3 min per category per instance) so a burst
+  // of visitors on a stale category triggers at most one background
+  // refresh per instance, and REFRESH_IN_FLIGHT dedups concurrent ones.
   const stale = isStale(cached, category)
+  let backgroundRefresh = false
   if (stale && canRefresh(category, country)) {
-    if (offset === 0 || wait) {
-      // First page or explicit wait → synchronous refresh (user gets fresh news)
+    backgroundRefresh = true
+    after(async () => {
       try {
-        const fresh = await refreshCategory(category, country, async () => aggregate())
-        if (fresh) {
-          const refreshedResponse = NextResponse.json({
-            category,
-            country,
-            countryName,
-            topics: applyFilters(fresh.topics, limit, minCoverage, offset, slim),
-            cached: false,
-            fresh: true,
-            sourceCount: fresh.sourceCount,
-            articleCount: fresh.articleCount,
-            fetchedAt: new Date(fresh.updatedAt).toISOString(),
-            ms: Date.now() - t0,
-          })
-          // CDN-cache the refreshed result — this path only runs when the
-          // cache was stale (≥30 min old), so a 5-min CDN window is safe
-          // and stops repeat visitors from re-running the function.
-          refreshedResponse.headers.set(
-            'Cache-Control',
-            'public, s-maxage=300, stale-while-revalidate=600',
-          )
-          return refreshedResponse
-        }
+        await refreshCategory(category, country, async () => aggregate())
       } catch (err) {
-        console.warn(`[api/news] synchronous refresh ${category}/${country} failed:`, err)
-        // Fall through to serve stale cache
+        console.warn(`[api/news] background refresh ${category}/${country} failed:`, err)
       }
-    }
-    // For offset > 0: serve stale cache (don't block infinite scroll)
+    })
   }
 
   // Add CDN cache headers so repeated requests (bots, SW, multiple users)
@@ -218,6 +209,9 @@ export async function GET(req: NextRequest) {
     topics: truncated,
     cached: true,
     fresh: !stale,
+    // True when a background `after()` refresh was just kicked off — tells
+    // the client (and us, when debugging) that fresher data is coming.
+    refreshing: backgroundRefresh,
     sourceCount: cached.sourceCount ?? NEWS_SOURCES.length,
     articleCount: cached.articleCount ?? truncated.length,
     fetchedAt: new Date(cached.updatedAt).toISOString(),

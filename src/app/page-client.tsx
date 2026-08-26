@@ -11,7 +11,6 @@ import {
   TrendingUp,
   Filter,
   Info,
-  Cloud,
   X,
   UserCircle,
   Heart,
@@ -360,7 +359,6 @@ export default function Home() {
   const [isFresh, setIsFresh] = useState(true)
   const [articleCount, setArticleCount] = useState(0)
   const [minCoverage, setMinCoverage] = useState(1)
-  const [loadMs, setLoadMs] = useState<number | null>(null)
 
   // --- Infinite scroll state ---
   // The API returns 24 topics per fetch. When the user scrolls to the
@@ -1407,7 +1405,10 @@ export default function Home() {
         setIsCached(!!json.cached)
         setIsFresh(json.fresh !== false)
         setArticleCount(json.articleCount ?? 0)
-        setLoadMs(json.ms ?? null)
+        // NOTE: json.ms / json.refreshing are intentionally ignored here —
+        // the cache-freshness badge was removed from the header (users
+        // found it noisy); the server refreshes stale caches in the
+        // background on its own.
         // Store blindspot sections (if present) for sectioned display
         setBlindspotSections(json.sections || {})
 
@@ -1532,6 +1533,11 @@ export default function Home() {
   )
 
   // Auto-trigger silent background refresh when stale (no UI indication).
+  // The 12s delay gives the server's own `after()` background refresh
+  // (kicked off by the /api/news request that returned the stale data)
+  // time to COMPLETE first — so this /api/refresh call usually finds the
+  // cache already fresh (rate-limit hit → serves cached data instantly)
+  // or piggybacks on the in-flight refresh instead of re-aggregating.
   useEffect(() => {
     if (!isFresh && !loading) {
       const t = setTimeout(async () => {
@@ -1557,7 +1563,7 @@ export default function Home() {
         } catch {
           // silent
         }
-      }, 2000)
+      }, 12000)
       return () => clearTimeout(t)
     }
   }, [isFresh, loading, category, minCoverage, country])
@@ -1630,27 +1636,10 @@ export default function Home() {
             </motion.span>
           </a>
 
-          {/* Cache indicator */}
-          <Badge
-            variant="outline"
-            className="hidden gap-1 text-[10px] font-normal sm:inline-flex"
-            title={isFresh ? 'Data is fresh' : 'Showing cached data — refreshing'}
-          >
-            {isFresh ? (
-              <>
-                <Cloud className="h-3 w-3 text-emerald-500" />
-                Fresh
-              </>
-            ) : (
-              <>
-                <Cloud className="h-3 w-3 text-amber-500" />
-                Cached
-              </>
-            )}
-            {loadMs !== null && !loading && (
-              <span className="ml-1 opacity-60">{loadMs}ms</span>
-            )}
-          </Badge>
+          {/* Cache indicator removed — was a "Fresh · 1602ms" badge here.
+              The server now serves cached news instantly and refreshes
+              stale caches in the background, so the indicator had nothing
+              actionable to say. */}
 
           <div className="ml-auto flex items-center gap-1.5">
             {/* Donate button — opens Ko-fi in a new tab.
