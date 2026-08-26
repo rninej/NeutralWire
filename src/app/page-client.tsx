@@ -1617,13 +1617,16 @@ export default function Home() {
               transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
               whileHover={{ scale: 1.15 }}
             />
+            {/* NEUTRALWIRE wordmark — clear brand recognition next to the
+                logo on every screen size (was hidden on mobile). Geist
+                ExtraBold + wide tracking reads as a proper wordmark. */}
             <motion.span
-              className="hidden sm:inline"
+              className="text-sm font-extrabold uppercase tracking-[0.08em] whitespace-nowrap select-none sm:text-base sm:tracking-[0.14em]"
               initial={{ opacity: 0, x: -6 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.4, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}
             >
-              NeutralWire
+              NEUTRALWIRE
             </motion.span>
           </a>
 

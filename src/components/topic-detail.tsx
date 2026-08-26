@@ -641,6 +641,15 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
               transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               onError={() => setImgError(true)}
             />
+            {/* NW brand mark — same watermark as the news cards and the
+                generated share/notification images (dark chip + NW logo +
+                wordmark), for consistent brand recognition. */}
+            <div className="pointer-events-none absolute bottom-2 right-2 z-[1] flex items-center gap-1.5 rounded-lg bg-black/55 py-1 pl-1.5 pr-2 backdrop-blur-[2px]">
+              <img src="/icon-192.png" alt="" className="h-4 w-4 rounded-[4px]" />
+              <span className="text-[10px] font-extrabold uppercase leading-none tracking-[0.14em] text-white">
+                NeutralWire
+              </span>
+            </div>
           </div>
         )}
 
