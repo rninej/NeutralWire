@@ -1,6 +1,14 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v20: REVALIDATION THROTTLE — SWR handlers no longer fire a background
+//      network fetch on EVERY request. A cached response younger than its
+//      revalidation threshold is served with ZERO network activity. The
+//      Relevant tab previously made ~14 /api/news requests per load, each
+//      triggering a serverless revalidation (even when the cache was
+//      seconds old) — burning Vercel invocations + Fluid CPU for nothing.
+//      Thresholds: news/topic 5 min (matches CDN s-maxage), summary 60 min
+//      (summaries are immutable once cached in Firebase).
 // v19: CACHE EVICTION — prevents the SW cache from growing unbounded
 //      (was hitting 30-99MB on mobile). Caps at MAX_CACHE_ENTRIES with
 //      LRU eviction + a 12h max-age sweep on activate. Splits API cache
@@ -32,6 +40,30 @@ const MAX_IMG_ENTRIES = 80
 // Max age: entries older than 12h are considered stale and evicted
 // during the activate sweep.
 const MAX_AGE_MS = 12 * 60 * 60 * 1000
+
+// ── SWR revalidation thresholds ──
+// A cached response younger than its threshold is served with NO network
+// revalidation at all. Older than the threshold → serve cache instantly +
+// refresh in the background (classic SWR). This stops every page load from
+// firing ~14 redundant serverless revalidations that the CDN already has.
+const REVALIDATE_NEWS_MS = 5 * 60 * 1000 // /api/news + /api/topic (matches CDN s-maxage)
+const REVALIDATE_SUMMARY_MS = 60 * 60 * 1000 // /api/summary (immutable once generated)
+
+/**
+ * Age of a cached response in ms, from its Date header. Returns Infinity
+ * when the age can't be determined (forces revalidation — safe default).
+ */
+function cachedAgeMs(cached) {
+  try {
+    const d = cached.headers.get('date')
+    if (!d) return Infinity
+    const t = new Date(d).getTime()
+    if (!isFinite(t)) return Infinity
+    return Date.now() - t
+  } catch {
+    return Infinity
+  }
+}
 
 // ---------- Install ----------
 // Pre-cache the app shell so the FIRST load is instant when online, and
@@ -224,23 +256,26 @@ self.addEventListener('fetch', (event) => {
   }
 
   // ── /api/news → STALE-WHILE-REVALIDATE (instant PWA load) ──
-  // Serves the cached response INSTANTLY (if available), then fetches a
-  // fresh copy in the background to update the cache. This is the
-  // biggest speed win for the PWA — the feed appears immediately.
+  // Serves the cached response INSTANTLY (if available). A background
+  // revalidation only fires when the cached copy is older than
+  // REVALIDATE_NEWS_MS — fresh copies are served with ZERO network
+  // activity, which is the biggest Vercel-invocation saver in the SW.
   if (req.url.includes('/api/news')) {
     event.respondWith(
       (async () => {
         const cache = await caches.open(API_CACHE)
         const cached = await cache.match(req)
 
-        // Kick off a background fetch to update the cache (revalidate).
-        // Uses putWithEviction so the API cache stays under MAX_API_ENTRIES.
-        const networkFetch = fetch(req, { cache: 'no-store' })
-          .then((res) => {
-            if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
-            return res
-          })
-          .catch(() => null)
+        // Only revalidate when the cached copy is old (or missing).
+        let networkFetch = null
+        if (!cached || cachedAgeMs(cached) > REVALIDATE_NEWS_MS) {
+          networkFetch = fetch(req, { cache: 'no-store' })
+            .then((res) => {
+              if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
+              return res
+            })
+            .catch(() => null)
+        }
 
         // If we have a cached response, return it INSTANTLY.
         if (cached) return cached
@@ -274,12 +309,17 @@ self.addEventListener('fetch', (event) => {
         const cache = await caches.open(API_CACHE)
         const cached = await cache.match(req)
 
-        const networkFetch = fetch(req, { cache: 'no-store' })
-          .then((res) => {
-            if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
-            return res
-          })
-          .catch(() => null)
+        // Summaries are effectively immutable (cached in Firebase forever)
+        // — revalidate at most once per hour, not on every request.
+        let networkFetch = null
+        if (!cached || cachedAgeMs(cached) > REVALIDATE_SUMMARY_MS) {
+          networkFetch = fetch(req, { cache: 'no-store' })
+            .then((res) => {
+              if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
+              return res
+            })
+            .catch(() => null)
+        }
 
         // Serve cache instantly if we have it.
         if (cached) return cached
@@ -312,13 +352,16 @@ self.addEventListener('fetch', (event) => {
         const cache = await caches.open(API_CACHE)
         const cached = await cache.match(req)
 
-        // Kick off a background fetch to update the cache.
-        const networkFetch = fetch(req, { cache: 'no-store' })
-          .then((res) => {
-            if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
-            return res
-          })
-          .catch(() => null)
+        // Revalidate only when the cached copy is older than the threshold.
+        let networkFetch = null
+        if (!cached || cachedAgeMs(cached) > REVALIDATE_NEWS_MS) {
+          networkFetch = fetch(req, { cache: 'no-store' })
+            .then((res) => {
+              if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
+              return res
+            })
+            .catch(() => null)
+        }
 
         // Serve cache instantly IF it's a successful response (not an
         // error). We check cached.ok — though cache.match returns a

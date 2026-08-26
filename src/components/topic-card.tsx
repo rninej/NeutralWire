@@ -75,7 +75,12 @@ function proxyImage(url: string): string {
   return `/api/img?url=${encodeURIComponent(url)}`
 }
 
-export function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDetail, onDismiss, index = 0 }: TopicCardProps) {
+function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDetail, onDismiss, index = 0 }: TopicCardProps) {
+  // NOTE: this component is wrapped in React.memo at the bottom of the file.
+  // Parent re-renders (search typing, engagement ticks, unrelated state)
+  // no longer re-render every card in the feed — topic object identities
+  // are stable across renders, and onOpenDetail/onDismiss are useCallback'd
+  // in the parent, so memo comparison works as intended.
   // Sources are HIDDEN by default on ALL cards (including the featured
   // first card). Users tap "View sources" to expand. Previously the featured
   // card auto-opened its source list, which made the first news story look
@@ -189,15 +194,15 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
   }
 
   // Stagger delay: cap so the last card in a long list isn't waiting seconds.
-  // 0.035s per card (was 0.04) — slightly smoother spread, still finishes
-  // within ~0.35s for the first 10 cards. Combined with the slightly longer
-  // duration (0.32s) and smaller y offset (6px), the entrance feels more
-  // relaxed and "premium" — like cards settling into place.
-  const staggerDelay = Math.min(index * 0.035, 0.30)
+  // 0.03s per card — snappy spread that finishes within ~0.25s for the first
+  // 10 cards. Combined with the 0.28s duration and small y offset (5px),
+  // the entrance feels quick and premium — cards settle into place without
+  // the feed feeling like it's slowly dripping in.
+  const staggerDelay = Math.min(index * 0.03, 0.25)
   const cardMotion = {
-    initial: { opacity: 0, y: 6 },
+    initial: { opacity: 0, y: 5 },
     animate: { opacity: 1, y: 0 },
-    transition: { duration: 0.32, delay: staggerDelay, ease: EASE_OUT },
+    transition: { duration: 0.28, delay: staggerDelay, ease: EASE_OUT },
     // Hover lift: 1.02 scale + 2px translateY (via .card-lift CSS class).
     // The .card-lift class also adds a 0.25s transition for transform +
     // box-shadow so the lift + bias-tinted glow (from .card-glow) animate
@@ -348,6 +353,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
               src={proxyImage(imageUrl!)}
               alt=""
               loading="lazy"
+              decoding="async"
               className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
               onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
             />
@@ -404,6 +410,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             src={proxyImage(imageUrl!)}
             alt=""
             loading={variant === 'featured' || isHero ? 'eager' : 'lazy'}
+            decoding="async"
             // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
             fetchPriority={variant === 'featured' || isHero ? 'high' : 'low'}
             className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
@@ -471,6 +478,7 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
             src={proxyImage(imageUrl!)}
             alt=""
             loading={variant === 'featured' ? 'eager' : 'lazy'}
+            decoding="async"
             // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
             fetchPriority={variant === 'featured' ? 'high' : 'low'}
             className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
@@ -519,6 +527,15 @@ export function TopicCard({ topic, variant = 'default', defaultOpen = false, onO
     </>
   )
 }
+
+// ── Memoized TopicCard ──
+// The feed renders 30-60 cards. Without memo, every parent state change
+// (typing in search, the 2-min engagement tick, country pill update…)
+// re-rendered ALL of them. Topic object identities are stable between
+// renders and the parent's callbacks are useCallback'd, so a shallow
+// memo comparison skips re-rendering unchanged cards entirely.
+const TopicCardMemo = React.memo(TopicCard)
+export { TopicCardMemo as TopicCard }
 
 // ── Sources Popup ──
 // A scrollable full-screen overlay that shows all sources for a topic,

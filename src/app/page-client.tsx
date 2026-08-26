@@ -451,6 +451,16 @@ export default function Home() {
     detailTopicRef.current = detailTopic
   }, [detailTopic])
 
+  // ── topics ref ──
+  // Lets the topic-open watcher below read the latest topics WITHOUT
+  // re-subscribing its popstate/message listeners on every feed update
+  // (the old [topics] dep array re-ran the whole effect — listener churn
+  // + a redundant openTopicFromUrl() call on every fetch/append).
+  const topicsRef = React.useRef<TopicArticle[]>([])
+  useEffect(() => {
+    topicsRef.current = topics
+  }, [topics])
+
   // --- User interests + engagement + seen-topics (for personalization) ---
   const [interests, setInterestsState] = useState<string[]>([])
   const [engagement, setEngagement] = useState<EngagementStats>({})
@@ -658,7 +668,7 @@ export default function Home() {
 
       // First, check if the topic is already in the loaded topics list
       // (fastest path — no API call needed).
-      const found = topics.find((t) => t.topicId === topicId)
+      const found = topicsRef.current.find((t) => t.topicId === topicId)
       if (found) {
         handleOpenDetailRef.current?.(found)
         return
@@ -736,7 +746,8 @@ export default function Home() {
       navigator.serviceWorker?.removeEventListener('message', messageHandler)
       window.removeEventListener('message', messageHandler)
     }
-  }, [topics])
+    // NOTE: runs ONCE. topics changes are picked up via topicsRef above.
+  }, [])
 
   // ── NOTE: Client-side summary pre-generation was REMOVED to avoid
   // burning Vercel Fluid Compute CPU. Every page visit was firing 12
@@ -988,50 +999,69 @@ export default function Home() {
   // async fetch against stale responses when the user switches categories.
   const reqIdRef = React.useRef(0)
 
-  // --- Country detection on first load ---
-  // Client-side detection is PRIMARY (runs in the user's browser, sees
-  // their real public IP). Server-side detection is unreliable behind
-  // the Caddy gateway which may not forward the real client IP.
+  // --- Country detection on first load (OPTIMISTIC + background refresh) ---
+  // Two-phase detection for the fastest possible first paint:
+  //
+  //   Phase 1 (INSTANT, ~0ms): manual override from localStorage, else the
+  //   24h-TTL cached detection. Repeat visitors get their feed fetch going
+  //   immediately — no network round-trip before content starts loading.
+  //
+  //   Phase 2 (BACKGROUND): a FRESH detection (bypasses cache) so travellers
+  //   are picked up on every page load, exactly as before. If the fresh
+  //   result differs from what we optimistically used, the country state
+  //   updates and the feed refetches with the correct country.
+  //
+  // While country is still null (very first visit ever), fetchData sends the
+  // request WITHOUT a country param — the server detects from IP (cached 1h
+  // per IP) — so even first-timers see content immediately instead of
+  // waiting up to 6s for the client-side geolocation API.
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
-      // Always re-detect the user's country on page open — even if they
-      // previously had a manual override, we check if they've moved.
-      // This handles the case where a user travels to a different country
-      // and their old country selection is no longer relevant.
-      //
-      // If the user has a MANUAL override (they explicitly picked a country),
-      // we still detect the new country and compare. If they're different,
-      // we DON'T auto-switch (respect the manual choice) — but we could
-      // show a notification. For now, manual overrides always win.
+
+    // ── Phase 1: instant from localStorage ──
+    try {
       const manual = localStorage.getItem('neutralwire:country-manual')
-
-      // Force a fresh detection (bypass cache) on every page load
-      const client = await detectCountryClientFresh()
-      if (cancelled) return
-
       if (manual) {
-        // User has a manual override — respect it, but update the
-        // auto-detected cache so it's fresh for next time
+        const parsed = JSON.parse(manual) as CountryInfo
+        if (parsed?.code) setCountry(parsed)
+      } else {
+        detectCountryClient().then((cachedInfo) => {
+          if (cancelled || !cachedInfo) return
+          setCountry(cachedInfo)
+        })
+      }
+    } catch {
+      // ignore — fall through to background detection
+    }
+
+    // ── Phase 2: fresh detection (travel check, every page load) ──
+    ;(async () => {
+      const client = await detectCountryClientFresh()
+      if (cancelled || !client) return
+
+      const manual = localStorage.getItem('neutralwire:country-manual')
+      if (manual) {
+        // Manual override always wins — just refresh the auto-detect cache
+        // so it's fresh for next time (same behaviour as before).
         try {
-          const parsed = JSON.parse(manual) as CountryInfo
-          setCountry(parsed)
-          // Update the auto-detected cache (without overriding manual)
-          if (client) {
-            localStorage.setItem(
-              'neutralwire:country',
-              JSON.stringify({ ts: Date.now(), info: client }),
-            )
-          }
-          return
+          localStorage.setItem(
+            'neutralwire:country',
+            JSON.stringify({ ts: Date.now(), info: client }),
+          )
         } catch {
-          // invalid manual override — fall through to auto-detect
+          // ignore
         }
+        return
       }
 
-      // No manual override — use the freshly detected country
-      setCountry(client || DEFAULT_COUNTRY)
+      // No manual override — adopt the fresh result. Functional update
+      // returns the SAME object when the code is unchanged, so React skips
+      // the re-render (and the feed refetch) when nothing actually changed.
+      setCountry((prev) =>
+        prev && prev.code === client.code ? prev : client,
+      )
     })()
+
     return () => {
       cancelled = true
     }
@@ -1338,10 +1368,14 @@ export default function Home() {
   // --- Fetch news (cache-first from Firebase) ---
   const fetchData = React.useCallback(
     async (cat: Category, mc: number, country?: CountryInfo | null) => {
-      // For virtual categories, wait until country is detected.
-      // This prevents fetching with the wrong country on initial load.
+      // For virtual categories, include the country param ONLY when we
+      // already know it (manual override or cached detection). When country
+      // is still null (very first visit), the request goes out WITHOUT the
+      // param — the server detects from IP — so the feed starts loading
+      // immediately instead of blocking on the client geolocation API.
+      // When the fresh detection lands and differs, the effect re-runs with
+      // the correct country param.
       const isVirtual = cat === 'relevant' || cat === 'mycountry'
-      if (isVirtual && !country) return
 
       const reqId = ++reqIdRef.current
       setLoading(true)
@@ -1782,13 +1816,13 @@ export default function Home() {
             />
           </motion.div>
         ) : (
-          <AnimatePresence mode="wait">
+          <AnimatePresence mode="wait" initial={false}>
             <motion.div
               key={category}
-              initial={{ opacity: 0, x: 14 }}
+              initial={{ opacity: 0, x: 10 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -14 }}
-              transition={{ duration: 0.28, ease: [0.4, 0, 0.2, 1] }}
+              exit={{ opacity: 0, x: -10 }}
+              transition={{ duration: 0.18, ease: [0.4, 0, 0.2, 1] }}
             >
             {/* Content */}
             {error ? (
@@ -1819,74 +1853,44 @@ export default function Home() {
               <BiasColumns topics={filteredTopics} />
             ) : (
               <>
-                {/* ── Mobile: sectioned layout for ALL tabs ── */}
-                {/* Desktop: simple grid layout (clean, fills space properly) */}
+                {/* ── Sectioned layouts ──
+                    Rendered ONCE with responsive grid classes inside each
+                    layout component (was: duplicate lg:hidden + hidden
+                    lg:block instances, which doubled the DOM, image
+                    requests, and SectionedFeed's API fetch effect). */}
                 {!debouncedSearch ? (
                   <>
-                    {/* Mobile: sectioned layout */}
-                    <div className="lg:hidden">
-                      {category === 'relevant' ? (
-                        /* Relevant: sector-grouped sections (Top Headlines + World + Politics + etc.) */
-                        <SectionedFeed
-                          topics={filteredTopics}
-                          olderTopics={olderTopics}
-                          onOpenDetail={handleOpenDetail}
-                          onDismiss={handleDismissTopic}
-                          country={country}
-                          interests={interests}
-                          engagement={engagement}
-                          onSearchClick={() => setShowSearch(true)}
-                        />
-                      ) : category === 'blindspots' ? (
-                        /* Blindspots: per-category sections showing top blindspot stories */
-                        <BlindspotSectionedFeed
-                          sections={blindspotSections}
-                          onOpenDetail={handleOpenDetail}
-                          onDismiss={handleDismissTopic}
-                          onSearchClick={() => setShowSearch(true)}
-                        />
-                      ) : (
-                        <MobileTopicLayout
-                          topics={filteredTopics}
-                          olderTopics={olderTopics}
-                          onOpenDetail={handleOpenDetail}
-                          onDismiss={handleDismissTopic}
-                          label={CATEGORY_LABELS[category] || category}
-                          onSearchClick={() => setShowSearch(true)}
-                        />
-                      )}
-                    </div>
-                    {/* Desktop: same sectioned layout as mobile (all categories) */}
-                    <div className="hidden lg:block">
-                      {category === 'relevant' ? (
-                        <SectionedFeed
-                          topics={filteredTopics}
-                          olderTopics={olderTopics}
-                          onOpenDetail={handleOpenDetail}
-                          onDismiss={handleDismissTopic}
-                          country={country}
-                          interests={interests}
-                          engagement={engagement}
-                          onSearchClick={() => setShowSearch(true)}
-                        />
-                      ) : category === 'blindspots' ? (
-                        <BlindspotSectionedFeed
-                          sections={blindspotSections}
-                          onOpenDetail={handleOpenDetail}
-                          onDismiss={handleDismissTopic}
-                          onSearchClick={() => setShowSearch(true)}
-                        />
-                      ) : (
-                        <MobileTopicLayout
-                          topics={filteredTopics}
-                          olderTopics={olderTopics}
-                          onOpenDetail={handleOpenDetail}
-                          onDismiss={handleDismissTopic}
-                          label={CATEGORY_LABELS[category] || category}
-                          onSearchClick={() => setShowSearch(true)}
-                        />
-                      )}
-                    </div>
+                    {category === 'relevant' ? (
+                      /* Relevant: sector-grouped sections (Top Headlines + World + Politics + etc.) */
+                      <SectionedFeed
+                        topics={filteredTopics}
+                        olderTopics={olderTopics}
+                        onOpenDetail={handleOpenDetail}
+                        onDismiss={handleDismissTopic}
+                        country={country}
+                        interests={interests}
+                        engagement={engagement}
+                        myCountryTopics={myCountryTopics}
+                        onSearchClick={() => setShowSearch(true)}
+                      />
+                    ) : category === 'blindspots' ? (
+                      /* Blindspots: per-category sections showing top blindspot stories */
+                      <BlindspotSectionedFeed
+                        sections={blindspotSections}
+                        onOpenDetail={handleOpenDetail}
+                        onDismiss={handleDismissTopic}
+                        onSearchClick={() => setShowSearch(true)}
+                      />
+                    ) : (
+                      <MobileTopicLayout
+                        topics={filteredTopics}
+                        olderTopics={olderTopics}
+                        onOpenDetail={handleOpenDetail}
+                        onDismiss={handleDismissTopic}
+                        label={CATEGORY_LABELS[category] || category}
+                        onSearchClick={() => setShowSearch(true)}
+                      />
+                    )}
                   </>
                 ) : (
                   /* Default grid for other categories / search */
@@ -2174,6 +2178,16 @@ const SECTOR_LABELS: Record<string, string> = {
  *
  * Personalized: sections matching the user's interests appear first.
  */
+// ── In-memory cache for per-category section topics ──
+// The Relevant tab fires 7 section fetches (world, politics, …) on mount.
+// Without a cache, every tab switch back to Relevant re-fetched all 7 —
+// even seconds apart. This module-level cache serves them instantly for
+// SECTION_CACHE_TTL (5 min, matching the API's CDN s-maxage) and then
+// refetches. Survives tab switches (same JS context), cutting Vercel
+// invocations hard.
+const SECTION_CACHE_TTL_MS = 5 * 60 * 1000
+const sectionTopicsCache = new Map<string, { ts: number; topics: TopicArticle[] }>()
+
 function SectionedFeed({
   topics,
   olderTopics,
@@ -2182,6 +2196,7 @@ function SectionedFeed({
   country,
   interests,
   engagement,
+  myCountryTopics,
   onSearchClick,
 }: {
   topics: TopicArticle[]
@@ -2191,6 +2206,10 @@ function SectionedFeed({
   country?: CountryInfo | null
   interests: string[]
   engagement: EngagementStats
+  /** GDELT-sourced country stories — passed from the parent (already
+   * fetched for interspersing) so this component doesn't duplicate that
+   * /api/news?category=mycountry request. */
+  myCountryTopics?: TopicArticle[]
   onSearchClick: () => void
 }) {
   const allTopics = [...topics, ...olderTopics]
@@ -2230,16 +2249,14 @@ function SectionedFeed({
   // This guarantees that the "World News" section shows actual world news,
   // "Politics" shows actual politics, etc.
   //
-  // ── Which categories to fetch? ──
-  // 1. ALWAYS fetch 'world' and 'politics' (core news everyone needs)
-  // 2. Fetch every category the user picked as an interest in the PWA
-  //    onboarding popup (technology, business, science, health, sports, etc.)
-  //    — this ensures ALL the user's interests are represented with their
-  //    own section of top stories.
-  // 3. Fetch My Country stories for the "My Country" section.
-  //
-  // With slim=1, each fetch is ~20KB so fetching 6-8 categories is still
-  // only ~120-160KB total — well within budget.
+  // PERF NOTES:
+  //  - Served from the module-level sectionTopicsCache when younger than
+  //    5 min → tab switches don't refetch anything.
+  //  - Deferred via requestIdleCallback (fallback setTimeout) so the main
+  //    feed paints FIRST; section fetches never compete with first paint.
+  //  - The My Country section reuses the parent's myCountryTopics — no
+  //    duplicate mycountry API call (the parent already fetched it for
+  //    interspersing).
   React.useEffect(() => {
     let cancelled = false
 
@@ -2252,51 +2269,79 @@ function SectionedFeed({
       'world', 'politics', 'business', 'technology',
       'science', 'health', 'sports',
     ]
-    const categoriesToFetch = ALL_CATEGORIES.map((cat) => ({
-      cat: cat as Category,
-      label: cat,
-    }))
 
-    // Also fetch My Country stories for the "My Country" section in Relevant
-    const countryCode = country?.code && country.code !== 'INT' ? country.code : ''
-    if (countryCode) {
-      categoriesToFetch.push({ cat: 'mycountry' as Category, label: 'mycountry' })
-    }
-
-    ;(async () => {
-      try {
-        const results = await Promise.allSettled(
-          categoriesToFetch.map(async ({ cat, label }) => {
-            const params = new URLSearchParams({
-              category: cat,
-              limit: '3',
-              minCoverage: '1',
-              slim: '1',
-            })
-            const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
-            if (!res.ok) return { label, topics: [] }
-            const json = await res.json()
-            return { label, topics: json.topics || [] }
-          }),
-        )
-        if (cancelled) return
-        const fetched: Record<string, TopicArticle[]> = {}
-        for (let i = 0; i < results.length; i++) {
-          if (results[i].status === 'fulfilled') {
-            const { label, topics: t } = results[i].value
-            fetched[label] = t
+    // Kick off AFTER first paint — idle callback when available.
+    const start = () => {
+      if (cancelled) return
+      ;(async () => {
+        // Serve any cache entries that are still fresh instantly.
+        const now = Date.now()
+        const toFetch: string[] = []
+        const freshFromCache: Record<string, TopicArticle[]> = {}
+        for (const cat of ALL_CATEGORIES) {
+          const hit = sectionTopicsCache.get(cat)
+          if (hit && now - hit.ts < SECTION_CACHE_TTL_MS) {
+            freshFromCache[cat] = hit.topics
+          } else {
+            toFetch.push(cat)
           }
         }
-        setCategoryTopics(fetched)
-      } catch {
-        // silent
-      } finally {
-        if (!cancelled) setLoadingCategories(false)
-      }
-    })()
+        if (Object.keys(freshFromCache).length > 0) {
+          setCategoryTopics((prev) => ({ ...prev, ...freshFromCache }))
+          setLoadingCategories(false)
+        }
+        if (toFetch.length === 0) return
 
-    return () => { cancelled = true }
-  }, [country?.code])
+        try {
+          const results = await Promise.allSettled(
+            toFetch.map(async (cat) => {
+              const params = new URLSearchParams({
+                category: cat,
+                limit: '3',
+                minCoverage: '1',
+                slim: '1',
+              })
+              const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
+              if (!res.ok) return { cat, topics: [] }
+              const json = await res.json()
+              return { cat, topics: (json.topics || []) as TopicArticle[] }
+            }),
+          )
+          if (cancelled) return
+          const fetched: Record<string, TopicArticle[]> = {}
+          const cacheTs = Date.now()
+          for (let i = 0; i < results.length; i++) {
+            if (results[i].status === 'fulfilled') {
+              const { cat, topics: t } = results[i].value
+              fetched[cat] = t
+              sectionTopicsCache.set(cat, { ts: cacheTs, topics: t })
+            }
+          }
+          setCategoryTopics((prev) => ({ ...prev, ...fetched }))
+        } catch {
+          // silent
+        } finally {
+          if (!cancelled) setLoadingCategories(false)
+        }
+      })()
+    }
+
+    const idleId: number =
+      typeof window.requestIdleCallback === 'function'
+        ? window.requestIdleCallback(start, { timeout: 800 })
+        : window.setTimeout(start, 150)
+
+    return () => {
+      cancelled = true
+      if (typeof idleId === 'number') {
+        if (typeof window.cancelIdleCallback === 'function' && typeof window.requestIdleCallback === 'function') {
+          window.cancelIdleCallback(idleId)
+        } else {
+          window.clearTimeout(idleId)
+        }
+      }
+    }
+  }, [])
 
   if (allTopics.length === 0 && loadingCategories) return null
 
@@ -2543,8 +2588,10 @@ function SectionedFeed({
     }
   }
 
-  // My Country section — placed naturally (not boosted)
-  const myCountryCatTopics = categoryTopics['mycountry']
+  // My Country section — placed naturally (not boosted).
+  // Uses the parent's myCountryTopics (already fetched for interspersing)
+  // instead of a duplicate /api/news?category=mycountry call from here.
+  const myCountryCatTopics = myCountryTopics
   if (myCountryCatTopics && myCountryCatTopics.length > 0) {
     const uniqueMc = myCountryCatTopics.filter((t) => !isDuplicate(t))
     if (uniqueMc.length > 0) {
@@ -2584,6 +2631,7 @@ function SectionedFeed({
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, margin: '-40px' }}
             transition={{ duration: 0.35, delay: Math.min(sectionIdx * 0.06, 0.3), ease: [0.16, 1, 0.3, 1] }}
+            className="nw-cv-section"
           >
             <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
               <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight">
@@ -2606,16 +2654,14 @@ function SectionedFeed({
                 <span>Search</span>
               </button>
             </div>
-            {/* ── Same format for ALL sections: 1 large (hero) + rest mini ──
-                Mobile: hero full width on top, mini cards in 2-column grid below.
-                Desktop: 2-column grid — hero takes left column (tall),
-                mini cards stack in the right column (wider, matching height).
-                IMPORTANT: the desktop 2-col layout uses a separate hidden lg:block
-                wrapper so the mobile layout (3-col) is completely unchanged. */}
-            {/* Mobile layout (original, unchanged) */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden">
+            {/* ── Single responsive grid (was: separate lg:hidden + hidden
+                lg:grid renders — which doubled the DOM and image requests).
+                Mobile (<lg): hero full width on top, minis in 2-col below.
+                Desktop (lg+): 3-col grid — hero left spanning 3 rows,
+                minis filling cols 2-3. Same visual result, half the nodes. */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {sectionTopics[0] && (
-                <div className="sm:col-span-2">
+                <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
                   <TopicCard
                     key={sectionTopics[0].topicId}
                     topic={sectionTopics[0]}
@@ -2636,33 +2682,6 @@ function SectionedFeed({
                   index={i + 1}
                 />
               ))}
-            </div>
-            {/* Desktop layout (lg only): 2-column — hero left, mini cards right */}
-            <div className="hidden lg:grid grid-cols-2 gap-3">
-              {sectionTopics[0] && (
-                <div className="col-span-1 row-span-6">
-                  <TopicCard
-                    key={sectionTopics[0].topicId}
-                    topic={sectionTopics[0]}
-                    variant="hero"
-                    onOpenDetail={onOpenDetail}
-                    onDismiss={handleDismissInSection}
-                    index={0}
-                  />
-                </div>
-              )}
-              <div className="col-span-1 grid grid-cols-2 gap-3">
-                {sectionTopics.slice(1, 7).map((t, i) => (
-                  <TopicCard
-                    key={t.topicId}
-                    topic={t}
-                    variant="mini"
-                    onOpenDetail={onOpenDetail}
-                    onDismiss={handleDismissInSection}
-                    index={i + 1}
-                  />
-                ))}
-              </div>
             </div>
           </motion.section>
         )
@@ -2734,6 +2753,7 @@ function BlindspotSectionedFeed({
               delay: Math.min(sectionIdx * 0.06, 0.3),
               ease: 'easeOut',
             }}
+            className="nw-cv-section"
           >
             <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
               <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight">
@@ -2978,6 +2998,7 @@ function MobileTopicLayout({
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-40px' }}
           transition={{ duration: 0.35, delay: Math.min(chunkIdx * 0.06, 0.3), ease: [0.16, 1, 0.3, 1] }}
+          className="nw-cv-section"
         >
           {chunkIdx === 0 && (
             <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
@@ -2997,10 +3018,12 @@ function MobileTopicLayout({
               </button>
             </div>
           )}
-          {/* Mobile layout (original, unchanged) */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden">
+          {/* Single responsive grid (was dual lg:hidden + hidden lg:grid
+              renders). Mobile: hero full width + minis 2-col. Desktop:
+              hero left (3 rows) + minis cols 2-3. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {chunk[0] && (
-              <div className="sm:col-span-2">
+              <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
                 <TopicCard
                   key={chunk[0].topicId}
                   topic={chunk[0]}
@@ -3021,33 +3044,6 @@ function MobileTopicLayout({
                 index={i + 1}
               />
             ))}
-          </div>
-          {/* Desktop layout (lg only): 2-column — hero left, mini cards right */}
-          <div className="hidden lg:grid grid-cols-2 gap-3">
-            {chunk[0] && (
-              <div className="col-span-1 row-span-6">
-                <TopicCard
-                  key={chunk[0].topicId}
-                  topic={chunk[0]}
-                  variant="hero"
-                  onOpenDetail={onOpenDetail}
-                  onDismiss={onDismiss}
-                  index={0}
-                />
-              </div>
-            )}
-            <div className="col-span-1 grid grid-cols-2 gap-3">
-              {chunk.slice(1, 7).map((t, i) => (
-                <TopicCard
-                  key={t.topicId}
-                  topic={t}
-                  variant="mini"
-                  onOpenDetail={onOpenDetail}
-                  onDismiss={onDismiss}
-                  index={i + 1}
-                />
-              ))}
-            </div>
           </div>
         </motion.section>
       ))}

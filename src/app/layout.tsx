@@ -105,6 +105,10 @@ export default function RootLayout({
             is ~200ms faster (no DNS + TCP + TLS handshake delay). */}
         <link rel="preconnect" href="https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app" />
         <link rel="dns-prefetch" href="https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app" />
+        {/* ipwho.is — client-side country detection fires on EVERY page load;
+            preconnecting removes DNS+TLS from its critical path. */}
+        <link rel="preconnect" href="https://ipwho.is" />
+        <link rel="dns-prefetch" href="https://ipwho.is" />
         {/* Major image CDNs — preconnect so image proxy fetches are faster */}
         <link rel="dns-prefetch" href="https://ichef.bbci.co.uk" />
         <link rel="dns-prefetch" href="https://static01.nyt.com" />
@@ -117,8 +121,12 @@ export default function RootLayout({
             SWR caching in the SW, this means the cached response is served
             INSTANTLY on repeat visits, and the fresh fetch starts in
             parallel. fetchpriority="high" tells the browser this is the
-            most important resource to fetch. */}
-        <link rel="preload" as="fetch" href="/api/news?category=relevant&limit=24&minCoverage=1&slim=1" crossOrigin="anonymous" fetchPriority="high" />
+            most important resource to fetch.
+            NOTE: the param ORDER exactly matches the URLSearchParams order
+            the client builds (category, limit, slim, minCoverage) — the
+            preload and the real fetch must be the SAME URL string or the
+            browser fetches it twice. */}
+        <link rel="preload" as="fetch" href="/api/news?category=relevant&limit=24&slim=1&minCoverage=1" crossOrigin="anonymous" fetchPriority="high" />
         {/* Preload the icon — used in the header, shown immediately on load */}
         <link rel="preload" as="image" href="/icon-192.png" fetchPriority="high" />
       </head>

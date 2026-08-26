@@ -131,7 +131,7 @@ export async function GET(req: NextRequest) {
         topics: agg.topics,
       }
       void refreshCategory(category, country, async () => Promise.resolve(agg))
-      return NextResponse.json({
+      const freshResponse = NextResponse.json({
         category,
         country,
         countryName,
@@ -143,6 +143,13 @@ export async function GET(req: NextRequest) {
         fetchedAt: new Date(payload.updatedAt).toISOString(),
         ms: Date.now() - t0,
       })
+      // CDN-cache the fresh aggregate too — repeated hits (bots, SW,
+      // multiple users on the same new category) skip the function.
+      freshResponse.headers.set(
+        'Cache-Control',
+        'public, s-maxage=300, stale-while-revalidate=600',
+      )
+      return freshResponse
     } catch (err) {
       return NextResponse.json(
         { error: 'Failed to fetch news', detail: String(err) },
@@ -170,7 +177,7 @@ export async function GET(req: NextRequest) {
       try {
         const fresh = await refreshCategory(category, country, async () => aggregate())
         if (fresh) {
-          return NextResponse.json({
+          const refreshedResponse = NextResponse.json({
             category,
             country,
             countryName,
@@ -182,6 +189,14 @@ export async function GET(req: NextRequest) {
             fetchedAt: new Date(fresh.updatedAt).toISOString(),
             ms: Date.now() - t0,
           })
+          // CDN-cache the refreshed result — this path only runs when the
+          // cache was stale (≥30 min old), so a 5-min CDN window is safe
+          // and stops repeat visitors from re-running the function.
+          refreshedResponse.headers.set(
+            'Cache-Control',
+            'public, s-maxage=300, stale-while-revalidate=600',
+          )
+          return refreshedResponse
         }
       } catch (err) {
         console.warn(`[api/news] synchronous refresh ${category}/${country} failed:`, err)
@@ -378,7 +393,12 @@ async function handleBlindspots(
       articles: slim ? [] : entry.topic.articles,
     }))
 
-  return NextResponse.json({
+  // ── Blindspots response ──
+  // CRITICAL PERF: this handler reads 14 Firebase nodes (8 RSS categories
+  // + 6 virtual country caches). Without a CDN header, EVERY blindspots
+  // request ran the function + all 14 reads. With s-maxage=300, the CDN
+  // serves repeat requests and the function (and Firebase) is skipped.
+  const blindspotResponse = NextResponse.json({
     category: 'blindspots',
     country: '',
     countryName: '',
@@ -394,4 +414,9 @@ async function handleBlindspots(
     fetchedAt: new Date().toISOString(),
     ms: Date.now() - t0,
   })
+  blindspotResponse.headers.set(
+    'Cache-Control',
+    'public, s-maxage=300, stale-while-revalidate=600',
+  )
+  return blindspotResponse
 }

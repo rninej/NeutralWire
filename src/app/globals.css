@@ -666,25 +666,28 @@
 .pwa.platform-android .card-glass,
 .pwa.platform-apple .card-glass {
   background: rgb(255 255 255 / 0.72);
-  backdrop-filter: blur(24px) saturate(135%);
-  -webkit-backdrop-filter: blur(24px) saturate(135%);
+  /* PERF: blur 24px → 18px — visually indistinguishable, meaningfully
+     cheaper to composite on low-end GPUs scrolling 40+ glass cards. */
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
   border-color: rgb(0 0 0 / 0.06);
 }
 :is(.dark, .midnight, .ocean, .forest, .sunset, .lavender, .rose, .mono, .cyber, .gradient) .pwa.platform-android .card-glass,
 :is(.dark, .midnight, .ocean, .forest, .sunset, .lavender, .rose, .mono, .cyber, .gradient) .pwa.platform-apple .card-glass {
   background: rgb(22 22 26 / 0.60);
-  backdrop-filter: blur(24px) saturate(125%);
-  -webkit-backdrop-filter: blur(24px) saturate(125%);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
   border-color: rgb(255 255 255 / 0.08);
 }
 .midnight .pwa.platform-android .card-glass,
 .midnight .pwa.platform-apple .card-glass {
   background: rgb(18 22 38 / 0.60);
 }
-/* Apple PWA gets slightly more saturation (liquid glass style) */
+/* Apple PWA gets slightly more saturation (liquid glass style) —
+   blur capped at 20px for composite cost on 40+ cards */
 .pwa.platform-apple .card-glass {
-  backdrop-filter: blur(28px) saturate(160%);
-  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
   border-color: rgb(255 255 255 / 0.10);
 }
 
@@ -898,7 +901,8 @@
 @media (hover: hover) and (pointer: fine) {
   .card-lift {
     transition: transform 0.25s ease-out, box-shadow 0.25s ease-out;
-    will-change: transform;
+    /* PERF: no will-change here — 30-60 cards each forcing a composited
+       layer was a huge GPU memory cost. Hover lift is rare + cheap. */
   }
   .card-lift:hover {
     transform: translateY(-2px);
@@ -1053,11 +1057,14 @@ img {
   to { max-height: 0; opacity: 0; }
 }
 
-/* ── Universal transition for interactive elements ── */
-/* Applied to ALL elements so every property change animates smoothly */
+/* ── Universal transition for interactive elements ──
+   PERF: `transform` deliberately NOT transitioned — framer-motion drives
+   transforms via inline style (a CSS transform transition on top causes
+   double-interpolation jank), and the :active press scale now applies
+   instantly for snappier, iOS-like feedback. */
 button, a, input, select, textarea, [role="tab"], [role="button"] {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease,
-              box-shadow 0.2s ease, transform 0.15s ease, opacity 0.2s ease;
+              box-shadow 0.2s ease, opacity 0.2s ease;
 }
 
 /* ── Universal hover lift for cards ── */
@@ -1079,9 +1086,15 @@ button:active, a:active, [role="button"]:active {
   transition: outline 0.15s ease, box-shadow 0.15s ease;
 }
 
-/* ── Image load-in fade (prevents jarring pop) ── */
+/* ── Image load-in fade (prevents jarring pop) ──
+   PERF: opacity-only — the old transform version forced style/composite
+   work on EVERY lazy-loaded image as the user scrolls the feed. */
+@keyframes nw-img-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 img {
-  animation: nw-fade-in 0.3s ease-out;
+  animation: nw-img-in 0.3s ease-out;
 }
 
 /* ── Badge count animation ── */
@@ -1110,6 +1123,18 @@ img {
 }
 .nw-backdrop-in {
   animation: nw-backdrop-in 0.2s ease-out;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   CONTENT VISIBILITY — applied to feed sections (.nw-cv-section).
+   Skips style/layout/paint for offscreen sections entirely. With 8+
+   sections × 7 cards each, this cuts initial render work roughly in half
+   and keeps long scrolls smooth. contain-intrinsic-size gives the browser
+   a height estimate so the scrollbar doesn't jump as sections render.
+   ───────────────────────────────────────────────────────────────────────── */
+.nw-cv-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 720px;
 }
 
 /* ── Spin variants ── */
