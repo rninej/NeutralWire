@@ -12,7 +12,7 @@ import {
   type Leaning,
   type NewsSource,
 } from '@/lib/news-sources'
-import { callAI } from '@/lib/ai-providers'
+import { callAI, callVisionAI } from '@/lib/ai-providers'
 import { firebaseRead, firebasePatch } from '@/lib/firebase-server'
 
 // ---------- Types ----------
@@ -1594,6 +1594,17 @@ async function fetchFeed(
 const OG_IMAGE_CACHE = new Map<string, { ts: number; url: string | null }>()
 const OG_IMAGE_TTL_MS = 30 * 60 * 1000 // 30 min
 
+/**
+ * Normalize a hostname for the same-publisher check in fetchOgImage:
+ * strips common mobile/amp subdomain prefixes so "www.bbc.co.uk" ≡
+ * "bbc.co.uk" and "amp.theguardian.com" ≡ "theguardian.com".
+ */
+function normalizeHost(host: string): string {
+  return host
+    .toLowerCase()
+    .replace(/^(www\.|m\.|mobile\.|amp\.|amp-\d+\.)/, '')
+}
+
 async function fetchOgImage(articleUrl: string): Promise<string | null> {
   if (!articleUrl) return null
 
@@ -1613,6 +1624,25 @@ async function fetchOgImage(articleUrl: string): Promise<string | null> {
       cache: 'no-store',
     })
     if (!res.ok) {
+      OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url: null })
+      return null
+    }
+    // ── REDIRECT GUARD ──
+    // If the article URL redirected to a DIFFERENT site (paywall/consent
+    // interstitial, syndication partner, link shortener, homepage), the
+    // og:image we'd extract belongs to the WRONG page — not the article.
+    // This is exactly how a "Tesco storefront" photo once ended up on an
+    // unrelated headline. Reject those og:images outright.
+    try {
+      const askedHost = normalizeHost(new URL(articleUrl).host)
+      const finalHost = normalizeHost(new URL(res.url).host)
+      if (askedHost !== finalHost) {
+        OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url: null })
+        return null
+      }
+    } catch {
+      // res.url unparsable — treat as failure rather than trusting a
+      // possibly-wrong og:image
       OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url: null })
       return null
     }
@@ -1793,10 +1823,170 @@ function scoreImageUrl(url: string): number {
   return score
 }
 
+// ---------- AI image-content verification (the "Tesco fix") ----------
+// A candidate image can be fetchable, high-resolution, and STILL be the
+// wrong photo — e.g. an og:image grabbed from a page an article URL
+// redirected to, or a mismatched RSS enclosure. Score + fetchability
+// can't detect that; a vision model can.
+//
+// For each (image URL, topic title) we ask a vision model "does this
+// photo plausibly illustrate this headline?". Verdicts are cached
+// in-process AND in Firebase (image-verdicts/<hash>) so repeat refreshes
+// never re-pay the AI call.
+//
+// FAIL-OPEN DESIGN: when no vision provider can answer (missing keys,
+// rate limits, unsupported format, timeouts) we KEEP the image — the
+// check only ever rejects images the model is CONFIDENT are unrelated.
+
+/** In-process verdict cache: key → verdict (true = ok, false = mismatch). */
+const IMAGE_VERDICT_CACHE = new Map<string, boolean>()
+const IMAGE_VERDICT_CACHE_TS = new Map<string, number>()
+const IMAGE_VERDICT_TTL_MS = 6 * 60 * 60 * 1000
+
+/** Max vision calls per topic — 3 strikes (mismatches) → no image. */
+const MAX_VLM_CHECKS_PER_TOPIC = 3
+
+/** Global concurrency limiter — protects AI rate limits when 24 topics
+ *  are image-checked in parallel. */
+const VLM_CONCURRENCY = 4
+let vlmActive = 0
+const vlmQueue: Array<() => void> = []
+
+async function withVlmSlot<T>(fn: () => Promise<T>): Promise<T> {
+  while (vlmActive >= VLM_CONCURRENCY) {
+    await new Promise<void>((resolve) => vlmQueue.push(resolve))
+  }
+  vlmActive++
+  try {
+    return await fn()
+  } finally {
+    vlmActive--
+    const next = vlmQueue.shift()
+    if (next) next()
+  }
+}
+
+/**
+ * Per-aggregation context: the Firebase verdict map (loaded once) and
+ * the new verdicts to persist (patched once at the end). Passed through
+ * findImageForTopic so concurrent aggregations never share state.
+ */
+export interface ImageVerifyContext {
+  fbVerdicts: Map<string, number>
+  pending: Record<string, number>
+}
+
+async function createImageVerifyContext(): Promise<ImageVerifyContext> {
+  const fb = await firebaseRead<Record<string, number>>('image-verdicts')
+  const map = new Map<string, number>()
+  if (fb) {
+    for (const [k, v] of Object.entries(fb)) map.set(k, v)
+  }
+  return { fbVerdicts: map, pending: {} }
+}
+
+async function flushImageVerdicts(ctx: ImageVerifyContext): Promise<void> {
+  const keys = Object.keys(ctx.pending)
+  if (keys.length === 0) return
+  try {
+    await firebasePatch('image-verdicts', ctx.pending)
+    console.log(`[image-verify] persisted ${keys.length} new verdicts to Firebase`)
+  } catch {
+    // best-effort — verdicts re-verify next run
+  }
+}
+
+const IMAGE_VERIFY_SYSTEM = `You verify that a news photo matches its headline. Look at the photo and decide whether it plausibly illustrates the given news headline. Reply with exactly one word: YES or NO.`
+
+function imageVerifyPrompt(title: string): string {
+  return `Headline: "${title}"
+
+- Reply YES if the photo shows a person, place, object, flag, document or scene plausibly connected to this headline, or a generic news graphic (newspapers, world map, studio backdrop).
+- Reply NO only if the photo CLEARLY depicts a different, unrelated subject — for example a supermarket storefront, an unrelated product or advertisement, an unrelated celebrity, or an unrelated sports match — with no plausible connection to the headline.
+- If uncertain, reply YES.
+
+Does the photo plausibly illustrate the headline? Reply YES or NO only.`
+}
+
+/**
+ * Look up a CACHED verdict for (url, title) — memory or the Firebase map
+ * loaded for this aggregation. Never calls the AI. Returns undefined when
+ * no verdict exists yet.
+ */
+function lookupVerdict(
+  ctx: ImageVerifyContext,
+  url: string,
+  title: string,
+): boolean | undefined {
+  const key = hashId(url + '|' + title)
+  const ts = IMAGE_VERDICT_CACHE_TS.get(key)
+  if (ts !== undefined && Date.now() - ts < IMAGE_VERDICT_TTL_MS) {
+    const cached = IMAGE_VERDICT_CACHE.get(key)
+    if (cached !== undefined) return cached
+  }
+  const fb = ctx.fbVerdicts.get(key)
+  if (fb === 1) return true
+  if (fb === 0) return false
+  return undefined
+}
+
+/**
+ * Verify that an image's CONTENT plausibly matches a topic title.
+ * Returns:
+ *   true  → matches (keep the image)
+ *   false → the vision model confidently says it's unrelated (skip it)
+ *   null  → couldn't verify (no provider answered) — caller should fail open
+ */
+async function verifyImageContent(
+  ctx: ImageVerifyContext,
+  url: string,
+  title: string,
+): Promise<boolean | null> {
+  const key = hashId(url + '|' + title)
+
+  // 1. In-process cache
+  const ts = IMAGE_VERDICT_CACHE_TS.get(key)
+  if (ts !== undefined && Date.now() - ts < IMAGE_VERDICT_TTL_MS) {
+    const cached = IMAGE_VERDICT_CACHE.get(key)
+    if (cached !== undefined) return cached
+  }
+
+  // 2. Firebase verdict map (loaded for this aggregation)
+  const fb = ctx.fbVerdicts.get(key)
+  if (fb === 1 || fb === 0) {
+    const verdict = fb === 1
+    IMAGE_VERDICT_CACHE.set(key, verdict)
+    IMAGE_VERDICT_CACHE_TS.set(key, Date.now())
+    return verdict
+  }
+
+  // 3. Ask a vision model
+  let answer: string | null = null
+  try {
+    answer = await withVlmSlot(() =>
+      callVisionAI(IMAGE_VERIFY_SYSTEM, imageVerifyPrompt(title), url),
+    )
+  } catch {
+    answer = null
+  }
+  if (!answer) return null
+
+  const m = answer.match(/\b(yes|no)\b/i)
+  if (!m) return null
+  const verdict = m[1].toLowerCase() === 'yes'
+
+  // Cache in-process + queue for Firebase persistence
+  IMAGE_VERDICT_CACHE.set(key, verdict)
+  IMAGE_VERDICT_CACHE_TS.set(key, Date.now())
+  ctx.fbVerdicts.set(key, verdict ? 1 : 0)
+  ctx.pending[key] = verdict ? 1 : 0
+  return verdict
+}
+
 /**
  * For a topic, find the best HIGHEST-QUALITY image URL that works.
  *
- * Strategy (v2 — more images, higher resolution):
+ * Strategy (v3 — quality + CONTENT relevance):
  * 1. Collect candidates from BOTH sources in parallel:
  *    a. OG images from article pages (typically 1200px+, full-resolution)
  *    b. RSS-provided image URLs (often small thumbnails 140-240px)
@@ -1806,17 +1996,21 @@ function scoreImageUrl(url: string): number {
  * 3. Score every candidate via scoreImageUrl() — higher score = likely
  *    higher resolution. Sort candidates by score DESC so we validate the
  *    highest-quality ones first.
- * 4. Validate each candidate (in quality order) with a GET request. Return
- *    the FIRST one that works.
- *
- * This ensures: (a) more topics get images (we try OG + RSS + upgraded RSS),
- * and (b) the chosen image is the highest-resolution available.
+ * 4. Validate each candidate (in quality order) with a GET request.
+ * 5. NEW: verify each fetchable candidate's CONTENT against the topic
+ *    title with a vision model (verifyImageContent). A candidate that
+ *    the model confidently says is unrelated (the "Tesco storefront on
+ *    a Netanyahu story" glitch) is skipped; the next-best candidate is
+ *    tried. After MAX_VLM_CHECKS_PER_TOPIC confident mismatches we give
+ *    up and return null — no image is better than a wrong image. When
+ *    no vision provider answers, we fail OPEN (accept the image).
  *
  * Tries up to `maxAttempts` articles for OG images.
  */
 async function findImageForTopic(
   topic: TopicArticle,
   maxAttempts = 5,
+  verifyCtx?: ImageVerifyContext,
 ): Promise<string | null> {
   // Priority sources — ordered to PREFER sources whose images DON'T have
   // large watermarks/logos. The Guardian's images have a huge "Guardian"
@@ -1873,11 +2067,51 @@ async function findImageForTopic(
     .map((url) => ({ url, score: scoreImageUrl(url) }))
     .sort((a, b) => b.score - a.score)
 
-  // ── Validate in quality order — return first working URL ──
+  // ── Validate in quality order — return first working + relevant URL ──
+  // For each candidate (highest quality first):
+  //   1. Skip if not fetchable (existing validateImageUrl).
+  //   2. If we have a cached verdict for (url, title): use it (no AI call).
+  //   3. Otherwise ask the vision model (budget: MAX_VLM_CHECKS_PER_TOPIC).
+  //      - match    → return this URL
+  //      - mismatch → skip to the next candidate
+  //      - no answer→ fail OPEN: return this URL (an unverifiable image is
+  //                   better than no image)
+  // After the budget is exhausted, if we've already seen confident
+  // mismatches, give up (null) — the feed's images for this story are
+  // systematically wrong, so show no image rather than a wrong one.
+  let checksUsed = 0
+  let mismatches = 0
   for (const { url } of scored) {
-    if (await validateImageUrl(url)) return url
+    if (!(await validateImageUrl(url))) continue
+
+    if (verifyCtx) {
+      // Cached verdicts (memory + Firebase map) cost nothing — always consult
+      const cached = lookupVerdict(verifyCtx, url, topic.title)
+      if (cached !== undefined) {
+        if (cached === true) return url
+        mismatches++
+        continue
+      }
+
+      if (checksUsed >= MAX_VLM_CHECKS_PER_TOPIC) {
+        // Vision budget exhausted for this topic
+        if (mismatches > 0) return null // everything we checked was wrong
+        return url // nothing verifiable found — fail open
+      }
+
+      checksUsed++
+      const verdict = await verifyImageContent(verifyCtx, url, topic.title)
+      if (verdict === null) return url // unverifiable — fail open
+      if (verdict === true) return url
+      mismatches++
+    } else {
+      // No verification context (legacy callers) — old behaviour
+      return url
+    }
   }
 
+  // Every candidate was either unfetchable or confidently mismatched —
+  // null either way (no image beats a wrong image).
   return null
 }
 
@@ -2286,21 +2520,30 @@ export async function aggregateCategory(
     // per topic. Runs in parallel for speed.
     await shortenLongTitles(filtered)
 
-    // ── Image validation + fallback (expanded) ──
-    // Validate + upgrade images for the TOP 15 topics (was 10) so more
-    // stories get a working high-resolution image. Each topic tries:
-    //   - OG images from up to 5 articles (was 3) — more candidates
+    // ── Image validation + fallback + CONTENT verification ──
+    // Validate + upgrade + AI-verify images for the TOP 24 topics (every
+    // topic that gets returned to clients — not just the top 15) so all
+    // displayed stories have a working, high-resolution, TOPIC-RELEVANT
+    // image. Each topic tries:
+    //   - OG images from up to 5 articles (redirect-guarded — see fetchOgImage)
     //   - Upgraded RSS thumbnails (width=140 → width=1200, etc.)
     //   - Scored + sorted by likely resolution (highest first)
-    // Runs in parallel for speed.
-    const topicsForImageCheck = filtered.slice(0, 15)
+    //   - NEW: content-verified against the headline by a vision model;
+    //     confidently-unrelated images are skipped (the "Tesco fix").
+    //     Verdicts cached in Firebase (image-verdicts) so repeat refreshes
+    //     cost zero AI calls.
+    // Runs in parallel for speed; VLM calls are globally throttled.
+    const verifyCtx = await createImageVerifyContext()
+    const topicsForImageCheck = filtered.slice(0, 24)
     await Promise.all(
       topicsForImageCheck.map(async (topic) => {
-        const img = await findImageForTopic(topic, 5)
+        const img = await findImageForTopic(topic, 5, verifyCtx)
         if (img) topic.imageUrl = img
         else topic.imageUrl = null // ensure broken URLs are cleared
       }),
     )
+    // Persist any new AI verdicts (single patch) for future refreshes
+    await flushImageVerdicts(verifyCtx)
 
     return {
       topics: filtered,

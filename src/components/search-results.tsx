@@ -7,7 +7,7 @@ import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Clock, Globe } from 'lucide-react'
 import { BiasBar } from '@/components/bias-bar'
-import { cn } from '@/lib/utils'
+import { cn, safeImageUrl } from '@/lib/utils'
 import type { TopicArticle, FeedArticle } from '@/lib/news-aggregator'
 
 interface SearchHit {
@@ -122,7 +122,8 @@ function SearchTopicCard({
   const [mounted, setMounted] = React.useState(false)
   React.useEffect(() => setMounted(true), [])
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
-  const showImage = topic.imageUrl && !imgError
+  const imageUrl = safeImageUrl(topic.imageUrl)
+  const showImage = imageUrl && !imgError
 
   const handleClick = () => {
     onOpen?.(topic)
@@ -161,7 +162,7 @@ function SearchTopicCard({
         {showImage && (
           <div className="relative w-full overflow-hidden bg-muted aspect-[16/10]">
             <img
-              src={`/api/img?url=${encodeURIComponent(topic.imageUrl!)}`}
+              src={`/api/img?url=${encodeURIComponent(imageUrl!)}`}
               alt=""
               className="h-full w-full object-cover"
               onError={() => setImgError(true)}

@@ -21,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { BiasBar } from '@/components/bias-bar'
-import { cn } from '@/lib/utils'
+import { cn, safeImageUrl } from '@/lib/utils'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { getDeviceId } from '@/lib/referral'
 import { bumpEngagementForTopic } from '@/lib/user-interests'
@@ -418,7 +418,10 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
   }
 
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
-  const showImage = topic.imageUrl && !imgError
+  // Safe image URL — malformed cache entries (non-string) degrade to null
+  // instead of breaking the img src / encodeURIComponent below.
+  const imageUrl = safeImageUrl(topic.imageUrl)
+  const showImage = imageUrl && !imgError
 
   // Use displayTopic's articles (fetched from /api/topic/[id] if the slim
   // feed response didn't include them). This prevents the "sources not
@@ -633,7 +636,7 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
                 overflow so the image doesn't bleed outside the rounded box
                 during the zoom. */}
             <motion.img
-              src={`/api/img?url=${encodeURIComponent(topic.imageUrl!)}`}
+              src={`/api/img?url=${encodeURIComponent(imageUrl!)}`}
               alt=""
               className="h-full w-full object-cover"
               initial={{ scale: 1.05 }}

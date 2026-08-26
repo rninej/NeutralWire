@@ -37,6 +37,8 @@ import {
 } from 'lucide-react'
 import { getDeviceId } from '@/lib/referral'
 import { COUNTRY_COORDS, latLngToXY } from '@/lib/country-coords'
+import { cn } from '@/lib/utils'
+import { LayoutGrid, List } from 'lucide-react'
 
 // ── Types ──
 interface AnalyticsData {
@@ -169,6 +171,50 @@ export default function DebugPage() {
     const id = getDeviceId()
     setDeviceId(id)
   }, [])
+
+  // ── Feature flags — subtopic header style ──
+  // One-click control that switches the homepage category header between
+  // the new "cards" design (big icon chips) and the classic small text
+  // pills — for ALL users, instantly (stored in Firebase, read by every
+  // client on load).
+  const [navMode, setNavMode] = React.useState<'cards' | 'classic' | null>(null)
+  const [navFlipping, setNavFlipping] = React.useState(false)
+  const [navFlipResult, setNavFlipResult] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    fetch('/api/flags')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setNavMode(d?.subtopicNav === 'classic' ? 'classic' : 'cards'))
+      .catch(() => setNavMode('cards'))
+  }, [])
+
+  const setSubtopicNav = async (mode: 'cards' | 'classic') => {
+    if (navFlipping || mode === navMode || !passwordRef.current) return
+    setNavFlipping(true)
+    setNavFlipResult(null)
+    try {
+      const res = await fetch('/api/flags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordRef.current, subtopicNav: mode }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (res.ok) {
+        setNavMode(mode)
+        setNavFlipResult(
+          `✓ Live for all users: ${
+            mode === 'cards' ? 'new big-chip header' : 'classic small text pills'
+          }`,
+        )
+      } else {
+        setNavFlipResult(d.error || 'Failed to update')
+      }
+    } catch {
+      setNavFlipResult('Network error')
+    } finally {
+      setNavFlipping(false)
+    }
+  }
 
   const runCheck = async (id: string, action: 'check' | 'send') => {
     setSending(action === 'send')
@@ -306,6 +352,85 @@ export default function DebugPage() {
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         )}
+
+        {/* ── Feature Flags ──
+            One-click switches that apply to ALL users instantly. */}
+        <Card className="mb-6 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Zap className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-bold">Feature Flags</h2>
+            <span className="ml-auto text-xs text-muted-foreground">
+              Applies to all users within seconds
+            </span>
+          </div>
+          <p className="mb-3 text-sm text-muted-foreground">
+            Subtopic header style — a complaint said the classic category pills
+            are too small and hard to read/click. Pick the design every visitor
+            sees; flip it back here anytime.
+          </p>
+          <div className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setSubtopicNav('cards')}
+              disabled={navFlipping || navMode === null}
+              className={cn(
+                'flex flex-col items-start gap-1.5 rounded-xl border-2 p-3.5 text-left transition-colors disabled:opacity-60',
+                navMode === 'cards'
+                  ? 'border-foreground bg-muted'
+                  : 'border-border hover:bg-muted/50',
+              )}
+            >
+              <span className="flex items-center gap-2 text-sm font-bold">
+                <LayoutGrid className="h-4 w-4" />
+                New — Big chips
+                {navMode === 'cards' && (
+                  <span className="rounded-full bg-foreground px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-background">
+                    Live
+                  </span>
+                )}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Icon chips with 40px touch targets in a scrollable row —
+                bigger text, much easier to tap
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSubtopicNav('classic')}
+              disabled={navFlipping || navMode === null}
+              className={cn(
+                'flex flex-col items-start gap-1.5 rounded-xl border-2 p-3.5 text-left transition-colors disabled:opacity-60',
+                navMode === 'classic'
+                  ? 'border-foreground bg-muted'
+                  : 'border-border hover:bg-muted/50',
+              )}
+            >
+              <span className="flex items-center gap-2 text-sm font-bold">
+                <List className="h-4 w-4" />
+                Classic — Text pills
+                {navMode === 'classic' && (
+                  <span className="rounded-full bg-foreground px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-background">
+                    Live
+                  </span>
+                )}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                The original small wrapping text pills (how the site looked
+                before the redesign)
+              </span>
+            </button>
+          </div>
+          {navFlipping && (
+            <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating for all users…
+            </p>
+          )}
+          {navFlipResult && (
+            <p className="mt-3 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              {navFlipResult}
+            </p>
+          )}
+        </Card>
 
         {error && (
           <Card className="mb-6 border-red-500/30 p-4">

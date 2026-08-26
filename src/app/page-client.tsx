@@ -41,8 +41,9 @@ import { UserPage } from '@/components/user-page'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
 import { CountryPicker } from '@/components/country-picker'
+import { CategoryNav } from '@/components/category-nav'
 import { SearchResults } from '@/components/search-results'
-import { cn } from '@/lib/utils'
+import { cn, safeImageUrl } from '@/lib/utils'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import type { CountryInfo } from '@/lib/country-detect'
 import { detectCountryClient, detectCountryClientFresh, DEFAULT_COUNTRY } from '@/lib/country-detect'
@@ -343,6 +344,25 @@ export default function Home() {
   const [apiSearchLoading, setApiSearchLoading] = useState(false)
   const [apiSearchResult, setApiSearchResult] = useState<SearchResponse | null>(null)
   const [localSearchAttempted, setLocalSearchAttempted] = useState(false)
+
+  // --- Subtopic header style (server-side feature flag) ---
+  // 'cards' = new CategoryNav (big icon chips — the default);
+  // 'classic' = the old small wrapping text pills. Flip for ALL users
+  // from /debug (POST /api/flags). Loaded once per page load; any fetch
+  // failure keeps the default ('cards').
+  const [subtopicNav, setSubtopicNav] = useState<'cards' | 'classic'>('cards')
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/flags')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.subtopicNav === 'classic') setSubtopicNav('classic')
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // --- News data state ---
   const [loading, setLoading] = useState(true)
@@ -1156,7 +1176,7 @@ export default function Home() {
           arr.push(t)
           titleGroups.set(nt, arr)
         }
-        const imgUrl = t.imageUrl?.split('?')[0]?.trim()
+        const imgUrl = safeImageUrl(t.imageUrl)?.split('?')[0]?.trim()
         if (imgUrl) {
           const arr = imageGroups.get(imgUrl) || []
           arr.push(t)
@@ -1316,7 +1336,7 @@ export default function Home() {
         t.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
       result = result.filter((t) => {
         const nt = norm(t.title)
-        const imgUrl = t.imageUrl?.split('?')[0]?.trim()
+        const imgUrl = safeImageUrl(t.imageUrl)?.split('?')[0]?.trim()
         let isDup = false
         if (nt && seenTitles.has(nt)) isDup = true
         if (imgUrl && seenImages.has(imgUrl)) isDup = true
@@ -1686,44 +1706,73 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Category nav: all categories shown flat (no "More" expandable) */}
+        {/* Category nav — TWO selectable systems (server-side flag):
+            - 'cards' (default): CategoryNav — big icon chips in a
+              scrollable row, 40px touch targets, active chip auto-centres.
+              Addresses the "too small to read/click" complaint.
+            - 'classic': the original flat wrapping text pills.
+            Flip for ALL users in one click from /debug. */}
         <div className="mx-auto max-w-[1440px] px-4 pb-2">
-          <div className="flex flex-wrap items-center gap-1">
-            {PRIMARY_CATEGORIES.map((c) => (
-              <CategoryTab
-                key={c}
-                cat={c}
-                active={category === c}
-                onClick={() => setCategory(c)}
-                country={country}
-              />
-            ))}
+          {subtopicNav === 'cards' ? (
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <CategoryNav
+                  category={category}
+                  onSelect={(c) => setCategory(c)}
+                  country={country}
+                />
+              </div>
+              {/* Search button — hidden on mobile (moved to section headers).
+                  Visible on desktop (lg+) at the end of the nav row. */}
+              <button
+                type="button"
+                onClick={() => setShowSearch(true)}
+                className="hidden lg:inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-3.5 py-2 text-foreground/80 hover:bg-muted/80 transition-colors text-sm font-medium"
+                aria-label="Search"
+                title="Search news"
+              >
+                <Search className="h-4 w-4" />
+                <span>Search</span>
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1">
+              {PRIMARY_CATEGORIES.map((c) => (
+                <CategoryTab
+                  key={c}
+                  cat={c}
+                  active={category === c}
+                  onClick={() => setCategory(c)}
+                  country={country}
+                />
+              ))}
 
-            <div className="mx-1 h-5 w-px bg-border" />
+              <div className="mx-1 h-5 w-px bg-border" />
 
-            {SECONDARY_CATEGORIES.map((c) => (
-              <CategoryTab
-                key={c}
-                cat={c}
-                active={category === c}
-                onClick={() => setCategory(c)}
-                country={country}
-              />
-            ))}
+              {SECONDARY_CATEGORIES.map((c) => (
+                <CategoryTab
+                  key={c}
+                  cat={c}
+                  active={category === c}
+                  onClick={() => setCategory(c)}
+                  country={country}
+                />
+              ))}
 
-            {/* Search button — hidden on mobile (moved to section headers).
-                Visible on desktop (lg+) next to Sports. */}
-            <button
-              type="button"
-              onClick={() => setShowSearch(true)}
-              className="hidden lg:inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-xs font-medium"
-              aria-label="Search"
-              title="Search news"
-            >
-              <Search className="h-3.5 w-3.5" />
-              <span>Search</span>
-            </button>
-          </div>
+              {/* Search button — hidden on mobile (moved to section headers).
+                  Visible on desktop (lg+) next to Sports. */}
+              <button
+                type="button"
+                onClick={() => setShowSearch(true)}
+                className="hidden lg:inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-xs font-medium"
+                aria-label="Search"
+                title="Search news"
+              >
+                <Search className="h-3.5 w-3.5" />
+                <span>Search</span>
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -2531,7 +2580,7 @@ function SectionedFeed({
     if (shownTopicIds.has(t.topicId)) return true
     const nt = normTitle(t.title)
     if (nt && shownTitles.has(nt)) return true
-    const imgUrl = t.imageUrl?.split('?')[0]?.trim()
+    const imgUrl = safeImageUrl(t.imageUrl)?.split('?')[0]?.trim()
     if (imgUrl && shownImages.has(imgUrl)) return true
     return false
   }
@@ -2539,7 +2588,7 @@ function SectionedFeed({
     shownTopicIds.add(t.topicId)
     const nt = normTitle(t.title)
     if (nt) shownTitles.add(nt)
-    const imgUrl = t.imageUrl?.split('?')[0]?.trim()
+    const imgUrl = safeImageUrl(t.imageUrl)?.split('?')[0]?.trim()
     if (imgUrl) shownImages.add(imgUrl)
   }
 

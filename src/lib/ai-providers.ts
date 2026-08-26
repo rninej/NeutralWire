@@ -318,6 +318,190 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
   return null
 }
 
+// ---------- Vision (image understanding) ----------
+// Used to verify that a candidate topic image actually SHOWS something
+// related to the story (e.g. not a supermarket storefront on a
+// Netanyahu headline). Groq llama-4-scout and Gemini flash are both
+// multimodal and cheap; we race them and take the first answer.
+const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
+const GEMINI_VISION_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash']
+
+// Unsupported-by-vision-models formats (Gemini/Groq don't take avif; svg
+// is usually a site logo, not a photo). These return null → caller
+// fail-opens (keeps the image unverified) rather than rejecting.
+const VISION_OK_MIME = /^image\/(jpeg|jpg|png|webp|gif)$/i
+
+/**
+ * Download an image and encode it as a base64 data payload.
+ * Returns null if the image is missing, too large (>2.5MB), or in a
+ * format the vision models can't read.
+ */
+async function fetchImageBase64(
+  imageUrl: string,
+): Promise<{ mime: string; data: string } | null> {
+  try {
+    const parsed = new URL(imageUrl)
+    const referer = `${parsed.protocol}//${parsed.host}/`
+    const res = await fetch(imageUrl, {
+      signal: AbortSignal.timeout(6000),
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        Referer: referer,
+      },
+      redirect: 'follow',
+      cache: 'no-store',
+    })
+    if (!res.ok) return null
+    const ct = (res.headers.get('content-type') || '').split(';')[0].trim()
+    if (!VISION_OK_MIME.test(ct)) return null
+    const buf = await res.arrayBuffer()
+    if (buf.byteLength < 1000 || buf.byteLength > 2.5 * 1024 * 1024) return null
+    return { mime: ct, data: Buffer.from(buf).toString('base64') }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Ask a vision model a question about an image. Returns the model's text
+ * answer, or null when no vision provider could answer (missing keys,
+ * timeouts, unsupported image format, ...). Callers should treat null as
+ * "unverifiable" and fail OPEN (keep the image), never as a rejection.
+ */
+export async function callVisionAI(
+  systemPrompt: string,
+  userPrompt: string,
+  imageUrl: string,
+): Promise<string | null> {
+  const img = await fetchImageBase64(imageUrl)
+  if (!img) return null
+
+  const dataUrl = `data:${img.mime};base64,${img.data}`
+  const candidates: Array<Promise<string | null>> = []
+
+  // Groq vision (llama-4-scout) — OpenAI-compatible image_url format
+  if (GROQ_API_KEY && !isDeprecated(`groq-${GROQ_VISION_MODEL}`)) {
+    const key = `groq-${GROQ_VISION_MODEL}`
+    const limitedAt = rateLimitedModels.get(key)
+    if (!limitedAt || Date.now() - limitedAt >= RATE_LIMIT_COOLDOWN_MS) {
+      candidates.push(
+        (async () => {
+          const controller = new AbortController()
+          const timeout = setTimeout(() => controller.abort(), 8000)
+          try {
+            const res = await fetch(GROQ_URL, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${GROQ_API_KEY}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                model: GROQ_VISION_MODEL,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  {
+                    role: 'user',
+                    content: [
+                      { type: 'text', text: userPrompt },
+                      { type: 'image_url', image_url: { url: dataUrl } },
+                    ],
+                  },
+                ],
+                max_tokens: 16,
+                temperature: 0,
+              }),
+              cache: 'no-store',
+              signal: controller.signal,
+            })
+            clearTimeout(timeout)
+            if (!res.ok) {
+              const errText = await res.text().catch(() => '')
+              if (res.status === 429) {
+                rateLimitedModels.set(key, Date.now())
+                console.warn(`[ai] Groq vision rate-limited`)
+              } else {
+                checkDeprecation(key, res.status, errText)
+              }
+              return null
+            }
+            const data = await res.json()
+            return (
+              stripThinking(data.choices?.[0]?.message?.content?.trim() || '') ||
+              null
+            )
+          } catch {
+            clearTimeout(timeout)
+            return null
+          }
+        })(),
+      )
+    }
+  }
+
+  // Gemini vision — inline_data format
+  const geminiModel = GEMINI_VISION_MODELS.find(
+    (m) => !isDeprecated(`gemini-${m}`) && !rateLimitedModels.has(`gemini-${m}`),
+  )
+  if (geminiModel && GEMINI_API_KEY) {
+    candidates.push(
+      (async () => {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 8000)
+        try {
+          const url = `${GEMINI_URL}/${geminiModel}:generateContent?key=${GEMINI_API_KEY}`
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  role: 'user',
+                  parts: [
+                    { text: `${systemPrompt}\n\n${userPrompt}` },
+                    { inline_data: { mime_type: img.mime, data: img.data } },
+                  ],
+                },
+              ],
+              generationConfig: { maxOutputTokens: 20, temperature: 0 },
+            }),
+            cache: 'no-store',
+            signal: controller.signal,
+          })
+          clearTimeout(timeout)
+          if (!res.ok) {
+            const errText = await res.text().catch(() => '')
+            if (res.status === 429) {
+              rateLimitedModels.set(`gemini-${geminiModel}`, Date.now())
+              console.warn(`[ai] Gemini ${geminiModel} (vision) rate-limited`)
+            } else {
+              checkDeprecation(`gemini-${geminiModel}`, res.status, errText)
+            }
+            return null
+          }
+          const data = await res.json()
+          const parts = data.candidates?.[0]?.content?.parts || []
+          for (const part of parts) {
+            if (part.text) return stripThinking(part.text.trim())
+          }
+          return null
+        } catch {
+          clearTimeout(timeout)
+          return null
+        }
+      })(),
+    )
+  }
+
+  if (candidates.length === 0) return null
+  try {
+    return await Promise.any(candidates)
+  } catch {
+    return null
+  }
+}
+
 // ---------- Groq ----------
 async function callGroq(
   systemPrompt: string,

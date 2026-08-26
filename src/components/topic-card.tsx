@@ -12,7 +12,7 @@ import {
 import { Clock, ExternalLink, Globe, ThumbsDown, Share2, Check, Loader2, Layers, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import { cn } from '@/lib/utils'
+import { cn, safeImageUrl } from '@/lib/utils'
 import { BiasBar } from '@/components/bias-bar'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { getDeviceId } from '@/lib/referral'
@@ -62,9 +62,13 @@ const LEANING_BADGE: Record<string, { label: string; cls: string }> = {
  * Falls back to the topic's own imageUrl, then to any article image.
  */
 function pickImage(topic: TopicArticle): string | null {
-  if (topic.imageUrl) return topic.imageUrl
+  // safeImageUrl: degrade malformed entries (nested objects) to null
+  // instead of passing garbage into the img proxy.
+  const own = safeImageUrl(topic.imageUrl)
+  if (own) return own
   for (const a of topic.articles) {
-    if (a.imageUrl) return a.imageUrl
+    const aImg = safeImageUrl(a.imageUrl)
+    if (aImg) return aImg
   }
   return null
 }
@@ -461,7 +465,9 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
               className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
               onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
             />
-            <NWMark withText={false} />
+            {/* NO NWMark here — the brand watermark only appears on LARGE
+                form factors (hero/default cards + the article detail view).
+                On tiny thumbnails it just covered the photo. */}
           </div>
         )}
         <div className="flex flex-col gap-1 p-2.5 flex-1 min-w-0 justify-center">

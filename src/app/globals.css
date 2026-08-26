@@ -814,6 +814,19 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+   .no-scrollbar — fully hide the scrollbar on horizontal chip rows (the
+   category nav). Scrolling still works (touch / trackpad / wheel / drag);
+   the affordance comes from the edge fade gradients instead.
+   ───────────────────────────────────────────────────────────────────────── */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    BUTTON RIPPLE — material-style tap ripple. Add the `.ripple` class to
    any button. On pointerdown, JS sets --ripple-x / --ripple-y to the
    click position and adds a span.rippler. The animation expands a

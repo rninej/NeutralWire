@@ -53,7 +53,11 @@ const FRESHNESS_WINDOW_MS = 48 * 60 * 60 * 1000 // keep topics younger than 48h 
 //   4 — added third-pass UK blocklist
 //   5 — synchronous refresh on stale cache (was using after() which Vercel kills)
 //       + cron now rotates through ALL categories (was only relevant/GB)
-const CACHE_VERSION = 5
+//   6 — AI image-content verification (the "Tesco fix"): images are now
+//       vision-checked against their headline; og:image scraping is
+//       redirect-guarded. Bumped so every cached topic re-picks its image
+//       through the new verified pipeline on the first refresh post-deploy.
+const CACHE_VERSION = 6
 
 // ---------- In-process refresh bookkeeping ----------
 const REFRESH_IN_FLIGHT = new Map<string, Promise<CategoryCachePayload | null>>()
@@ -82,6 +86,11 @@ export function cachePath(category: Category, country: string = ''): string {
 /**
  * Read the cached payload for a category. Returns null if missing or
  * unreadable. Never throws.
+ *
+ * Also NORMALIZES the topics on the way out: any malformed entry (e.g. a
+ * nested-object imageUrl written by a buggy write) is coerced to a clean
+ * string | null so bad cache data can never crash clients
+ * (imageUrl.split / encodeURIComponent assume strings).
  */
 export async function readCachedNews(
   category: Category,
@@ -89,6 +98,20 @@ export async function readCachedNews(
 ): Promise<CategoryCachePayload | null> {
   const payload = await firebaseRead<CategoryCachePayload>(cachePath(category, country))
   if (!payload || !Array.isArray(payload.topics)) return null
+  payload.topics = payload.topics.map((t) => {
+    if (!t || typeof t !== 'object') return t
+    return {
+      ...t,
+      imageUrl: typeof t.imageUrl === 'string' && t.imageUrl ? t.imageUrl : null,
+      articles: Array.isArray(t.articles)
+        ? t.articles.map((a) =>
+            a && typeof a === 'object'
+              ? { ...a, imageUrl: typeof a.imageUrl === 'string' && a.imageUrl ? a.imageUrl : null }
+              : a,
+          )
+        : [],
+    }
+  })
   return payload
 }
 
