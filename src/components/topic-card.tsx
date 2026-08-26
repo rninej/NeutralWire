@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import {
   motion,
   AnimatePresence,
@@ -8,7 +9,7 @@ import {
   useTransform,
   useAnimationControls,
 } from 'framer-motion'
-import { Clock, ExternalLink, Globe, ThumbsDown, Share2, Check, Loader2 } from 'lucide-react'
+import { Clock, ExternalLink, Globe, ThumbsDown, Share2, Check, Loader2, Layers, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -105,22 +106,17 @@ function NWMark({ withText = true }: { withText?: boolean }) {
   )
 }
 
-function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDetail, onDismiss, index = 0 }: TopicCardProps) {
+function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index = 0 }: TopicCardProps) {
   // NOTE: this component is wrapped in React.memo at the bottom of the file.
   // Parent re-renders (search typing, engagement ticks, unrelated state)
   // no longer re-render every card in the feed — topic object identities
   // are stable across renders, and onOpenDetail/onDismiss are useCallback'd
   // in the parent, so memo comparison works as intended.
-  // Sources are HIDDEN by default on ALL cards (including the featured
-  // first card). Users tap "View sources" to expand. Previously the featured
-  // card auto-opened its source list, which made the first news story look
-  // different from the rest.
-  const [open, setOpen] = React.useState(defaultOpen)
-  // Articles fetched lazily the first time the user expands sources on a
-  // slim-feed topic (feed responses strip articles to keep payloads small).
-  const [fetchedArticles, setFetchedArticles] = React.useState<TopicArticle['articles'] | null>(null)
-  const [sourcesLoading, setSourcesLoading] = React.useState(false)
-  const fetchedRef = React.useRef(false)
+  // "View sources" opens a frosted-glass popup (portaled to document.body —
+  // no transform-ancestor issues, no stuck scroll lock). "Share" sits next
+  // to it inside one combined pill button (same design as the header's
+  // account|country pill).
+  const [showSources, setShowSources] = React.useState(false)
   // "Copied" feedback for the share button (clipboard fallback only).
   const [shared, setShared] = React.useState(false)
   const imageUrl = pickImage(topic)
@@ -135,33 +131,6 @@ function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDeta
 
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
   const showImage = imageUrl && !imgError
-
-  // ── Inline sources expansion ──
-  // The list expands IN PLACE inside the card (the original, pre-popup
-  // behaviour): no black backdrop, no body scroll lock, nothing that can
-  // freeze the page. Slim feed topics arrive without articles, so we fetch
-  // the full topic once on first expand and cache it in local state.
-  const displayArticles =
-    topic.articles && topic.articles.length > 0 ? topic.articles : fetchedArticles || []
-
-  const toggleSources = () => {
-    setOpen((v) => !v)
-    if (
-      !open &&
-      !(topic.articles && topic.articles.length > 0) &&
-      !fetchedRef.current
-    ) {
-      fetchedRef.current = true
-      setSourcesLoading(true)
-      fetch(`/api/topic/${encodeURIComponent(topic.topicId)}`, { cache: 'no-store' })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => {
-          if (d?.topic?.articles?.length) setFetchedArticles(d.topic.articles)
-        })
-        .catch(() => {})
-        .finally(() => setSourcesLoading(false))
-    }
-  }
 
   // ── Share (same behaviour as the topic detail view) ──
   // Shares ONLY the URL — some apps append `text` to the URL which looks
@@ -187,85 +156,51 @@ function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDeta
     }
   }
 
-  /** Small icon share button — sits to the RIGHT of the View sources
-   *  button on every card variant. Shows a green check for 2s when the
-   *  URL was copied to the clipboard (no Web Share API fallback). */
-  const shareButton = (cls: string) => (
-    <button
-      type="button"
-      onClick={handleShare}
-      aria-label="Share this story"
-      title="Share this story"
+  /** Combined pill button — ONE pill with TWO sub-buttons separated by a
+   *  divider, matching the header's account|country pill design:
+   *    [ ≡ Sources | ⇗ ]
+   *  Left sub-button opens the frosted-glass sources popup; right
+   *  sub-button shares (green check for 2s on clipboard copy).
+   *  `compact` = icon-only (mini cards); otherwise the left sub-button
+   *  also shows a "Sources" label. */
+  const sourcesSharePill = (compact = false) => (
+    <div
       className={cn(
-        'inline-flex shrink-0 items-center font-medium text-foreground/70 transition-colors hover:text-foreground',
-        cls,
+        'ml-auto flex shrink-0 items-center overflow-hidden rounded-full border border-border bg-muted/50',
+        compact ? 'scale-95' : '',
       )}
+      onClick={(e) => e.stopPropagation()}
     >
-      {shared ? (
-        <Check className="h-3.5 w-3.5 text-emerald-500" />
-      ) : (
-        <Share2 className="h-3.5 w-3.5" />
-      )}
-    </button>
-  )
-
-  /** Inline sources list — expands/collapses in place with a smooth
-   *  height animation (no overlay, no scroll lock — can't freeze). */
-  const renderSourcesList = (innerCls: string) => (
-    <motion.div
-      key="sources"
-      initial={{ height: 0, opacity: 0 }}
-      animate={{ height: 'auto', opacity: 1 }}
-      exit={{ height: 0, opacity: 0 }}
-      transition={{ duration: 0.28, ease: EASE_OUT }}
-      className="overflow-hidden"
-    >
-      <div className={innerCls}>
-        {sourcesLoading ? (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Loading sources…
-          </div>
-        ) : displayArticles.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No sources available for this story yet.</p>
-        ) : (
-          <ul className="divide-y divide-border overflow-hidden rounded-md border">
-            {displayArticles.slice(0, 12).map((a) => {
-              const lean = LEANING_BADGE[a.leaning] || LEANING_BADGE.center
-              return (
-                <li key={a.id}>
-                  <a
-                    href={a.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-start gap-2 px-3 py-2 transition-colors hover:bg-muted/50"
-                  >
-                    <span
-                      className={cn(
-                        'mt-0.5 inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase',
-                        lean.cls,
-                      )}
-                    >
-                      {lean.label}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="line-clamp-2 text-xs font-medium leading-snug">{a.title}</div>
-                      <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-                        <Globe className="h-2.5 w-2.5" />
-                        {a.sourceName}
-                        <span className="opacity-50">·</span>
-                        {a.country}
-                        <ExternalLink className="ml-auto h-2.5 w-2.5" />
-                      </div>
-                    </div>
-                  </a>
-                </li>
-              )
-            })}
-          </ul>
+      {/* Sources sub-button */}
+      <button
+        type="button"
+        onClick={() => setShowSources(true)}
+        className="flex items-center gap-1 px-2 py-1 transition-colors hover:bg-muted active:scale-95"
+        aria-label="View sources"
+        title="View all sources for this story"
+      >
+        <Layers className="h-3 w-3 text-foreground/80" />
+        {!compact && (
+          <span className="text-[10px] font-medium text-foreground/80">Sources</span>
         )}
-      </div>
-    </motion.div>
+      </button>
+      {/* Divider — same as the header pill */}
+      <div className="h-3.5 w-px bg-border" />
+      {/* Share sub-button */}
+      <button
+        type="button"
+        onClick={handleShare}
+        className="flex items-center px-2 py-1 transition-colors hover:bg-muted active:scale-95"
+        aria-label="Share this story"
+        title="Share this story"
+      >
+        {shared ? (
+          <Check className="h-3 w-3 text-emerald-500" />
+        ) : (
+          <Share2 className="h-3 w-3 text-foreground/80" />
+        )}
+      </button>
+    </div>
   )
 
   // ── Swipe-to-dismiss state ──
@@ -432,16 +367,19 @@ function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDeta
   const wrapWithSwipe = (content: React.ReactNode): React.ReactNode => {
     // No onDismiss → no swipe. Plain card, plain click. This preserves the
     // original behavior for any TopicCard used outside the main feed.
+    // h-full chain: grid items stretch to the row height — h-full on the
+    // wrapper lets the Card's mt-auto footer (bias bar) anchor to the
+    // bottom, so cards in one row align their footers on desktop.
     if (!onDismiss) {
       return (
-        <motion.div {...cardMotion} className="group card-glow card-lift rounded-lg" style={glowStyle}>
+        <motion.div {...cardMotion} className="group card-glow card-lift h-full rounded-lg" style={glowStyle}>
           {content}
         </motion.div>
       )
     }
     return (
-      <motion.div {...cardMotion} className="group card-glow card-lift rounded-lg" style={glowStyle}>
-        <div className="relative">
+      <motion.div {...cardMotion} className="group card-glow card-lift h-full rounded-lg" style={glowStyle}>
+        <div className="relative h-full">
           {/* Red glow background — intensifies with swipe distance.
               Uses bg-red-500 (a solid red) with a motion-driven opacity
               (0 → 1) so the glow "fills in" as the card slides away. */}
@@ -509,13 +447,12 @@ function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDeta
       return wrapWithSwipe(
       <Card
         className={cn(
-          'card-glass h-full overflow-hidden p-0 gap-0 flex flex-col min-h-[96px]',
+          'card-glass h-full overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
           !showImage && 'border-l-4 border-l-foreground/20',
           onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
         )}
         onClick={handleCardClick}
       >
-        <div className="flex flex-row items-stretch flex-1">
         {showImage && (
           <div className="relative w-24 min-h-[96px] shrink-0 overflow-hidden bg-muted">
             <img
@@ -530,25 +467,16 @@ function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDeta
           </div>
         )}
         <div className="flex flex-col gap-1 p-2.5 flex-1 min-w-0 justify-center">
-          <div className="flex items-center gap-1.5">
-            <Badge variant="secondary" className="text-[9px] px-1.5 py-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Badge variant="secondary" className="text-[9px] px-1.5 py-0 shrink-0">
               {topic.coverage}src
             </Badge>
-            <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+            <span className="text-[10px] text-muted-foreground whitespace-nowrap truncate">
               {mounted ? formatTime(topic.latestSeen) : ''}
             </span>
-            {/* View sources + Share — right of the date/time. Sources
-                expand INLINE inside the card (no overlay, no scroll lock). */}
-            <div className="ml-auto flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); toggleSources() }}
-                className="text-[10px] font-medium text-foreground/70 underline-offset-2 hover:underline"
-              >
-                {open ? 'Hide' : 'View'} sources
-              </button>
-              {shareButton('text-[10px]')}
-            </div>
+            {/* Combined Sources | Share pill — same design as the header's
+                account|country pill. Icon-only on mini cards (space). */}
+            {sourcesSharePill(true)}
           </div>
           <h3 className="font-bold text-sm leading-tight line-clamp-3">
             {topic.title}
@@ -558,11 +486,6 @@ function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDeta
             <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
           </div>
         </div>
-        </div>
-        {/* Inline sources list — expands in place, below the card content */}
-        <AnimatePresence initial={false}>
-          {open && renderSourcesList('px-2.5 pb-2.5 pt-1')}
-        </AnimatePresence>
       </Card>,
       )
     }
@@ -624,27 +547,14 @@ function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDeta
             <Clock className="h-3 w-3" />
             {mounted ? formatTime(topic.latestSeen) : ''}
           </span>
-          {/* View sources + Share (hero cards only — default/compact cards
-              have these in the bottom row next to the article count).
-              Sources expand inline inside the card — no overlay, no scroll
-              lock, nothing that can freeze the page. */}
-          {isHero && (
-            <div className="ml-auto flex items-center gap-2.5">
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); toggleSources() }}
-                className="text-xs font-medium text-foreground underline-offset-2 hover:underline"
-              >
-                {open ? 'Hide' : 'View'} sources
-              </button>
-              {shareButton('text-xs')}
-            </div>
-          )}
+          {/* Combined Sources | Share pill (hero cards). Sources opens the
+              frosted-glass popup. */}
+          {isHero && sourcesSharePill()}
         </div>
         <h3
           className={cn(
             'font-bold leading-snug',
-            isHero ? 'text-xl sm:text-2xl' : 'text-base',
+            isHero ? 'text-xl sm:text-2xl' : 'text-base line-clamp-3',
             variant === 'compact' ? 'text-sm' : '',
           )}
         >
@@ -688,46 +598,41 @@ function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDeta
         </div>
       )}
 
-      {/* ── HERO: inline sources expansion below the bias bar ── */}
-      {isHero && (
-        <AnimatePresence initial={false}>
-          {open && renderSourcesList('px-4 pb-3 pt-1')}
-        </AnimatePresence>
-      )}
-
-      {/* ── DEFAULT + COMPACT: bias bar + count + sources/share row ── */}
+      {/* ── DEFAULT + COMPACT: bias bar + count + sources/share pill ── */}
       {!isHero && (
         <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
           <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
-
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] text-muted-foreground">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="text-[11px] text-muted-foreground truncate">
               {total} {total === 1 ? 'article' : 'articles'} across the spectrum
             </span>
-            {/* View sources + Share — sources expand INLINE inside the card
-                (the original pre-popup behaviour). */}
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); toggleSources() }}
-                className="text-xs font-medium text-foreground underline-offset-2 hover:underline"
-              >
-                {open ? 'Hide' : 'View'} sources
-              </button>
-              {shareButton('text-xs')}
-            </div>
+            {/* Combined Sources | Share pill — same design as the header's
+                account|country pill. */}
+            {sourcesSharePill()}
           </div>
-
-          <AnimatePresence initial={false}>
-            {open && renderSourcesList('pt-2')}
-          </AnimatePresence>
         </div>
       )}
     </Card>,
     )
   }
 
-  return renderCard()
+  // Render the card + sources popup (portaled to document.body so no
+  // transformed ancestor can trap the fixed positioning, and so the
+  // AnimatePresence exit animation always runs).
+  return (
+    <>
+      {renderCard()}
+      {typeof document !== 'undefined' &&
+        createPortal(
+          <AnimatePresence>
+            {showSources && (
+              <SourcesPopup topic={topic} onClose={() => setShowSources(false)} />
+            )}
+          </AnimatePresence>,
+          document.body,
+        )}
+    </>
+  )
 }
 
 // ── Memoized TopicCard ──
@@ -738,3 +643,203 @@ function TopicCard({ topic, variant = 'default', defaultOpen = false, onOpenDeta
 // memo comparison skips re-rendering unchanged cards entirely.
 const TopicCardMemo = React.memo(TopicCard)
 export { TopicCardMemo as TopicCard }
+
+// ── Sources Popup (frosted glass) ──
+// A scrollable frosted-glass overlay showing all sources for a topic,
+// grouped by leaning (Left / Center / Right). Rendered via createPortal
+// to document.body from the TopicCard, wrapped in AnimatePresence so the
+// exit animation runs.
+//
+// Why portal: the old popup rendered inside the card's DOM subtree, where
+// transformed ancestors (framer-motion entrance/hover transforms on the
+// card) break position:fixed — the overlay ended up trapped/mispositioned,
+// which looked like a frozen black screen. Portaling to document.body
+// guarantees clean fixed positioning. The scroll lock below also saves +
+// restores the previous value and compensates for scrollbar removal, so
+// it can never get stuck.
+const LEANING_LABELS: Record<string, { label: string; cls: string; color: string }> = {
+  left: { label: 'Left', cls: 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300', color: 'text-blue-600 dark:text-blue-400' },
+  center: { label: 'Center', cls: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300', color: 'text-zinc-600 dark:text-zinc-400' },
+  right: { label: 'Right', cls: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300', color: 'text-red-600 dark:text-red-400' },
+}
+
+function SourcesPopup({ topic, onClose }: { topic: TopicArticle; onClose: () => void }) {
+  const hasArticles = topic.articles && topic.articles.length > 0
+  const [fullTopic, setFullTopic] = React.useState<TopicArticle | null>(hasArticles ? topic : null)
+  const [loading, setLoading] = React.useState(!hasArticles)
+
+  // Fetch the full topic (with articles) when the feed topic is slim.
+  React.useEffect(() => {
+    if (hasArticles) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/topic/${encodeURIComponent(topic.topicId)}`, { cache: 'no-store' })
+        if (res.ok) {
+          const data = await res.json()
+          if (!cancelled && data.topic) {
+            setFullTopic(data.topic as TopicArticle)
+            return
+          }
+        }
+        if (!cancelled) setFullTopic(topic)
+      } catch {
+        if (!cancelled) setFullTopic(topic)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [topic.topicId])
+
+  // Scroll lock + Escape key — with bulletproof cleanup. The previous
+  // version could leave the page locked (the "freeze" bug) if unmount was
+  // interrupted; saving/restoring the previous inline styles guarantees
+  // the page always scrolls again.
+  React.useEffect(() => {
+    const prevOverflow = document.body.style.overflow
+    const prevPR = document.body.style.paddingRight
+    const scrollbarW = window.innerWidth - document.documentElement.clientWidth
+    document.body.style.overflow = 'hidden'
+    if (scrollbarW > 0) document.body.style.paddingRight = `${scrollbarW}px`
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = prevOverflow
+      document.body.style.paddingRight = prevPR
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  const articles = fullTopic?.articles || []
+  const leftArticles = articles.filter((a) => a.leaning === 'left')
+  const centerArticles = articles.filter((a) => a.leaning === 'center')
+  const rightArticles = articles.filter((a) => a.leaning === 'right')
+
+  return (
+    <motion.div
+      className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 backdrop-blur-sm sm:items-center sm:p-6"
+      onClick={onClose}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
+    >
+      {/* Frosted glass panel — bottom sheet on mobile, centered dialog on
+          desktop. bg-background/85 + backdrop-blur-2xl = frosted glass that
+          shows the (blurred) page behind it instead of a flat black overlay. */}
+      <motion.div
+        className="flex max-h-[88vh] w-full flex-col overflow-hidden rounded-t-2xl border border-border/60 bg-background/85 shadow-2xl backdrop-blur-2xl sm:max-w-lg sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+        initial={{ y: 48, opacity: 0, scale: 0.98 }}
+        animate={{ y: 0, opacity: 1, scale: 1 }}
+        exit={{ y: 24, opacity: 0, scale: 0.98 }}
+        transition={{ type: 'spring', stiffness: 380, damping: 34 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Sources"
+      >
+        {/* Drag handle indicator (mobile only) */}
+        <div className="sm:hidden flex justify-center pt-2 pb-1 shrink-0">
+          <div className="h-1 w-10 rounded-full bg-foreground/20" />
+        </div>
+        {/* Header */}
+        <div className="flex items-center justify-between gap-2 border-b px-4 py-3 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <Badge variant="secondary" className="text-[10px] shrink-0">
+              {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
+            </Badge>
+            <h3 className="text-sm font-bold truncate">{topic.title}</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground shrink-0 p-1"
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Bias bar with percentages + counts */}
+        <div className="border-b px-4 py-2.5 shrink-0">
+          <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} showLabels />
+          <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>Left ({topic.leanLeft})</span>
+            <span>Center ({topic.leanCenter})</span>
+            <span>Right ({topic.leanRight})</span>
+          </div>
+        </div>
+
+        {/* Scrollable sources list */}
+        <div className="nw-scrollbar overflow-y-auto p-4 space-y-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading sources…</span>
+            </div>
+          ) : articles.length === 0 ? (
+            <div className="text-center py-8 text-sm text-muted-foreground">
+              No sources available for this story.
+            </div>
+          ) : (
+            <>
+              {leftArticles.length > 0 && (
+                <SourceGroup label="Left" count={leftArticles.length} color={LEANING_LABELS.left.color} articles={leftArticles} />
+              )}
+              {centerArticles.length > 0 && (
+                <SourceGroup label="Center" count={centerArticles.length} color={LEANING_LABELS.center.color} articles={centerArticles} />
+              )}
+              {rightArticles.length > 0 && (
+                <SourceGroup label="Right" count={rightArticles.length} color={LEANING_LABELS.right.color} articles={rightArticles} />
+              )}
+            </>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  )
+}
+
+function SourceGroup({ label, count, color, articles }: {
+  label: string
+  count: number
+  color: string
+  articles: TopicArticle['articles']
+}) {
+  return (
+    <div>
+      <div className={cn('mb-2 flex items-center gap-2 text-xs font-semibold uppercase', color)}>
+        {label}
+        <span className="text-muted-foreground">({count})</span>
+      </div>
+      <div className="space-y-2">
+        {articles.map((a) => {
+          const lean = LEANING_LABELS[a.leaning] || LEANING_LABELS.center
+          return (
+            <a
+              key={a.id}
+              href={a.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-lg border bg-background/40 p-3 transition-colors hover:bg-muted/50"
+            >
+              <div className="line-clamp-2 text-sm font-medium leading-snug">
+                {a.title}
+              </div>
+              <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                <span className={cn('inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase', lean.cls)}>
+                  {lean.label}
+                </span>
+                <Globe className="h-2.5 w-2.5" />
+                {a.sourceName}
+                <span className="opacity-50">·</span>
+                {a.country}
+                <ExternalLink className="ml-auto h-2.5 w-2.5" />
+              </div>
+            </a>
+          )
+        })}
+      </div>
+    </div>
+  )
+}

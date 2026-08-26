@@ -1604,7 +1604,7 @@ export default function Home() {
           opacity (frosted on Android, liquid on Apple, fallback to the
           inline bg-background/95 backdrop-blur on other platforms). */}
       <header className="glass sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
+        <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4">
           <a href="/" className="flex items-center gap-2 font-bold">
             {/* Logo entrance: fade in + scale from 0.9 → 1 over 0.4s.
                 The whileHover scale-up is preserved (1.15 with a spring). */}
@@ -1698,7 +1698,7 @@ export default function Home() {
         </div>
 
         {/* Category nav: all categories shown flat (no "More" expandable) */}
-        <div className="mx-auto max-w-7xl px-4 pb-2">
+        <div className="mx-auto max-w-[1440px] px-4 pb-2">
           <div className="flex flex-wrap items-center gap-1">
             {PRIMARY_CATEGORIES.map((c) => (
               <CategoryTab
@@ -1744,7 +1744,7 @@ export default function Home() {
           it's on the outer wrapper, not on category-switch transitions
           (those are handled by the inner AnimatePresence below). */}
       <motion.main
-        className="mx-auto w-full max-w-7xl flex-1 px-4 py-6"
+        className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6"
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
@@ -1932,7 +1932,7 @@ export default function Home() {
                 {/* Infinite scroll sentinel + loading animation */}
                 <div ref={sentinelRef} className="flex justify-center py-8">
                   {loadingMore && (
-                    <div className="grid w-full max-w-7xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    <div className="grid w-full max-w-[1440px] grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                       {Array.from({ length: 4 }).map((_, i) => (
                         <div key={i} className="h-64 shimmer rounded-lg" />
                       ))}
@@ -1953,7 +1953,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="border-t bg-muted/30 py-4 mt-auto">
-        <div className="mx-auto max-w-7xl px-4 text-center text-xs text-muted-foreground">
+        <div className="mx-auto max-w-[1440px] px-4 text-center text-xs text-muted-foreground">
           NeutralWire
         </div>
       </footer>
@@ -2126,6 +2126,25 @@ function LoadingState() {
   )
 }
 
+/**
+ * useIsDesktop — true once the viewport reaches the lg breakpoint
+ * (1024px). Used by the feed layouts to switch between the mobile
+ * hero+minis layout (which users love) and the desktop magazine grid.
+ * SSR renders the mobile layout (false default); desktop swaps once
+ * after hydration — masked by the card entrance animations.
+ */
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = React.useState(false)
+  React.useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)')
+    const update = () => setIsDesktop(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+  return isDesktop
+}
+
 // ── Sector detection for sectioned layout ──
 // Mirrors the SECTOR_KEYWORDS in user-interests.ts but simplified for
 // client-side sectioning. Topics are grouped into sections by their
@@ -2215,6 +2234,9 @@ function SectionedFeed({
   myCountryTopics?: TopicArticle[]
   onSearchClick: () => void
 }) {
+  // Desktop (lg+) renders a uniform 3-column magazine grid instead of the
+  // mobile hero+minis layout (see the grid below).
+  const isDesktop = useIsDesktop()
   const allTopics = [...topics, ...olderTopics]
   const [categoryTopics, setCategoryTopics] = React.useState<Record<string, TopicArticle[]>>({})
   const [loadingCategories, setLoadingCategories] = React.useState(true)
@@ -2657,35 +2679,50 @@ function SectionedFeed({
                 <span>Search</span>
               </button>
             </div>
-            {/* ── Single responsive grid (was: separate lg:hidden + hidden
-                lg:grid renders — which doubled the DOM and image requests).
+            {/* ── Responsive section grid ──
                 Mobile (<lg): hero full width on top, minis in 2-col below.
-                Desktop (lg+): 3-col grid — hero left spanning 3 rows,
-                minis filling cols 2-3. Same visual result, half the nodes. */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {sectionTopics[0] && (
-                <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
+                Desktop (lg+): uniform 3-column magazine grid of full cards
+                (image + summary + bias bar). The old hero+row-span-3 grid
+                stretched the minis and left large dead gaps on wide
+                screens — uniform cards align cleanly at any width. */}
+            {isDesktop ? (
+              <div className="grid grid-cols-3 gap-4">
+                {sectionTopics.slice(0, 9).map((t, i) => (
                   <TopicCard
-                    key={sectionTopics[0].topicId}
-                    topic={sectionTopics[0]}
-                    variant="hero"
+                    key={t.topicId}
+                    topic={t}
                     onOpenDetail={onOpenDetail}
                     onDismiss={handleDismissInSection}
-                    index={0}
+                    index={i}
                   />
-                </div>
-              )}
-              {sectionTopics.slice(1, 7).map((t, i) => (
-                <TopicCard
-                  key={t.topicId}
-                  topic={t}
-                  variant="mini"
-                  onOpenDetail={onOpenDetail}
-                  onDismiss={handleDismissInSection}
-                  index={i + 1}
-                />
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {sectionTopics[0] && (
+                  <div className="sm:col-span-2">
+                    <TopicCard
+                      key={sectionTopics[0].topicId}
+                      topic={sectionTopics[0]}
+                      variant="hero"
+                      onOpenDetail={onOpenDetail}
+                      onDismiss={handleDismissInSection}
+                      index={0}
+                    />
+                  </div>
+                )}
+                {sectionTopics.slice(1, 7).map((t, i) => (
+                  <TopicCard
+                    key={t.topicId}
+                    topic={t}
+                    variant="mini"
+                    onOpenDetail={onOpenDetail}
+                    onDismiss={handleDismissInSection}
+                    index={i + 1}
+                  />
+                ))}
+              </div>
+            )}
           </motion.section>
         )
       })}
@@ -2713,6 +2750,7 @@ function BlindspotSectionedFeed({
   onDismiss?: (topic: TopicArticle) => void
   onSearchClick: () => void
 }) {
+  const isDesktop = useIsDesktop()
   // Define the order of sections (matching the category nav order).
   // 'mycountry' and 'relevant' are mapped to friendlier labels.
   const SECTION_ORDER: Array<{ key: string; label: string }> = [
@@ -2776,169 +2814,49 @@ function BlindspotSectionedFeed({
                 <span>Search</span>
               </button>
             </div>
-            {/* Same layout as SectionedFeed: 1 hero + rest mini */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {sectionTopics[0] && (
-                <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
+            {/* Same layout as SectionedFeed — desktop magazine grid vs
+                mobile hero + minis. */}
+            {isDesktop ? (
+              <div className="grid grid-cols-3 gap-4">
+                {sectionTopics.slice(0, 9).map((t, i) => (
                   <TopicCard
-                    key={sectionTopics[0].topicId}
-                    topic={sectionTopics[0]}
-                    variant="hero"
+                    key={t.topicId}
+                    topic={t}
                     onOpenDetail={onOpenDetail}
                     onDismiss={onDismiss}
-                    index={0}
+                    index={i}
                   />
-                </div>
-              )}
-              {sectionTopics.slice(1, 7).map((t, i) => (
-                <TopicCard
-                  key={t.topicId}
-                  topic={t}
-                  variant="mini"
-                  onOpenDetail={onOpenDetail}
-                  onDismiss={onDismiss}
-                  index={i + 1}
-                />
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {sectionTopics[0] && (
+                  <div className="sm:col-span-2">
+                    <TopicCard
+                      key={sectionTopics[0].topicId}
+                      topic={sectionTopics[0]}
+                      variant="hero"
+                      onOpenDetail={onOpenDetail}
+                      onDismiss={onDismiss}
+                      index={0}
+                    />
+                  </div>
+                )}
+                {sectionTopics.slice(1, 7).map((t, i) => (
+                  <TopicCard
+                    key={t.topicId}
+                    topic={t}
+                    variant="mini"
+                    onOpenDetail={onOpenDetail}
+                    onDismiss={onDismiss}
+                    index={i + 1}
+                  />
+                ))}
+              </div>
+            )}
           </motion.section>
         )
       })}
-    </div>
-  )
-}
-
-/**
- * DesktopMagazineLayout — a newspaper-style layout for desktop screens.
- *
- * Layout:
- *   ┌──────────────────────┬──────────────┐
- *   │                      │              │
- *   │   HERO (large)       │  Sidebar     │
- *   │   2 cols wide        │  (compact    │
- *   │   with image         │   cards)     │
- *   │                      │              │
- *   ├─────────┬────────────┤              │
- *   │  Card   │  Card      │              │
- *   ├─────────┼────────────┤              │
- *   │  Card   │  Card      │              │
- *   └─────────┴────────────┴──────────────┘
- *
- * - Hero: first topic (large, spans 2 columns, must have image)
- * - Below hero: 2-column grid of medium cards
- * - Right sidebar: compact cards (headline + source count only)
- * - Ensures the top news always has an image
- */
-function DesktopMagazineLayout({
-  topics,
-  olderTopics,
-  onOpenDetail,
-  onDismiss,
-  label,
-  onSearchClick,
-}: {
-  topics: TopicArticle[]
-  olderTopics: TopicArticle[]
-  onOpenDetail: (topic: TopicArticle) => void
-  onDismiss?: (topic: TopicArticle) => void
-  label: string
-  onSearchClick: () => void
-}) {
-  const allTopics = [...topics, ...olderTopics]
-  if (allTopics.length === 0) return null
-
-  // ── Ensure the first (hero) topic has an image ──
-  // Find the first topic WITH an image to use as hero.
-  // The most important imageless story comes second.
-  let hero = allTopics[0]
-  let rest = allTopics.slice(1)
-  if (!hero.imageUrl) {
-    const firstWithImage = allTopics.findIndex((t) => t.imageUrl)
-    if (firstWithImage > 0) {
-      // Swap: image topic becomes hero, original first topic goes to position 2
-      hero = allTopics[firstWithImage]
-      rest = [
-        allTopics[0], // the important imageless story goes second
-        ...allTopics.slice(1, firstWithImage),
-        ...allTopics.slice(firstWithImage + 1),
-      ]
-    }
-  }
-
-  // Split into main grid (hero + medium cards) and sidebar
-  const mainCount = Math.min(rest.length, 6)
-  const mainCards = rest.slice(0, mainCount)
-  const sidebarCards = rest.slice(mainCount, mainCount + 8)
-
-  return (
-    <div className="space-y-4">
-      {/* Section header */}
-      <div className="flex items-center justify-between border-b-2 border-foreground/10 pb-2">
-        <h2 className="text-xl font-bold tracking-tight">{label}</h2>
-        <button
-          type="button"
-          onClick={onSearchClick}
-          className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-xs font-medium"
-          aria-label="Search"
-        >
-          <Search className="h-3.5 w-3.5" />
-          <span>Search</span>
-        </button>
-      </div>
-
-      {/* Main layout: 3-column grid → hero spans 2 cols, sidebar 1 col.
-          items-start prevents columns from stretching to equal height
-          (which caused the large white space below shorter columns). */}
-      <div className="grid grid-cols-3 gap-4 items-start">
-        {/* Left: hero + medium cards (spans 2 columns) */}
-        <div className="col-span-2 space-y-4">
-          {/* Hero card */}
-          {hero && (
-            <TopicCard
-              key={hero.topicId}
-              topic={hero}
-              variant="hero"
-              onOpenDetail={onOpenDetail}
-              onDismiss={onDismiss}
-              index={0}
-            />
-          )}
-          {/* Medium cards in 2-column grid.
-              items-start prevents cards from stretching to match the
-              tallest card in the row (which caused white space). */}
-          {mainCards.length > 0 && (
-            <div className="grid grid-cols-2 gap-4 items-start">
-              {mainCards.map((t, i) => (
-                <TopicCard
-                  key={t.topicId}
-                  topic={t}
-                  variant="default"
-                  onOpenDetail={onOpenDetail}
-                  onDismiss={onDismiss}
-                  index={i + 1}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Right: sidebar with compact cards */}
-        {sidebarCards.length > 0 && (
-          <div className="col-span-1 space-y-3">
-            <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">More Stories</h3>
-            {sidebarCards.map((t, i) => (
-              <TopicCard
-                key={t.topicId}
-                topic={t}
-                variant="compact"
-                onOpenDetail={onOpenDetail}
-                onDismiss={onDismiss}
-                index={mainCount + i + 1}
-              />
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   )
 }
@@ -2965,6 +2883,8 @@ function MobileTopicLayout({
   label: string
   onSearchClick: () => void
 }) {
+  // Hook must run before the early return below.
+  const isDesktop = useIsDesktop()
   const allTopics = [...topics, ...olderTopics]
   if (allTopics.length === 0) return null
 
@@ -3021,33 +2941,48 @@ function MobileTopicLayout({
               </button>
             </div>
           )}
-          {/* Single responsive grid (was dual lg:hidden + hidden lg:grid
-              renders). Mobile: hero full width + minis 2-col. Desktop:
-              hero left (3 rows) + minis cols 2-3. */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {chunk[0] && (
-              <div className="sm:col-span-2 lg:col-span-1 lg:row-span-3">
+          {/* ── Responsive grid ──
+              Mobile: 1 hero + 6 minis per chunk (unchanged, users love it).
+              Desktop: one continuous uniform 3-column magazine grid of
+              full cards — no chunks, no stretching, clean alignment. */}
+          {isDesktop ? (
+            <div className="grid grid-cols-3 gap-4">
+              {sorted.map((t, i) => (
                 <TopicCard
-                  key={chunk[0].topicId}
-                  topic={chunk[0]}
-                  variant="hero"
+                  key={t.topicId}
+                  topic={t}
                   onOpenDetail={onOpenDetail}
                   onDismiss={onDismiss}
-                  index={0}
+                  index={i}
                 />
-              </div>
-            )}
-            {chunk.slice(1, 7).map((t, i) => (
-              <TopicCard
-                key={t.topicId}
-                topic={t}
-                variant="mini"
-                onOpenDetail={onOpenDetail}
-                onDismiss={onDismiss}
-                index={i + 1}
-              />
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {chunk[0] && (
+                <div className="sm:col-span-2">
+                  <TopicCard
+                    key={chunk[0].topicId}
+                    topic={chunk[0]}
+                    variant="hero"
+                    onOpenDetail={onOpenDetail}
+                    onDismiss={onDismiss}
+                    index={0}
+                  />
+                </div>
+              )}
+              {chunk.slice(1, 7).map((t, i) => (
+                <TopicCard
+                  key={t.topicId}
+                  topic={t}
+                  variant="mini"
+                  onOpenDetail={onOpenDetail}
+                  onDismiss={onDismiss}
+                  index={i + 1}
+                />
+              ))}
+            </div>
+          )}
         </motion.section>
       ))}
     </div>
