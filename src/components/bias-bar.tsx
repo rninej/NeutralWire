@@ -30,7 +30,10 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
   return (
     <div className={cn('w-full', className)}>
       {/* Labels overlaid INSIDE the thin bar to save vertical space.
-          Shows PERCENTAGES (e.g. L42%) instead of raw source counts. */}
+          Shows PERCENTAGES (e.g. L42%) instead of raw source counts.
+          ALWAYS shows the number — even for very small sections (<10%).
+          Small sections use a tooltip (title attribute) + a min-width
+          label positioned outside the segment if it's too narrow. */}
       {showLabels ? (
         <div
           className="flex h-3.5 w-full overflow-hidden rounded-full bg-muted"
@@ -39,40 +42,46 @@ export function BiasBar({ left, center, right, showLabels = true, className }: B
         >
           {lPct > 0 && (
             <motion.div
-              className="flex items-center justify-center bg-blue-500"
+              className="flex items-center justify-center bg-blue-500 relative"
               initial={{ width: 0 }}
               animate={{ width: `${lPct}%` }}
               transition={SEGMENT_TRANSITION}
               title={`Left: ${lPct}% (${left} sources)`}
             >
-              {lPct > 10 && (
+              {lPct >= 8 ? (
                 <span className="text-[8px] font-bold text-white leading-none">{lPct}%</span>
+              ) : (
+                <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 text-[8px] font-bold text-blue-600 dark:text-blue-400 leading-none whitespace-nowrap">{lPct}%</span>
               )}
             </motion.div>
           )}
           {cPct > 0 && (
             <motion.div
-              className="flex items-center justify-center bg-zinc-500"
+              className="flex items-center justify-center bg-zinc-500 relative"
               initial={{ width: 0 }}
               animate={{ width: `${cPct}%` }}
               transition={SEGMENT_TRANSITION}
               title={`Center: ${cPct}% (${center} sources)`}
             >
-              {cPct > 10 && (
+              {cPct >= 8 ? (
                 <span className="text-[8px] font-bold text-white leading-none">{cPct}%</span>
+              ) : (
+                <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 text-[8px] font-bold text-zinc-600 dark:text-zinc-400 leading-none whitespace-nowrap">{cPct}%</span>
               )}
             </motion.div>
           )}
           {rPct > 0 && (
             <motion.div
-              className="flex items-center justify-center bg-red-500"
+              className="flex items-center justify-center bg-red-500 relative"
               initial={{ width: 0 }}
               animate={{ width: `${rPct}%` }}
               transition={SEGMENT_TRANSITION}
               title={`Right: ${rPct}% (${right} sources)`}
             >
-              {rPct > 10 && (
+              {rPct >= 8 ? (
                 <span className="text-[8px] font-bold text-white leading-none">{rPct}%</span>
+              ) : (
+                <span className="absolute -top-3.5 left-1/2 -translate-x-1/2 text-[8px] font-bold text-red-600 dark:text-red-400 leading-none whitespace-nowrap">{rPct}%</span>
               )}
             </motion.div>
           )}

@@ -1947,6 +1947,26 @@ export default function Home() {
               }
               setDetailTopic(null)
             }}
+            onReportBroken={(topicId) => {
+              // Remove the broken topic from ALL feed arrays so it
+              // doesn't bother other users. Same logic as handleDismissTopic
+              // but without the dislike engagement bump.
+              setTopics((prev) => prev.filter((t) => t.topicId !== topicId))
+              setOlderTopics((prev) => prev.filter((t) => t.topicId !== topicId))
+              setMyCountryTopics((prev) => prev.filter((t) => t.topicId !== topicId))
+              setBlindspotSections((prev) => {
+                const next: Record<string, TopicArticle[]> = {}
+                let changed = false
+                for (const [key, list] of Object.entries(prev)) {
+                  const filtered = list.filter((t) => t.topicId !== topicId)
+                  if (filtered.length !== list.length) changed = true
+                  next[key] = filtered
+                }
+                return changed ? next : prev
+              })
+              // Also mark it as seen so it doesn't reappear on refresh
+              markTopicSeen(topicId)
+            }}
           />
         )}
       </AnimatePresence>

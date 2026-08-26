@@ -30,6 +30,10 @@ import { getRating } from '@/lib/source-ratings'
 interface TopicDetailProps {
   topic: TopicArticle
   onClose: () => void
+  /** Called when the topic is broken (no sources + no summary after all
+   *  fetches fail). The parent should remove it from the feed so it
+   *  doesn't bother other users. */
+  onReportBroken?: (topicId: string) => void
 }
 
 const LEANING_BADGE: Record<string, { label: string; cls: string }> = {
@@ -54,7 +58,7 @@ function formatTime(ms: number): string {
   return `${day} ${date} ${month}, ${hh}:${mm}`
 }
 
-export function TopicDetail({ topic, onClose }: TopicDetailProps) {
+export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps) {
   const [summary, setSummary] = React.useState<string | null>(null)
   const [summaryLoading, setSummaryLoading] = React.useState(true)
   const [summaryError, setSummaryError] = React.useState<string | null>(null)
@@ -218,23 +222,54 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
     const articleCount = Array.isArray(topic.articles) ? topic.articles.length : 0
     const needsFetch = articleCount === 0 || (topic.coverage > 0 && articleCount < topic.coverage)
     if (!needsFetch) {
-      // Already have full articles — use them directly.
       setDisplayTopic(null)
       return
     }
     ;(async () => {
+      // Strategy: try /api/topic/[id] first (checks archive + cache).
+      // If that fails or returns no articles, try fetching from /api/news
+      // with slim=0 (no slim = includes articles) for each category.
       try {
         const res = await fetch(`/api/topic/${encodeURIComponent(topic.topicId)}`)
         if (!res.ok) return
         const data = await res.json()
         if (cancelled || !data.topic) return
-        // Only update if the fetched topic actually has articles —
-        // otherwise we gain nothing and might overwrite good data.
         if (Array.isArray(data.topic.articles) && data.topic.articles.length > 0) {
           setDisplayTopic(data.topic as TopicArticle)
+          return
         }
       } catch {
-        // silent — fall back to topic.articles
+        // silent — try fallback below
+      }
+
+      // Fallback: fetch from /api/news with slim=0 for common categories.
+      // This catches topics that are in the live cache but not in the archive.
+      if (cancelled) return
+      const newsCats = ['top', 'relevant', 'world', 'politics', 'business', 'technology', 'science', 'health', 'sports']
+      const country = typeof window !== 'undefined' ? (localStorage.getItem('neutralwire:country-manual') || localStorage.getItem('neutralwire:country') || '') : ''
+
+      for (const cat of newsCats) {
+        if (cancelled) return
+        try {
+          const params = new URLSearchParams({ category: cat, limit: '40', minCoverage: '1' })
+          // For virtual categories, add country
+          if ((cat === 'relevant' || cat === 'mycountry') && country) {
+            try {
+              const parsed = JSON.parse(country)
+              if (parsed?.info?.code) params.set('country', parsed.info.code)
+            } catch {}
+          }
+          const newsRes = await fetch(`/api/news?${params.toString()}`)
+          if (!newsRes.ok) continue
+          const newsData = await newsRes.json()
+          const found = (newsData.topics || []).find((t: TopicArticle) => t.topicId === topic.topicId)
+          if (found && Array.isArray(found.articles) && found.articles.length > 0) {
+            if (!cancelled) setDisplayTopic(found)
+            return
+          }
+        } catch {
+          // continue to next category
+        }
       }
     })()
     return () => {
@@ -395,6 +430,30 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
   const leftArticles = articles.filter((a) => a.leaning === 'left')
   const centerArticles = articles.filter((a) => a.leaning === 'center')
   const rightArticles = articles.filter((a) => a.leaning === 'right')
+
+  // ── Broken topic detection ──
+  // If both the summary AND sources failed to load (after all fetch
+  // attempts), report the topic as broken so the parent removes it
+  // from the feed. This prevents other users from seeing empty articles.
+  // We wait until BOTH fetches complete (not loading) before reporting.
+  React.useEffect(() => {
+    if (!onReportBroken) return
+    if (summaryLoading) return // summary fetch still in progress
+    // Check if articles are also empty (displayTopic fetch completed but
+    // found nothing — displayTopic is null when fetch completed with no
+    // results OR when articles were already present)
+    const hasArticles = leftArticles.length + centerArticles.length + rightArticles.length > 0
+    const hasSummary = !summaryError && summary && summary.length > 20
+    if (!hasArticles && !hasSummary) {
+      // Both failed — report broken after a short delay (lets the user
+      // see the error state briefly before the detail closes)
+      const timer = setTimeout(() => {
+        onReportBroken(topic.topicId)
+        onClose()
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [summaryLoading, summaryError, summary, leftArticles.length, centerArticles.length, rightArticles.length, onReportBroken, topic.topicId, onClose])
 
   return (
     <motion.div
@@ -762,6 +821,19 @@ export function TopicDetail({ topic, onClose }: TopicDetailProps) {
               color="text-red-600 dark:text-red-400"
               articles={rightArticles}
             />
+          )}
+
+          {/* If NO articles loaded at all (after all fetches), show a message.
+              This prevents the "All Sources heading with nothing below it" bug. */}
+          {leftArticles.length === 0 && centerArticles.length === 0 && rightArticles.length === 0 && (
+            <div className="rounded-lg border border-dashed border-border p-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                Source details are no longer available for this story.
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                The article may have been archived or the sources have expired.
+              </p>
+            </div>
           )}
         </div>
       </div>
