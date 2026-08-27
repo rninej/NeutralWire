@@ -1965,3 +1965,79 @@ Stage Summary:
   circular reveal animation in supported browsers.
 - Nothing broken: Ko-fi + referral + interests + glass + swipe-to-
   dismiss + topic detail all still work.
+
+---
+Task ID: header-variants-secret-recorder
+Agent: main (Super Z)
+Task: (1) Multiple subtopic-header design ideas selectable from /debug; (2) invisible paste-triggered screen recorder (mobile/desktop) for capturing advert footage.
+
+Work Log:
+- Fresh sandbox: re-cloned the repo from GitHub (eb640d3) — all prior
+  work intact (Tesco fix, watermark scoping, big-chip nav + kill-switch).
+- Extended /api/flags: subtopicNav now validates 6 modes
+  (cards|classic|tabs|tiles|sheet|dock); normalizeMode degrades unknown
+  values to 'cards'; POST validation + GET memo unchanged otherwise.
+- src/components/category-nav.tsx: exported CategoryIcon, displayCode,
+  added categoryLabel helper for reuse by all variants.
+- NEW src/components/subtopic-navs.tsx (4 variants + shared sheet):
+  - SubtopicTabs: text-only tabs, h-11 mobile targets, layoutId
+    underline, auto-centred active tab, edge fades.
+  - SubtopicTiles: flex-wrap grid of h-11 bordered icon tiles — all
+    topics visible, no scroll.
+  - SubtopicSheetNav: one wide h-11 button → CategorySheet with h-14
+    (56px) tiles in a 2/3-col grid.
+  - SubtopicDock: fixed bottom-3 dock; mobile = For You/HK/Top +
+    Search + More (opens sheet); desktop (md+) = all 11 inline;
+    Search button included since dock mode has no header search.
+  - CategorySheet: AnimatePresence + PORTAL TO BODY. Two bugs found
+    and fixed: (a) sticky header's backdrop-filter containing block
+    trapped the fixed overlay inside the header (clipped at top);
+    (b) framer-motion v12 never mounts a PORTAL as a direct
+    AnimatePresence child — fixed with an empty motion keeper element
+    wrapping the portal. No body scroll-lock (SourcesPopup lesson).
+    Escape closes; backdrop click closes.
+- page-client.tsx: NavVariant type widened; nav block renders all 6
+  variants; dock mode hides header nav and mounts SubtopicDock after
+  the footer + h-[84px] spacer.
+- /debug Feature Flags card → 6-option grid (Big chips / Bold tabs /
+  Icon tiles / Browse sheet / Bottom dock / Classic pills) with Live
+  badge; same one-click password-protected POST.
+- NEW src/components/secret-screen-recorder.tsx (mounted in layout):
+  - Magic words (paste OR typed, case-insensitive, substring match):
+    secretscreenrecordmobileon/off, secretscreenrecorddesktopon/off.
+  - mobile on: opens 390x844 popup '/?nwrec=1' (mobile layout) +
+    getDisplayMedia(displaySurface:'window') → user picks the popup;
+    helper toast in main window only (never captured).
+  - desktop on: getDisplayMedia(preferCurrentTab) — no toasts while
+    recording so desktop footage stays clean.
+  - MediaRecorder webm vp9/vp8 (mp4 fallback) @8 Mbps, 1s chunks;
+    stop → blob download 'NeutralWire-<mode>-<timestamp>.webm'.
+  - Stop paths: OFF word (main window or popup — popup forwards via
+    postMessage), browser stop-share (track ended), popup closed,
+    component unmount; beforeunload guard while recording.
+  - 120s picker-timeout safety net (headless/embedded webviews where
+    the getDisplayMedia promise never settles) + late-stream cleanup.
+  - Renders null; iOS/no-getDisplayMedia → friendly toast.
+- VERIFICATION (agent-browser + z-ai vision, desktop 1440x900 +
+  mobile 390x844): cards/tabs/tiles/sheet(open+select)/dock(all
+  items desktop, 5 items mobile, More sheet, category switching,
+  active states) all screenshotted + VLM-verified; /debug picker
+  shows 6 options + correct Live badge; recorder verified in
+  headless as far as the environment allows: listeners attach,
+  paste word reaches handler, typed word matches, popup opens at
+  /?nwrec=1, popup forwards stop to opener (console-verified);
+  actual capture/download can't run headless (getDisplayMedia hangs
+  with no picker UI) — works in real Chrome/Edge per standard APIs.
+- bun run lint: PASS (0 errors). Pushed b846a89 → main (Vercel deploys).
+- Flag restored to 'cards' (pre-test default) at the end. NOTE: the
+  user was observed flipping the flag on production /debug during
+  this session — after deploy they get the 6-option picker there.
+
+Stage Summary:
+- 6 subtopic header designs now one-click switchable for ALL users
+  from /debug (Feature Flags card): cards (default), tabs, tiles,
+  sheet, dock, classic.
+- Invisible screen recorder live on all routes: paste
+  secretscreenrecordmobileon/off or secretscreenrecorddesktopon/off
+  to record mobile-form (390x844 popup) or desktop-form footage and
+  auto-download the video for AI advert production.
