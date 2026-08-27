@@ -15,6 +15,7 @@ import {
   Trophy,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ScrollArrowButton } from './scroll-arrow'
 import {
   CATEGORY_LABELS,
   PRIMARY_CATEGORIES,
@@ -42,6 +43,10 @@ import type { CountryInfo } from '@/lib/country-detect'
  *   - The active category keeps the sliding-pill animation (layoutId),
  *     just bigger, and is auto-scrolled to the centre of the row so it's
  *     never hidden off-screen.
+ *
+ * showArrow (the 'cardsarrow' variant) appends a circular scroll arrow
+ * after the row — an explicit "more topics →" hint that edge fades
+ * alone don't give everyone.
  *
  * Toggleable back to the classic pills for ALL users from /debug
  * (feature flag `subtopicNav` in Firebase, default: 'cards').
@@ -115,10 +120,12 @@ export function CategoryNav({
   category,
   onSelect,
   country,
+  showArrow,
 }: {
   category: Category
   onSelect: (c: Category) => void
   country?: CountryInfo | null
+  showArrow?: boolean
 }) {
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const chipRefs = React.useRef<Partial<Record<Category, HTMLButtonElement | null>>>({})
@@ -167,8 +174,8 @@ export function CategoryNav({
     }
   }, [centreActive, updateFades])
 
-  return (
-    <div className="relative">
+  const row = (
+    <div className={cn('relative', showArrow && 'min-w-0 flex-1')}>
       {/* Scrollable chip row — scrollbar hidden; edge fades hint overflow */}
       <div
         ref={scrollRef}
@@ -236,6 +243,16 @@ export function CategoryNav({
           canRight ? 'opacity-100' : 'opacity-0',
         )}
       />
+    </div>
+  )
+
+  if (!showArrow) return row
+  // 'cardsarrow' variant — circular scroll arrow pinned after the chip row
+  // (a flex sibling, so it can never scroll away).
+  return (
+    <div className="flex items-center gap-2">
+      {row}
+      <ScrollArrowButton targetRef={scrollRef} canLeft={canLeft} canRight={canRight} />
     </div>
   )
 }

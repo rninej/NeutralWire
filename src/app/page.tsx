@@ -9,6 +9,44 @@ import PageClient from './page-client'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
+// ── Server-rendered subtopic-nav flag ──────────────────────────────────
+// The homepage category header has TEN selectable designs, switched for
+// ALL users from /debug (stored in Firebase at featureFlags/subtopicNav).
+//
+// WHY SERVER-SIDE: previously the client started on the default ('cards')
+// and fetched /api/flags after mount — every refresh briefly flashed the
+// big-chips design before snapping to the selected one. Reading the flag
+// HERE and passing it down means the very first paint (SSR HTML) already
+// uses the right design. No flash, ever.
+//
+// Module-level 5s memo bounds Firebase reads on warm instances; flipping
+// the flag in /debug and refreshing therefore applies within ≤5s.
+type SubtopicNavMode =
+  | 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
+  | 'maxipills' | 'headerdock' | 'tabsarrow' | 'cardsarrow'
+const NAV_MODES: SubtopicNavMode[] = [
+  'cards', 'classic', 'tabs', 'tiles', 'sheet', 'dock',
+  'maxipills', 'headerdock', 'tabsarrow', 'cardsarrow',
+]
+let navFlagMemo: { value: SubtopicNavMode; ts: number } | null = null
+const NAV_FLAG_TTL_MS = 5 * 1000
+
+async function getSubtopicNav(): Promise<SubtopicNavMode> {
+  if (navFlagMemo && Date.now() - navFlagMemo.ts < NAV_FLAG_TTL_MS) {
+    return navFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<string>('featureFlags/subtopicNav')
+    const value = NAV_MODES.includes(stored as SubtopicNavMode)
+      ? (stored as SubtopicNavMode)
+      : 'cards'
+    navFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return 'cards'
+  }
+}
+
 /**
  *  Generate dynamic OG metadata for shared links.
  *
@@ -123,6 +161,9 @@ export async function generateMetadata({
   return defaultMeta
 }
 
-export default function Page() {
-  return <PageClient />
+export default async function Page() {
+  // Read the subtopic-nav flag on the SERVER so the SSR HTML already
+  // renders the selected header design (no default-then-swap flash).
+  const initialSubtopicNav = await getSubtopicNav()
+  return <PageClient initialSubtopicNav={initialSubtopicNav} />
 }

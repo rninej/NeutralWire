@@ -38,7 +38,7 @@ import {
 import { getDeviceId } from '@/lib/referral'
 import { COUNTRY_COORDS, latLngToXY } from '@/lib/country-coords'
 import { cn } from '@/lib/utils'
-import { LayoutGrid, List, Underline, LayoutDashboard, PanelBottomOpen, AppWindow } from 'lucide-react'
+import { LayoutGrid, List, Underline, LayoutDashboard, PanelBottomOpen, AppWindow, Pill, PanelTop, MoveHorizontal, ChevronsRight } from 'lucide-react'
 
 // ── Types ──
 interface AnalyticsData {
@@ -174,9 +174,11 @@ export default function DebugPage() {
 
   // ── Feature flags — subtopic header style ──
   // One-click control that switches the homepage category header between
-  // SIX designs — for ALL users, instantly (stored in Firebase, read by
-  // every client on load).
-  type NavMode = 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
+  // TEN designs — for ALL users, instantly (stored in Firebase, rendered
+  // server-side on every page load).
+  type NavMode =
+    | 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
+    | 'maxipills' | 'headerdock' | 'tabsarrow' | 'cardsarrow'
   const NAV_OPTIONS: Array<{
     id: NavMode
     name: string
@@ -219,6 +221,30 @@ export default function DebugPage() {
       desc: 'The original small wrapping text pills (how the site looked before)',
       icon: <List className="h-4 w-4" />,
     },
+    {
+      id: 'maxipills',
+      name: 'Maxi pills',
+      desc: 'Classic pills scaled as big as possible — 36-40px targets, still wrapping so all topics fit in one view',
+      icon: <Pill className="h-4 w-4" />,
+    },
+    {
+      id: 'headerdock',
+      name: 'Header dock',
+      desc: 'The bottom-dock item style (icon over label) placed inline in the header — a native top tab bar',
+      icon: <PanelTop className="h-4 w-4" />,
+    },
+    {
+      id: 'tabsarrow',
+      name: 'Bold tabs + arrow',
+      desc: 'Bold text tabs with a circular scroll arrow at the end of the row — an obvious "swipe for more" cue',
+      icon: <MoveHorizontal className="h-4 w-4" />,
+    },
+    {
+      id: 'cardsarrow',
+      name: 'Big chips + arrow',
+      desc: 'The big icon chips with the same scroll arrow at the end of the row',
+      icon: <ChevronsRight className="h-4 w-4" />,
+    },
   ]
   const [navMode, setNavMode] = React.useState<NavMode | null>(null)
   const [navFlipping, setNavFlipping] = React.useState(false)
@@ -230,7 +256,7 @@ export default function DebugPage() {
       .then((d) => {
         const v = d?.subtopicNav
         setNavMode(
-          ['cards', 'classic', 'tabs', 'tiles', 'sheet', 'dock'].includes(v) ? v : 'cards',
+          ['cards', 'classic', 'tabs', 'tiles', 'sheet', 'dock', 'maxipills', 'headerdock', 'tabsarrow', 'cardsarrow'].includes(v) ? v : 'cards',
         )
       })
       .catch(() => setNavMode('cards'))
@@ -410,8 +436,10 @@ export default function DebugPage() {
           </div>
           <p className="mb-3 text-sm text-muted-foreground">
             Subtopic header style — a complaint said the classic category pills
-            are too small and hard to read/click. Six designs to choose from;
+            are too small and hard to read/click. Ten designs to choose from;
             pick the one every visitor sees and flip it back here anytime.
+            Refresh the homepage after switching — the selected design is now
+            rendered server-side, so it loads instantly with NO flash.
           </p>
           <div className="grid max-w-4xl grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {NAV_OPTIONS.map((opt) => (

@@ -1,20 +1,27 @@
 'use client'
 
 /**
- * subtopic-navs.tsx — FOUR additional subtopic-header designs, selectable
+ * subtopic-navs.tsx — the alternative subtopic-header designs, selectable
  * for ALL users from /debug (feature flag `subtopicNav` in Firebase).
  *
  * The full option set (see /api/flags):
- *   'classic' → original small wrapping text pills      (in page-client)
- *   'cards'   → CategoryNav big icon chips, scroll row  (category-nav.tsx)
- *   'tabs'    → SubtopicTabs          (below) — bold text tabs + animated
- *               underline, Google-News style
- *   'tiles'   → SubtopicTiles         (below) — wrapping grid of icon
- *               tiles, EVERY topic visible at once (no scrolling)
- *   'sheet'   → SubtopicSheetNav      (below) — one wide button that opens
- *               a sheet of 56px-tall tiles (biggest touch targets)
- *   'dock'    → SubtopicDock          (below) — floating bottom app dock
- *               (mobile-style tab bar), "More" opens the shared sheet
+ *   'classic'    → original small wrapping text pills    (in page-client)
+ *   'cards'      → CategoryNav big icon chips, scroll row (category-nav.tsx)
+ *   'tabs'       → SubtopicTabs          (below) — bold text tabs + animated
+ *                  underline, Google-News style
+ *   'tiles'      → SubtopicTiles         (below) — wrapping grid of icon
+ *                  tiles, EVERY topic visible at once (no scrolling)
+ *   'sheet'      → SubtopicSheetNav      (below) — one wide button that opens
+ *                  a sheet of 56px-tall tiles (biggest touch targets)
+ *   'dock'       → SubtopicDock          (below) — floating bottom app dock
+ *                  (mobile-style tab bar), "More" opens the shared sheet
+ *   'maxipills'  → SubtopicMaxiPills     (below) — the classic pills scaled
+ *                  up as big as possible, still wrapping (all in one view)
+ *   'headerdock' → SubtopicHeaderDock    (below) — the app-dock item style
+ *                  (icon over label) rendered inline in the header
+ *   'tabsarrow'  → SubtopicTabs showArrow — bold tabs + a scroll arrow at
+ *                  the end of the row
+ *   'cardsarrow' → CategoryNav showArrow  — big chips + the same arrow
  *
  * All variants share CategoryIcon + categoryLabel from category-nav.tsx so
  * the icon language stays consistent across designs.
@@ -25,6 +32,7 @@ import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ChevronDown, Search, X, LayoutGrid } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ScrollArrowButton } from './scroll-arrow'
 import {
   PRIMARY_CATEGORIES,
   SECONDARY_CATEGORIES,
@@ -44,8 +52,15 @@ const ALL_CATS: Category[] = [...PRIMARY_CATEGORIES, ...SECONDARY_CATEGORIES]
 // ─────────────────────────────────────────────────────────────────────────
 // 1. TABS — bold text tabs with an animated underline indicator.
 //    Pure text (no icons) scans fastest; 44px-tall targets on mobile.
+//    With showArrow (the 'tabsarrow' variant) a scroll arrow is appended
+//    after the row — an explicit "this scrolls" hint.
 // ─────────────────────────────────────────────────────────────────────────
-export function SubtopicTabs({ category, onSelect, country }: SubtopicNavProps) {
+export function SubtopicTabs({
+  category,
+  onSelect,
+  country,
+  showArrow,
+}: SubtopicNavProps & { showArrow?: boolean }) {
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const chipRefs = React.useRef<Partial<Record<Category, HTMLButtonElement | null>>>({})
   const [canLeft, setCanLeft] = React.useState(false)
@@ -88,8 +103,8 @@ export function SubtopicTabs({ category, onSelect, country }: SubtopicNavProps) 
     }
   }, [centreActive, updateFades])
 
-  return (
-    <div className="relative">
+  const row = (
+    <div className={cn('relative', showArrow && 'min-w-0 flex-1')}>
       <div
         ref={scrollRef}
         onScroll={updateFades}
@@ -145,6 +160,80 @@ export function SubtopicTabs({ category, onSelect, country }: SubtopicNavProps) 
           canRight ? 'opacity-100' : 'opacity-0',
         )}
       />
+    </div>
+  )
+
+  if (!showArrow) return row
+  // 'tabsarrow' variant — append the scroll arrow AFTER the tab row so it
+  // can never be scrolled away and always reads as "more topics →".
+  return (
+    <div className="flex items-center gap-2">
+      {row}
+      <ScrollArrowButton targetRef={scrollRef} canLeft={canLeft} canRight={canRight} />
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 1b. MAXI PILLS — the classic wrapping text pills, scaled up as big as
+//     they can be while still showing EVERY topic in one view (wrapping,
+//     no scrolling, no hidden content). 36px-tall targets on mobile,
+//     40px on desktop — the same sliding-pill animation as classic.
+// ─────────────────────────────────────────────────────────────────────────
+export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavProps) {
+  return (
+    <div
+      role="tablist"
+      aria-label="News categories"
+      className="flex w-full flex-wrap items-center gap-1.5 py-0.5"
+    >
+      {ALL_CATS.map((cat, i) => {
+        const active = cat === category
+        return (
+          <React.Fragment key={cat}>
+            {/* Divider between the primary and secondary groups — the same
+                separator the classic pills use, scaled up. Wraps as a flex
+                item like everything else. */}
+            {i === PRIMARY_CATEGORIES.length && (
+              <div aria-hidden="true" className="mx-0.5 h-7 w-px shrink-0 bg-border" />
+            )}
+            <motion.button
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onSelect(cat)}
+              whileTap={{ scale: 0.94 }}
+              transition={{ duration: 0.15, ease: 'easeOut' }}
+              className={cn(
+                // As big as the wrapping layout allows: 36px mobile / 40px
+                // desktop, 13-14px semibold text (classic is 24px / 10px).
+                'relative inline-flex h-9 sm:h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3.5 text-[13px] sm:text-sm font-semibold transition-colors',
+                active ? 'text-background' : 'text-foreground/80 hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {active && (
+                <motion.span
+                  layoutId="maxipills-indicator"
+                  className="absolute inset-0 rounded-lg bg-foreground"
+                  transition={{ type: 'spring', stiffness: 380, damping: 28, mass: 0.85 }}
+                  style={{ zIndex: 0 }}
+                />
+              )}
+              <span className="relative z-10">{categoryLabel(cat, country)}</span>
+              {/* Blindspots Venn mark — the one icon classic pills keep.
+                  Stays blue/red even on the filled active pill. */}
+              {cat === 'blindspots' && (
+                <span className="relative z-10 flex shrink-0">
+                  <svg width="14" height="10" viewBox="0 0 14 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <circle cx="4.5" cy="5" r="3.5" className="fill-blue-500" opacity="0.85" />
+                    <circle cx="9.5" cy="5" r="3.5" className="fill-red-500" opacity="0.85" />
+                  </svg>
+                </span>
+              )}
+            </motion.button>
+          </React.Fragment>
+        )
+      })}
     </div>
   )
 }
@@ -348,14 +437,127 @@ export function SubtopicSheetNav({ category, onSelect, country }: SubtopicNavPro
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 3b. HEADER DOCK — the app-dock item style (icon stacked over a compact
+//     label, filled active state) rendered INLINE in the header. It's the
+//     bottom dock's visual language without the floating container, so it
+//     reads as a native top tab bar. All 11 topics sit in ONE row on
+//     desktop; on mobile the row scrolls (edge fades hint it) and the
+//     active item auto-centres.
+// ─────────────────────────────────────────────────────────────────────────
+export function SubtopicHeaderDock({ category, onSelect, country }: SubtopicNavProps) {
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+  const chipRefs = React.useRef<Partial<Record<Category, HTMLButtonElement | null>>>({})
+  const [canLeft, setCanLeft] = React.useState(false)
+  const [canRight, setCanRight] = React.useState(false)
+
+  // Keep the ACTIVE item visible when the row scrolls (same manual
+  // scrollLeft math as the tabs/cards navs — never scrollIntoView, the
+  // header is sticky).
+  const centreActive = React.useCallback(
+    (smooth: boolean) => {
+      const container = scrollRef.current
+      const chip = chipRefs.current[category]
+      if (!container || !chip) return
+      const target =
+        chip.offsetLeft - container.clientWidth / 2 + chip.clientWidth / 2
+      container.scrollTo({ left: Math.max(0, target), behavior: smooth ? 'smooth' : 'auto' })
+    },
+    [category],
+  )
+
+  React.useEffect(() => {
+    centreActive(true)
+  }, [centreActive])
+
+  const updateFades = React.useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    setCanLeft(el.scrollLeft > 8)
+    setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 8)
+  }, [])
+
+  React.useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      centreActive(false)
+      updateFades()
+    })
+    window.addEventListener('resize', updateFades)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', updateFades)
+    }
+  }, [centreActive, updateFades])
+
+  return (
+    <div className="relative">
+      <div
+        ref={scrollRef}
+        onScroll={updateFades}
+        role="tablist"
+        aria-label="News categories"
+        className="no-scrollbar flex items-center gap-1 overflow-x-auto scroll-smooth px-0.5 py-1"
+      >
+        {ALL_CATS.map((cat) => {
+          const active = cat === category
+          return (
+            <button
+              key={cat}
+              ref={(el) => {
+                chipRefs.current[cat] = el
+              }}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onSelect(cat)}
+              className={cn(
+                // Same geometry as the bottom dock (52px tall, icon over
+                // label) so the two designs feel identical — but 72px wide
+                // (vs the dock's 62px) because the header has room and it
+                // keeps the longest label ("Blindspots") un-truncated.
+                'flex h-[52px] w-[72px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-semibold transition-colors active:scale-[0.96]',
+                active
+                  ? 'bg-foreground text-background shadow-sm'
+                  : 'text-foreground/70 hover:bg-muted hover:text-foreground',
+              )}
+            >
+              <CategoryIcon cat={cat} className="h-5 w-5" />
+              <span className="max-w-full truncate px-1">{dockLabel(cat, country)}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Edge fades — hint there's more to scroll on narrow screens */}
+      <div
+        aria-hidden="true"
+        className={cn(
+          'pointer-events-none absolute inset-y-0 left-0 w-10 bg-gradient-to-r from-background to-transparent transition-opacity duration-200',
+          canLeft ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+      <div
+        aria-hidden="true"
+        className={cn(
+          'pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-background to-transparent transition-opacity duration-200',
+          canRight ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // 4. DOCK — floating bottom app dock (mobile tab-bar feel, great in
 //    motion). Mobile: Relevant / My Country / Top + Search + More (the
 //    sheet holds all 11). Desktop (md+): ALL categories sit inline in the
 //    dock, no More button needed.
+//
+//    VISIBILITY: solid background + double border/ring + a deep shadow —
+//    the earlier 90%-opaque blur washed the dock into the page behind it.
 // ─────────────────────────────────────────────────────────────────────────
 
 /** Compact labels so every dock item fits a ~60px column. */
-function dockLabel(cat: Category, country?: CountryInfo | null): string {
+export function dockLabel(cat: Category, country?: CountryInfo | null): string {
   if (cat === 'mycountry') {
     return country?.code && country.code !== 'INT'
       ? country.code === 'GB'
@@ -382,7 +584,10 @@ export function SubtopicDock({
         aria-label="News categories"
         className="fixed bottom-3 left-1/2 z-40 w-[calc(100vw-1.5rem)] max-w-fit -translate-x-1/2"
       >
-        <div className="mx-auto flex w-fit max-w-full items-center gap-0.5 overflow-x-auto rounded-2xl border border-border bg-background/90 p-1.5 shadow-xl backdrop-blur-xl no-scrollbar">
+        {/* Solid (not translucent) panel: a crisp card that always reads
+            as a dock, over ANY page content. ring adds a subtle inner edge
+            so light-on-light and dark-on-dark both stay visible. */}
+        <div className="mx-auto flex w-fit max-w-full items-center gap-0.5 overflow-x-auto rounded-2xl border border-border bg-background p-1.5 shadow-2xl shadow-black/20 ring-1 ring-black/[0.06] no-scrollbar dark:shadow-black/50 dark:ring-white/[0.09]">
           {ALL_CATS.map((cat, i) => {
             const active = cat === category
             // First 3 items always visible; the rest join on md+ screens.
@@ -395,11 +600,13 @@ export function SubtopicDock({
                 aria-selected={active}
                 onClick={() => onSelect(cat)}
                 className={cn(
-                  'flex h-[52px] w-[62px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-semibold transition-colors active:scale-[0.96]',
+                  // 68px wide (not the old 62px) so the longest label
+                  // ("Blindspots" ≈ 60px at 10px semibold) never truncates.
+                  'flex h-[52px] w-[68px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-semibold transition-colors active:scale-[0.96]',
                   hiddenOnMobile && 'hidden md:flex',
                   active
-                    ? 'bg-foreground text-background'
-                    : 'text-foreground/70 hover:bg-muted hover:text-foreground',
+                    ? 'bg-foreground text-background shadow-sm'
+                    : 'text-foreground/75 hover:bg-muted hover:text-foreground',
                 )}
               >
                 <CategoryIcon cat={cat} className="h-5 w-5" />
@@ -416,7 +623,7 @@ export function SubtopicDock({
             onClick={onSearch}
             aria-label="Search news"
             title="Search news"
-            className="flex h-[52px] w-[54px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-semibold text-foreground/70 transition-colors hover:bg-muted hover:text-foreground active:scale-[0.96]"
+            className="flex h-[52px] w-[54px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-semibold text-foreground/75 transition-colors hover:bg-muted hover:text-foreground active:scale-[0.96]"
           >
             <Search className="h-5 w-5" />
             <span>Search</span>
@@ -428,7 +635,7 @@ export function SubtopicDock({
             onClick={() => setMoreOpen(true)}
             aria-label="More topics"
             aria-haspopup="dialog"
-            className="flex h-[52px] w-[62px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-semibold text-foreground/70 transition-colors hover:bg-muted hover:text-foreground active:scale-[0.96] md:hidden"
+            className="flex h-[52px] w-[68px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-semibold text-foreground/75 transition-colors hover:bg-muted hover:text-foreground active:scale-[0.96] md:hidden"
           >
             <LayoutGrid className="h-5 w-5" />
             <span>More</span>

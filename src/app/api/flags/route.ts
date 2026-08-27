@@ -11,22 +11,27 @@ export const maxDuration = 15
  * Server-side feature flags (stored in Firebase at featureFlags/<name>).
  *
  * GET  /api/flags   → { subtopicNav: 'cards' | 'classic' | 'tabs' |
- *                        'tiles' | 'sheet' | 'dock' }        (public)
+ *                        'tiles' | 'sheet' | 'dock' | 'maxipills' |
+ *                        'headerdock' | 'tabsarrow' | 'cardsarrow' }  (public)
  * POST /api/flags   → set a flag for ALL users (password-protected)
  *       body: { password, subtopicNav: <one of the above> }
  *
  * Currently managed flags:
  *   - subtopicNav: which category-header design every visitor sees.
- *       'cards'   → big icon chips in a scrollable row — DEFAULT
- *       'classic' → the original small wrapping text pills
- *       'tabs'    → bold text tabs + animated underline
- *       'tiles'   → wrapping grid of icon tiles (all visible, no scroll)
- *       'sheet'   → one wide button that opens a sheet of 56px tiles
- *       'dock'    → floating bottom app dock (mobile tab-bar style)
+ *       'cards'      → big icon chips in a scrollable row — DEFAULT
+ *       'classic'    → the original small wrapping text pills
+ *       'tabs'       → bold text tabs + animated underline
+ *       'tiles'      → wrapping grid of icon tiles (all visible, no scroll)
+ *       'sheet'      → one wide button that opens a sheet of 56px tiles
+ *       'dock'       → floating bottom app dock (mobile tab-bar style)
+ *       'maxipills'  → classic pills scaled as big as possible, wrapping
+ *       'headerdock' → the app-dock item style inline in the header
+ *       'tabsarrow'  → bold tabs + a scroll arrow at the end of the row
+ *       'cardsarrow' → big chips + the same scroll arrow
  *
- * The flag is flipped from /debug in one click; every client fetches this
- * endpoint on load (tiny payload, per-instance 10s memo) so a flip
- * propagates to all users within seconds.
+ * The flag is flipped from /debug in one click; every client receives the
+ * value server-side on load (page.tsx SSR) so a flip propagates on the
+ * next page load with no wrong-design flash.
  *
  * AUTH for POST: same password gate as the analytics endpoints — SHA-256
  * hash comparison, timing-safe.
@@ -35,9 +40,14 @@ export const maxDuration = 15
 // SHA-256 hash of the admin password (same one as /api/analytics/query).
 const PASSWORD_HASH = '5c2113db1bd51e6e6fce4205d8eb36e41f5018d5d32d4c04b294fb02192f474a'
 
-export type SubtopicNavMode = 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
+export type SubtopicNavMode =
+  | 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
+  | 'maxipills' | 'headerdock' | 'tabsarrow' | 'cardsarrow'
 
-const VALID_MODES: SubtopicNavMode[] = ['cards', 'classic', 'tabs', 'tiles', 'sheet', 'dock']
+const VALID_MODES: SubtopicNavMode[] = [
+  'cards', 'classic', 'tabs', 'tiles', 'sheet', 'dock',
+  'maxipills', 'headerdock', 'tabsarrow', 'cardsarrow',
+]
 const FLAG_PATH = 'featureFlags/subtopicNav'
 
 // Per-instance memo (10s) — bounds Firebase reads when many clients hit

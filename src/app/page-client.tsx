@@ -47,6 +47,8 @@ import {
   SubtopicTiles,
   SubtopicSheetNav,
   SubtopicDock,
+  SubtopicMaxiPills,
+  SubtopicHeaderDock,
 } from '@/components/subtopic-navs'
 import { SearchResults } from '@/components/search-results'
 import { cn, safeImageUrl } from '@/lib/utils'
@@ -184,7 +186,15 @@ interface SearchResponse {
   ms: number
 }
 
-export default function Home() {
+// Which category-header design this visitor sees. Flipped for ALL users
+// from /debug (POST /api/flags → Firebase). The INITIAL value comes from
+// the server (page.tsx reads the flag during SSR) so the first paint is
+// always the selected design — no default-then-swap flash on refresh.
+type NavVariant =
+  | 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
+  | 'maxipills' | 'headerdock' | 'tabsarrow' | 'cardsarrow'
+
+export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavVariant }) {
   // --- Platform detection (Android / Apple / Other) ---
   // Sets body.platform-{android|apple|other} so the CSS glass rules in
   // globals.css apply the right backdrop-blur + bg opacity to sticky
@@ -352,18 +362,19 @@ export default function Home() {
   const [localSearchAttempted, setLocalSearchAttempted] = useState(false)
 
   // --- Subtopic header style (server-side feature flag) ---
-  // Which of the 6 category-header designs this visitor sees. Flip for
-  // ALL users from /debug (POST /api/flags). Loaded once per page load;
-  // any fetch failure or unknown value keeps the default ('cards').
-  //   cards   → big icon chips, scrollable row (default)
-  //   classic → original small wrapping text pills
-  //   tabs    → bold text tabs + animated underline
-  //   tiles   → wrapping grid of icon tiles, all visible
-  //   sheet   → one wide button that opens a sheet of 56px tiles
-  //   dock    → floating bottom app dock (header nav hidden)
-  type NavVariant = 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
-  const [subtopicNav, setSubtopicNav] = useState<NavVariant>('cards')
+  // Which of the 10 category-header designs this visitor sees. The server
+  // passes the current flag value as initialSubtopicNav (SSR renders it
+  // directly — no flash). A lightweight client fetch still runs so a flag
+  // flip reaches already-loaded pages on their next visit; any fetch
+  // failure keeps the server-provided value.
+  const [subtopicNav, setSubtopicNav] = useState<NavVariant>(
+    initialSubtopicNav ?? 'cards',
+  )
   useEffect(() => {
+    // The server already rendered the right design, so this fetch is a
+    // safety net (e.g. the SSR Firebase read failed → server fell back to
+    // 'cards'). When the values agree, the functional setState returns the
+    // SAME value → React skips the re-render entirely → no flash.
     let cancelled = false
     fetch('/api/flags')
       .then((r) => (r.ok ? r.json() : null))
@@ -371,9 +382,9 @@ export default function Home() {
         const v = d?.subtopicNav
         if (
           !cancelled &&
-          ['classic', 'tabs', 'tiles', 'sheet', 'dock'].includes(v)
+          ['classic', 'tabs', 'tiles', 'sheet', 'dock', 'maxipills', 'headerdock', 'tabsarrow', 'cardsarrow'].includes(v)
         ) {
-          setSubtopicNav(v)
+          setSubtopicNav((prev) => (prev === v ? prev : (v as NavVariant)))
         }
       })
       .catch(() => {})
@@ -1724,7 +1735,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Category nav — SIX selectable designs (server-side flag), one
+        {/* Category nav — TEN selectable designs (server-side flag), one
             click from /debug flips it for ALL users:
             - 'cards' (default): big icon chips in a scrollable row, 40px
               touch targets, active chip auto-centres.
@@ -1733,7 +1744,12 @@ export default function Home() {
             - 'sheet': one wide button that opens a sheet of 56px tiles
             - 'dock':  floating bottom app dock — the header nav is hidden
               entirely (the dock + spacer render near the footer instead)
-            - 'classic': the original flat wrapping text pills. */}
+            - 'classic': the original flat wrapping text pills.
+            - 'maxipills': classic pills scaled as big as possible, still
+              wrapping — all topics in one view, no scrolling.
+            - 'headerdock': the app-dock item style inline in the header.
+            - 'tabsarrow': bold tabs + a scroll arrow at the end of the row.
+            - 'cardsarrow': big chips + the same scroll arrow. */}
         <div className="mx-auto max-w-[1440px] px-4 pb-2">
           {subtopicNav === 'dock' ? null : subtopicNav === 'classic' ? (
             <div className="flex flex-wrap items-center gap-1">
@@ -1772,6 +1788,27 @@ export default function Home() {
                 <span>Search</span>
               </button>
             </div>
+          ) : subtopicNav === 'maxipills' ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <SubtopicMaxiPills
+                category={category}
+                onSelect={(c) => setCategory(c)}
+                country={country}
+              />
+
+              {/* Search button — hidden on mobile (moved to section
+                  headers). Visible on desktop (lg+) beside the pills. */}
+              <button
+                type="button"
+                onClick={() => setShowSearch(true)}
+                className="hidden lg:inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-3.5 py-2 text-foreground/80 hover:bg-muted/80 transition-colors text-sm font-medium"
+                aria-label="Search"
+                title="Search news"
+              >
+                <Search className="h-4 w-4" />
+                <span>Search</span>
+              </button>
+            </div>
           ) : (
             <div className="flex items-center gap-2">
               <div className="min-w-0 flex-1">
@@ -1782,8 +1819,31 @@ export default function Home() {
                     country={country}
                   />
                 )}
+                {subtopicNav === 'cardsarrow' && (
+                  <CategoryNav
+                    category={category}
+                    onSelect={(c) => setCategory(c)}
+                    country={country}
+                    showArrow
+                  />
+                )}
                 {subtopicNav === 'tabs' && (
                   <SubtopicTabs
+                    category={category}
+                    onSelect={(c) => setCategory(c)}
+                    country={country}
+                  />
+                )}
+                {subtopicNav === 'tabsarrow' && (
+                  <SubtopicTabs
+                    category={category}
+                    onSelect={(c) => setCategory(c)}
+                    country={country}
+                    showArrow
+                  />
+                )}
+                {subtopicNav === 'headerdock' && (
+                  <SubtopicHeaderDock
                     category={category}
                     onSelect={(c) => setCategory(c)}
                     country={country}
