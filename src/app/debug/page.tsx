@@ -212,7 +212,7 @@ export default function DebugPage() {
     {
       id: 'dock',
       name: 'Bottom dock',
-      desc: 'Floating app-style dock at the bottom — mobile tab-bar feel; More opens all topics',
+      desc: 'Floating app-style dock at the bottom — Topics (folder preview) opens all topics; user-pinnable from Account',
       icon: <AppWindow className="h-4 w-4" />,
     },
     {

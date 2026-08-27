@@ -14,7 +14,9 @@
  *   'sheet'      → SubtopicSheetNav      (below) — one wide button that opens
  *                  a sheet of 56px-tall tiles (biggest touch targets)
  *   'dock'       → SubtopicDock          (below) — floating bottom app dock
- *                  (mobile-style tab bar), "More" opens the shared sheet
+ *                  (mobile-style tab bar), "Topics" (folder preview +
+ *                  count badge) opens the shared sheet; user-pinnable
+ *                  from Account → "Subtopics dock"
  *   'maxipills'  → SubtopicMaxiPills     (below) — the classic pills at
  *                  the BIGGEST size that still fits in exactly two rows
  *                  (adaptive font), every row filled edge-to-edge
@@ -31,7 +33,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronDown, Search, X, LayoutGrid } from 'lucide-react'
+import { ChevronDown, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ScrollHint } from './scroll-arrow'
 import {
@@ -41,6 +43,11 @@ import {
 } from '@/lib/news-sources'
 import type { CountryInfo } from '@/lib/country-detect'
 import { CategoryIcon, categoryLabel } from './category-nav'
+import {
+  getDockPicks,
+  orderDockCategories,
+  DOCK_PICKS_EVENT,
+} from '@/lib/dock-topics'
 
 export interface SubtopicNavProps {
   category: Category
@@ -720,9 +727,18 @@ export function SubtopicHeaderDock({ category, onSelect, country }: SubtopicNavP
 
 // ─────────────────────────────────────────────────────────────────────────
 // 4. DOCK — floating bottom app dock (mobile tab-bar feel, great in
-//    motion). Mobile: Relevant / My Country / Top + Search + More (the
-//    sheet holds all 11). Desktop (md+): ALL categories sit inline in the
-//    dock, no More button needed.
+//    motion). Mobile: the first 3 subtopics + Search + Topics (the sheet
+//    holds all 11). Desktop (md+): ALL categories sit inline in the dock,
+//    no Topics button needed.
+//
+//    PERSONALISATION: the user can pin their favourite subtopics to the
+//    front of the dock from Account → "Subtopics dock" (stored on-device,
+//    applied live via the neutralwire:dock-topics-changed event). The
+//    first 3 slots on mobile are then THEIR picks.
+//
+//    TOPICS BUTTON: iOS-folder-style — a tiny 2×2 grid of the icons it
+//    contains + a count badge — so you can SEE what's inside without the
+//    dock getting cluttered. Tapping still opens the CategorySheet.
 //
 //    VISIBILITY: solid background + double border/ring + a deep shadow —
 //    the earlier 90%-opaque blur washed the dock into the page behind it.
@@ -750,6 +766,28 @@ export function SubtopicDock({
 }: SubtopicNavProps & { onSearch: () => void }) {
   const [moreOpen, setMoreOpen] = React.useState(false)
 
+  // ── User's pinned dock subtopics (Account → "Subtopics dock") ──
+  // null until mount so SSR + first client paint match (default order);
+  // re-orders the instant picks load / change — no reload needed.
+  const [picks, setPicks] = React.useState<Category[] | null>(null)
+  React.useEffect(() => {
+    const load = () => setPicks(getDockPicks())
+    load()
+    window.addEventListener(DOCK_PICKS_EVENT, load)
+    return () => window.removeEventListener(DOCK_PICKS_EVENT, load)
+  }, [])
+
+  // Dock order: user picks pinned first, then the default order.
+  const ordered = React.useMemo(
+    () => orderDockCategories(picks ?? []),
+    [picks],
+  )
+
+  // The subtopics NOT visible inline on mobile — these are the ones
+  // "inside" the Topics button. Shown as the folder preview + badge.
+  const hiddenCats = ordered.slice(3)
+  const previewCats = hiddenCats.slice(0, 4)
+
   return (
     <>
       <nav
@@ -760,7 +798,7 @@ export function SubtopicDock({
             as a dock, over ANY page content. ring adds a subtle inner edge
             so light-on-light and dark-on-dark both stay visible. */}
         <div className="mx-auto flex w-fit max-w-full items-center gap-0.5 overflow-x-auto rounded-2xl border border-border bg-background p-1.5 shadow-2xl shadow-black/20 ring-1 ring-black/[0.06] no-scrollbar dark:shadow-black/50 dark:ring-white/[0.09]">
-          {ALL_CATS.map((cat, i) => {
+          {ordered.map((cat, i) => {
             const active = cat === category
             // First 3 items always visible; the rest join on md+ screens.
             const hiddenOnMobile = i > 2
@@ -801,16 +839,33 @@ export function SubtopicDock({
             <span>Search</span>
           </button>
 
-          {/* More → full sheet (mobile only; desktop shows every topic inline) */}
+          {/* Topics → full sheet (mobile only; desktop shows every topic
+              inline). The icon is an iOS-folder-style preview of what's
+              inside: a 2×2 grid of the hidden subtopics' icons + a count
+              badge — clear at a glance, zero extra dock width. */}
           <button
             type="button"
             onClick={() => setMoreOpen(true)}
-            aria-label="More topics"
+            aria-label={`All topics — ${hiddenCats.length} more`}
             aria-haspopup="dialog"
+            title={`All topics (${hiddenCats.length} more inside)`}
             className="flex h-[52px] w-[68px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-semibold text-foreground/75 transition-colors hover:bg-muted hover:text-foreground active:scale-[0.96] md:hidden"
           >
-            <LayoutGrid className="h-5 w-5" />
-            <span>More</span>
+            <span className="relative flex h-[28px] w-[28px] items-center justify-center">
+              {/* Folder square with a 2×2 grid of the icons inside */}
+              <span className="flex h-[26px] w-[26px] items-center justify-center rounded-lg border border-border bg-muted/60 p-[3px] shadow-sm">
+                <span className="grid w-full grid-cols-2 place-items-center gap-[2px] text-foreground/70">
+                  {previewCats.map((cat) => (
+                    <CategoryIcon key={cat} cat={cat} className="h-[8px] w-[8px]" />
+                  ))}
+                </span>
+              </span>
+              {/* Count badge — how many topics are inside */}
+              <span className="absolute -bottom-[5px] -right-[7px] flex h-[15px] min-w-[15px] items-center justify-center rounded-full border border-background bg-foreground px-[3px] text-[8px] font-bold leading-none text-background tabular-nums">
+                {hiddenCats.length}
+              </span>
+            </span>
+            <span>Topics</span>
           </button>
         </div>
       </nav>
