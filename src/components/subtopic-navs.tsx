@@ -15,13 +15,14 @@
  *                  a sheet of 56px-tall tiles (biggest touch targets)
  *   'dock'       → SubtopicDock          (below) — floating bottom app dock
  *                  (mobile-style tab bar), "More" opens the shared sheet
- *   'maxipills'  → SubtopicMaxiPills     (below) — the classic pills scaled
- *                  up as big as possible, still wrapping (all in one view)
+ *   'maxipills'  → SubtopicMaxiPills     (below) — the classic pills at
+ *                  the BIGGEST size that still fits in exactly two rows
+ *                  (adaptive font), every row filled edge-to-edge
  *   'headerdock' → SubtopicHeaderDock    (below) — the app-dock item style
  *                  (icon over label) rendered inline in the header
- *   'tabsarrow'  → SubtopicTabs showArrow — bold tabs + a scroll arrow at
- *                  the end of the row
- *   'cardsarrow' → CategoryNav showArrow  — big chips + the same arrow
+ *   'tabsarrow'  → SubtopicTabs showArrow — bold tabs + a floating
+ *                  swipe-hint arrow over the right edge (not a button)
+ *   'cardsarrow' → CategoryNav showArrow  — big chips + the same hint
  *
  * All variants share CategoryIcon + categoryLabel from category-nav.tsx so
  * the icon language stays consistent across designs.
@@ -32,7 +33,7 @@ import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ChevronDown, Search, X, LayoutGrid } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { ScrollArrowButton } from './scroll-arrow'
+import { ScrollHint } from './scroll-arrow'
 import {
   PRIMARY_CATEGORIES,
   SECONDARY_CATEGORIES,
@@ -52,8 +53,9 @@ const ALL_CATS: Category[] = [...PRIMARY_CATEGORIES, ...SECONDARY_CATEGORIES]
 // ─────────────────────────────────────────────────────────────────────────
 // 1. TABS — bold text tabs with an animated underline indicator.
 //    Pure text (no icons) scans fastest; 44px-tall targets on mobile.
-//    With showArrow (the 'tabsarrow' variant) a scroll arrow is appended
-//    after the row — an explicit "this scrolls" hint.
+//    With showArrow (the 'tabsarrow' variant) a small FLOATING arrow
+//    symbol is layered over the right edge of the row — a non-clickable
+//    "you can swipe →" cue (it never intercepts taps).
 // ─────────────────────────────────────────────────────────────────────────
 export function SubtopicTabs({
   category,
@@ -104,7 +106,7 @@ export function SubtopicTabs({
   }, [centreActive, updateFades])
 
   const row = (
-    <div className={cn('relative', showArrow && 'min-w-0 flex-1')}>
+    <div className="relative">
       <div
         ref={scrollRef}
         onScroll={updateFades}
@@ -160,80 +162,250 @@ export function SubtopicTabs({
           canRight ? 'opacity-100' : 'opacity-0',
         )}
       />
+
+      {/* 'tabsarrow' — the floating swipe hint. An indicator, not a
+          control: pointer-events-none, no click handler. Fades away
+          entirely once the row is scrolled to the end. */}
+      {showArrow && <ScrollHint canRight={canRight} />}
     </div>
   )
 
-  if (!showArrow) return row
-  // 'tabsarrow' variant — append the scroll arrow AFTER the tab row so it
-  // can never be scrolled away and always reads as "more topics →".
-  return (
-    <div className="flex items-center gap-2">
-      {row}
-      <ScrollArrowButton targetRef={scrollRef} canLeft={canLeft} canRight={canRight} />
-    </div>
-  )
+  return row
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 1b. MAXI PILLS — the classic wrapping text pills, scaled up as big as
-//     they can be while still showing EVERY topic in one view (wrapping,
-//     no scrolling, no hidden content). 36px-tall targets on mobile,
-//     40px on desktop — the same sliding-pill animation as classic.
+// 1b. MAXI PILLS — the classic text pills at the BIGGEST size that keeps
+//     the header the same height as the classic 2-row layout:
+//       • EXACTLY TWO ROWS on phones — never three, never a lonely
+//         stretched pill. The 11 topics are split across two EXPLICIT
+//         flex rows (6 + 5), so the row count is structural, not an
+//         accident of wrapping.
+//       • Every row is filled EDGE-TO-EDGE — each pill flex-grows within
+//         its row, so the dead space that used to sit next to
+//         "Blindspots" becomes pill padding instead. Every subtopic gets
+//         a wider, easier-to-tap pill.
+//       • Biggest possible font: a stepper walks the font size down
+//         (13px → 9px) until neither row overflows, pre-paint — so each
+//         screen width always gets the largest text that fits, and a
+//         3-row / overflowing layout is never shown.
+//       • Same silhouette as classic (rounded-md pills, sliding active
+//         pill, Venn mark, group divider, 24px rows) and the same 2-row
+//         header height — just clearer (semibold) and larger.
+//       • Wide screens (≥1280px): one natural-width row of 14px pills —
+//         the desktop header stays the same single-row size as classic.
 // ─────────────────────────────────────────────────────────────────────────
+
+/** Narrow-layout font-size candidates, biggest first. The stepper walks
+ *  down until neither explicit row overflows (≈11px on big phones, ≈9px
+ *  on 320px devices; the 8-8.5px floor covers the wide "My Country"
+ *  label shown before country detection resolves). */
+const MAXIPILL_FONT_STEPS = [13, 12.5, 12, 11.5, 11, 10.5, 10, 9.5, 9, 8.5, 8]
+
+/** Index of the SSR-safe default (10px): big enough to read, small enough
+ *  to fit two rows on every phone INCLUDING the pre-hydration paint (the
+ *  stepper then refines it, pre-paint, once JS loads). */
+const MAXIPILL_SSR_STEP = 6
+
+/** Wide (single-row) font size. */
+const MAXIPILL_WIDE_FONT = 14
+
+/** Below this width the two-row layout is used; at/above it the pills
+ *  all fit comfortably in one natural-width row. */
+const MAXIPILL_WIDE_QUERY = '(min-width: 1280px)'
+
+// useLayoutEffect runs pre-paint on the client but must be a no-op during
+// SSR (React logs a warning if a server-rendered component calls it).
+const useIsoLayoutEffect =
+  typeof window !== 'undefined' ? React.useLayoutEffect : React.useEffect
+
 export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavProps) {
+  const row1Ref = React.useRef<HTMLDivElement>(null)
+  const row2Ref = React.useRef<HTMLDivElement>(null)
+  const [fontStep, setFontStep] = React.useState(MAXIPILL_SSR_STEP)
+  // Restart counter. WITHOUT it a restart can kill the stepper: if
+  // adapt() queues setFontStep(1) and a restart then queues
+  // setFontStep(0) in the same batch, the net state equals the current
+  // state and React BAILS OUT of the re-render — the cascade would die
+  // silently at step 0. runId always changes, so a restart always
+  // re-renders and the adapt effect (runId in its deps) always re-fires.
+  const [runId, setRunId] = React.useState(0)
+  // SSR + first client render assume the narrow 2-row layout; the layout
+  // effect below flips to the wide single row BEFORE first paint on big
+  // screens (and matches SSR on phones), so there's never a flash.
+  const [wide, setWide] = React.useState(false)
+
+  const restart = React.useCallback(() => {
+    setRunId((r) => r + 1)
+    setFontStep(0)
+  }, [])
+
+  // ── Wide/narrow mode ──
+  useIsoLayoutEffect(() => {
+    const mq = window.matchMedia(MAXIPILL_WIDE_QUERY)
+    const update = () => {
+      setWide(mq.matches)
+      restart() // row width changed → re-run the font stepper
+    }
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [restart])
+
+  // ── Adaptive font: step down until neither row overflows ──
+  // Each step re-renders pre-paint (layout effect), so an overflowing
+  // layout is never actually shown to the user.
+  const adapt = React.useCallback(
+    (step: number) => {
+      if (wide) return
+      if (step >= MAXIPILL_FONT_STEPS.length - 1) return // floor reached — accept it
+      const rows = [row1Ref.current, row2Ref.current]
+      const overflows = rows.some(
+        (r) => r !== null && r.scrollWidth > r.clientWidth + 2,
+      )
+      if (!overflows) return // both rows fit — keep this size
+      setFontStep(step + 1)
+    },
+    [wide],
+  )
+
+  useIsoLayoutEffect(() => {
+    adapt(fontStep)
+  }, [adapt, fontStep, runId, category, country?.code])
+
+  // Geist (next/font) loads AFTER first paint and has different glyph
+  // widths than the fallback font the stepper first measured with —
+  // re-run once the real font is ready. The restart + full cascade
+  // complete within one commit cycle (layout effects flush pre-paint),
+  // so no intermediate size is ever painted.
+  React.useEffect(() => {
+    let alive = true
+    const rerun = () => {
+      if (alive) restart()
+    }
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready.then(rerun)
+    }
+    return () => {
+      alive = false
+    }
+  }, [restart])
+
+  // A width change (rotate / resize) can allow a BIGGER font again —
+  // restart from the top and let the stepper walk back down. Debounced;
+  // a transient during an active resize is imperceptible.
+  React.useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | undefined
+    const onResize = () => {
+      clearTimeout(t)
+      t = setTimeout(restart, 150)
+    }
+    window.addEventListener('resize', onResize)
+    return () => {
+      clearTimeout(t)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [restart])
+  // A label change (country resolved: "My Country" → "HK") changes pill
+  // widths in EITHER direction — restart so the stepper can size UP too.
+  React.useEffect(() => {
+    restart()
+  }, [country?.code, restart])
+
+  // ── One pill, shared by both layouts ──
+  const renderPill = (cat: Category) => {
+    const active = cat === category
+    return (
+      <motion.button
+        key={cat}
+        type="button"
+        role="tab"
+        aria-selected={active}
+        onClick={() => onSelect(cat)}
+        whileTap={{ scale: 0.94 }}
+        transition={{ duration: 0.15, ease: 'easeOut' }}
+        className={cn(
+          // Classic silhouette at the classic header height (24px rows ≈
+          // classic mobile, 28px ≈ classic desktop) so the 2-row header
+          // stays the SAME size as classic — but with a bigger, clearer
+          // semibold font (inherited from the wrapper's adaptive
+          // fontSize). Narrow rows add `grow` so every row is filled
+          // edge-to-edge — no dead space at the end of a row.
+          'relative inline-flex shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-md font-semibold transition-colors',
+          wide ? 'h-7 px-3.5' : 'h-6 grow px-1',
+          active ? 'text-background' : 'text-foreground/80 hover:bg-muted hover:text-foreground',
+        )}
+      >
+        {active && (
+          <motion.span
+            layoutId="maxipills-indicator"
+            className="absolute inset-0 rounded-md bg-foreground"
+            transition={{ type: 'spring', stiffness: 380, damping: 28, mass: 0.85 }}
+            style={{ zIndex: 0 }}
+          />
+        )}
+        <span className="relative z-10">{categoryLabel(cat, country)}</span>
+        {/* Blindspots Venn mark — the one icon classic pills keep.
+            Stays blue/red even on the filled active pill. */}
+        {cat === 'blindspots' && (
+          <span className="relative z-10 flex shrink-0">
+            <svg width="14" height="10" viewBox="0 0 14 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <circle cx="4.5" cy="5" r="3.5" className="fill-blue-500" opacity="0.85" />
+              <circle cx="9.5" cy="5" r="3.5" className="fill-red-500" opacity="0.85" />
+            </svg>
+          </span>
+        )}
+      </motion.button>
+    )
+  }
+
+  // Divider between the primary and secondary groups — the same separator
+  // the classic pills use, in its classic position (after My Country).
+  // flex-none so the row's grow never stretches it.
+  const divider = (
+    <div aria-hidden="true" className="mx-0.5 h-5 w-px shrink-0 grow-0 bg-border" />
+  )
+
+  if (wide) {
+    // ── Wide layout: ONE natural-width row (desktop header stays the
+    //    same single-row size as classic; the Search button sits after
+    //    the pills on the same line). ──
+    return (
+      <div
+        role="tablist"
+        aria-label="News categories"
+        className="flex w-auto items-center gap-1"
+        style={{ fontSize: `${MAXIPILL_WIDE_FONT}px` }}
+      >
+        {ALL_CATS.map((cat, i) => (
+          <React.Fragment key={cat}>
+            {i === PRIMARY_CATEGORIES.length && divider}
+            {renderPill(cat)}
+          </React.Fragment>
+        ))}
+      </div>
+    )
+  }
+
+  // ── Narrow layout: TWO explicit rows (6 + 5), each filled
+  //    edge-to-edge, at the biggest font that fits. ──
   return (
     <div
       role="tablist"
       aria-label="News categories"
-      className="flex w-full flex-wrap items-center gap-1.5 py-0.5"
+      className="flex w-full flex-col gap-1"
+      style={{ fontSize: `${MAXIPILL_FONT_STEPS[fontStep]}px` }}
     >
-      {ALL_CATS.map((cat, i) => {
-        const active = cat === category
-        return (
+      <div ref={row1Ref} className="flex w-full items-center gap-1">
+        {ALL_CATS.slice(0, 6).map((cat, i) => (
           <React.Fragment key={cat}>
-            {/* Divider between the primary and secondary groups — the same
-                separator the classic pills use, scaled up. Wraps as a flex
-                item like everything else. */}
-            {i === PRIMARY_CATEGORIES.length && (
-              <div aria-hidden="true" className="mx-0.5 h-7 w-px shrink-0 bg-border" />
-            )}
-            <motion.button
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => onSelect(cat)}
-              whileTap={{ scale: 0.94 }}
-              transition={{ duration: 0.15, ease: 'easeOut' }}
-              className={cn(
-                // As big as the wrapping layout allows: 36px mobile / 40px
-                // desktop, 13-14px semibold text (classic is 24px / 10px).
-                'relative inline-flex h-9 sm:h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3.5 text-[13px] sm:text-sm font-semibold transition-colors',
-                active ? 'text-background' : 'text-foreground/80 hover:bg-muted hover:text-foreground',
-              )}
-            >
-              {active && (
-                <motion.span
-                  layoutId="maxipills-indicator"
-                  className="absolute inset-0 rounded-lg bg-foreground"
-                  transition={{ type: 'spring', stiffness: 380, damping: 28, mass: 0.85 }}
-                  style={{ zIndex: 0 }}
-                />
-              )}
-              <span className="relative z-10">{categoryLabel(cat, country)}</span>
-              {/* Blindspots Venn mark — the one icon classic pills keep.
-                  Stays blue/red even on the filled active pill. */}
-              {cat === 'blindspots' && (
-                <span className="relative z-10 flex shrink-0">
-                  <svg width="14" height="10" viewBox="0 0 14 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                    <circle cx="4.5" cy="5" r="3.5" className="fill-blue-500" opacity="0.85" />
-                    <circle cx="9.5" cy="5" r="3.5" className="fill-red-500" opacity="0.85" />
-                  </svg>
-                </span>
-              )}
-            </motion.button>
+            {i === PRIMARY_CATEGORIES.length && divider}
+            {renderPill(cat)}
           </React.Fragment>
-        )
-      })}
+        ))}
+      </div>
+      <div ref={row2Ref} className="flex w-full items-center gap-1">
+        {ALL_CATS.slice(6).map(renderPill)}
+      </div>
     </div>
   )
 }

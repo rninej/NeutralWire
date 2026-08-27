@@ -224,7 +224,7 @@ export default function DebugPage() {
     {
       id: 'maxipills',
       name: 'Maxi pills',
-      desc: 'Classic pills scaled as big as possible — 36-40px targets, still wrapping so all topics fit in one view',
+      desc: 'Classic pills at the biggest size that fits exactly two rows — adaptive font, rows filled edge-to-edge, same header height',
       icon: <Pill className="h-4 w-4" />,
     },
     {
@@ -236,13 +236,13 @@ export default function DebugPage() {
     {
       id: 'tabsarrow',
       name: 'Bold tabs + arrow',
-      desc: 'Bold text tabs with a circular scroll arrow at the end of the row — an obvious "swipe for more" cue',
+      desc: 'Bold text tabs with a floating swipe-hint arrow over the right edge — a symbol, not a button; fades out at the end',
       icon: <MoveHorizontal className="h-4 w-4" />,
     },
     {
       id: 'cardsarrow',
       name: 'Big chips + arrow',
-      desc: 'The big icon chips with the same scroll arrow at the end of the row',
+      desc: 'The big icon chips with the same floating swipe-hint arrow',
       icon: <ChevronsRight className="h-4 w-4" />,
     },
   ]

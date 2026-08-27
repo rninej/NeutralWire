@@ -1745,11 +1745,13 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
             - 'dock':  floating bottom app dock — the header nav is hidden
               entirely (the dock + spacer render near the footer instead)
             - 'classic': the original flat wrapping text pills.
-            - 'maxipills': classic pills scaled as big as possible, still
-              wrapping — all topics in one view, no scrolling.
+            - 'maxipills': classic pills at the biggest size that fits in
+              exactly TWO rows (adaptive font) with every row filled
+              edge-to-edge — same header height as classic.
             - 'headerdock': the app-dock item style inline in the header.
-            - 'tabsarrow': bold tabs + a scroll arrow at the end of the row.
-            - 'cardsarrow': big chips + the same scroll arrow. */}
+            - 'tabsarrow': bold tabs + a floating (non-clickable) swipe
+              hint arrow over the right edge of the row.
+            - 'cardsarrow': big chips + the same floating swipe hint. */}
         <div className="mx-auto max-w-[1440px] px-4 pb-2">
           {subtopicNav === 'dock' ? null : subtopicNav === 'classic' ? (
             <div className="flex flex-wrap items-center gap-1">
@@ -1797,11 +1799,14 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
               />
 
               {/* Search button — hidden on mobile (moved to section
-                  headers). Visible on desktop (lg+) beside the pills. */}
+                  headers). Shown at xl+ where the maxi pills collapse to
+                  a single row, so it sits inline beside them (between
+                  lg and xl the pills use two filled rows and the button
+                  would wrap onto a third). */}
               <button
                 type="button"
                 onClick={() => setShowSearch(true)}
-                className="hidden lg:inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-3.5 py-2 text-foreground/80 hover:bg-muted/80 transition-colors text-sm font-medium"
+                className="hidden xl:inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-3.5 py-2 text-foreground/80 hover:bg-muted/80 transition-colors text-sm font-medium"
                 aria-label="Search"
                 title="Search news"
               >

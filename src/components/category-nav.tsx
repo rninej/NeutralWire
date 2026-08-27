@@ -15,7 +15,7 @@ import {
   Trophy,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { ScrollArrowButton } from './scroll-arrow'
+import { ScrollHint } from './scroll-arrow'
 import {
   CATEGORY_LABELS,
   PRIMARY_CATEGORIES,
@@ -44,9 +44,9 @@ import type { CountryInfo } from '@/lib/country-detect'
  *     just bigger, and is auto-scrolled to the centre of the row so it's
  *     never hidden off-screen.
  *
- * showArrow (the 'cardsarrow' variant) appends a circular scroll arrow
- * after the row — an explicit "more topics →" hint that edge fades
- * alone don't give everyone.
+ * showArrow (the 'cardsarrow' variant) layers a small FLOATING arrow
+ * symbol over the right edge of the row — a non-clickable "you can
+ * swipe →" cue (it never intercepts taps; it just hints).
  *
  * Toggleable back to the classic pills for ALL users from /debug
  * (feature flag `subtopicNav` in Firebase, default: 'cards').
@@ -175,7 +175,7 @@ export function CategoryNav({
   }, [centreActive, updateFades])
 
   const row = (
-    <div className={cn('relative', showArrow && 'min-w-0 flex-1')}>
+    <div className="relative">
       {/* Scrollable chip row — scrollbar hidden; edge fades hint overflow */}
       <div
         ref={scrollRef}
@@ -243,16 +243,13 @@ export function CategoryNav({
           canRight ? 'opacity-100' : 'opacity-0',
         )}
       />
+
+      {/* 'cardsarrow' — the floating swipe hint. An indicator, not a
+          control: pointer-events-none, no click handler. Fades away
+          entirely once the row is scrolled to the end. */}
+      {showArrow && <ScrollHint canRight={canRight} />}
     </div>
   )
 
-  if (!showArrow) return row
-  // 'cardsarrow' variant — circular scroll arrow pinned after the chip row
-  // (a flex sibling, so it can never scroll away).
-  return (
-    <div className="flex items-center gap-2">
-      {row}
-      <ScrollArrowButton targetRef={scrollRef} canLeft={canLeft} canRight={canRight} />
-    </div>
-  )
+  return row
 }
