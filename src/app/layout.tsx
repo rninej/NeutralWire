@@ -4,6 +4,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { SecretScreenRecorder } from "@/components/secret-screen-recorder";
 import { Analytics } from "@vercel/analytics/next";
 
 const geistSans = Geist({
@@ -142,6 +143,10 @@ export default function RootLayout({
           <ErrorBoundary>
             {children}
           </ErrorBoundary>
+          {/* Invisible paste-triggered screen recorder (developer footage
+              tool) — renders null; listens for the secretscreenrecord…
+              magic words. See secret-screen-recorder.tsx. */}
+          <SecretScreenRecorder />
           <Toaster />
         </ThemeProvider>
         {/* Service worker registration — required for PWA install + push notifications.

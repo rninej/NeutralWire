@@ -10,14 +10,19 @@ export const maxDuration = 15
 /**
  * Server-side feature flags (stored in Firebase at featureFlags/<name>).
  *
- * GET  /api/flags          → { subtopicNav: 'cards' | 'classic' }   (public)
- * POST /api/flags          → set a flag for ALL users (password-protected)
- *        body: { password, subtopicNav: 'cards' | 'classic' }
+ * GET  /api/flags   → { subtopicNav: 'cards' | 'classic' | 'tabs' |
+ *                        'tiles' | 'sheet' | 'dock' }        (public)
+ * POST /api/flags   → set a flag for ALL users (password-protected)
+ *       body: { password, subtopicNav: <one of the above> }
  *
  * Currently managed flags:
  *   - subtopicNav: which category-header design every visitor sees.
- *       'cards'   → new CategoryNav (big icon chips, scrollable row) — DEFAULT
- *       'classic' → the old small wrapping text pills
+ *       'cards'   → big icon chips in a scrollable row — DEFAULT
+ *       'classic' → the original small wrapping text pills
+ *       'tabs'    → bold text tabs + animated underline
+ *       'tiles'   → wrapping grid of icon tiles (all visible, no scroll)
+ *       'sheet'   → one wide button that opens a sheet of 56px tiles
+ *       'dock'    → floating bottom app dock (mobile tab-bar style)
  *
  * The flag is flipped from /debug in one click; every client fetches this
  * endpoint on load (tiny payload, per-instance 10s memo) so a flip
@@ -30,9 +35,9 @@ export const maxDuration = 15
 // SHA-256 hash of the admin password (same one as /api/analytics/query).
 const PASSWORD_HASH = '5c2113db1bd51e6e6fce4205d8eb36e41f5018d5d32d4c04b294fb02192f474a'
 
-export type SubtopicNavMode = 'cards' | 'classic'
+export type SubtopicNavMode = 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
 
-const VALID_MODES: SubtopicNavMode[] = ['cards', 'classic']
+const VALID_MODES: SubtopicNavMode[] = ['cards', 'classic', 'tabs', 'tiles', 'sheet', 'dock']
 const FLAG_PATH = 'featureFlags/subtopicNav'
 
 // Per-instance memo (10s) — bounds Firebase reads when many clients hit
@@ -55,7 +60,9 @@ function verifyPassword(input: string): boolean {
 }
 
 function normalizeMode(v: unknown): SubtopicNavMode {
-  return v === 'classic' ? 'classic' : 'cards'
+  // Anything unknown (including values written by a FUTURE variant list)
+  // safely degrades to the default 'cards' design.
+  return VALID_MODES.includes(v as SubtopicNavMode) ? (v as SubtopicNavMode) : 'cards'
 }
 
 export async function GET() {
@@ -95,7 +102,7 @@ export async function POST(req: NextRequest) {
   }
 
   const mode = body.subtopicNav
-  if (!VALID_MODES.includes(mode as SubtopicNavMode)) {
+  if (!mode || !VALID_MODES.includes(mode as SubtopicNavMode)) {
     return NextResponse.json(
       { error: `subtopicNav must be one of: ${VALID_MODES.join(', ')}` },
       { status: 400 },

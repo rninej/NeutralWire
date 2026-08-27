@@ -47,8 +47,12 @@ import type { CountryInfo } from '@/lib/country-detect'
  * (feature flag `subtopicNav` in Firebase, default: 'cards').
  */
 
-/** Per-category icon — chosen to be recognisable at 16-18px. */
-function CategoryIcon({ cat, className }: { cat: Category; className?: string }) {
+/** Per-category icon — chosen to be recognisable at 16-18px.
+ *
+ *  Shared by ALL subtopic-nav variants (cards / tabs / tiles / sheet /
+ *  dock) so every design speaks the same icon language.
+ */
+export function CategoryIcon({ cat, className }: { cat: Category; className?: string }) {
   const cls = cn('h-[18px] w-[18px] shrink-0', className)
   switch (cat) {
     case 'relevant':
@@ -92,8 +96,19 @@ function CategoryIcon({ cat, className }: { cat: Category; className?: string })
 }
 
 // ISO code for the United Kingdom is "GB" but users expect "UK".
-function displayCode(code: string): string {
+// Shared by all nav variants.
+export function displayCode(code: string): string {
   return code === 'GB' ? 'UK' : code.toUpperCase()
+}
+
+/** Shared helper: human label for a category ('mycountry' shows the
+ *  visitor's actual country code, e.g. "UK", when known). */
+export function categoryLabel(cat: Category, country?: CountryInfo | null): string {
+  return cat === 'mycountry'
+    ? country?.code && country.code !== 'INT'
+      ? displayCode(country.code)
+      : CATEGORY_LABELS[cat]
+    : CATEGORY_LABELS[cat]
 }
 
 export function CategoryNav({
@@ -112,14 +127,7 @@ export function CategoryNav({
 
   const allCats: Category[] = [...PRIMARY_CATEGORIES, ...SECONDARY_CATEGORIES]
 
-  // Label per category — 'mycountry' shows the visitor's actual country
-  // code (e.g. "UK") when known, mirroring the classic tabs.
-  const labelFor = (cat: Category): string =>
-    cat === 'mycountry'
-      ? country?.code && country.code !== 'INT'
-        ? displayCode(country.code)
-        : CATEGORY_LABELS[cat]
-      : CATEGORY_LABELS[cat]
+  const labelFor = (cat: Category): string => categoryLabel(cat, country)
 
   // ── Keep the ACTIVE chip centred in the scroll row ──
   // Manual scrollLeft math (NOT el.scrollIntoView) so the page never
