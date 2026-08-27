@@ -2041,3 +2041,67 @@ Stage Summary:
   secretscreenrecordmobileon/off or secretscreenrecorddesktopon/off
   to record mobile-form (390x844 popup) or desktop-form footage and
   auto-download the video for AI advert production.
+
+---
+Task ID: nav-round-2
+Agent: main (Super Z)
+Task: 4 more subtopic-header designs + more-visible bottom dock + fix the refresh flash (loads big chips then snaps to the selected design).
+
+Work Log:
+- REFRESH FLASH FIX (root cause): page-client started on the default
+  'cards' and fetched /api/flags AFTER mount, so every refresh painted
+  big chips first. page.tsx now reads featureFlags/subtopicNav during
+  SSR (module-level 5s memo, force-dynamic page) and passes
+  initialSubtopicNav into Home(); useState seeds from it, so the FIRST
+  paint is always the selected design. Client fetch kept as a safety
+  net (functional setState = no re-render when values agree). Verified:
+  SSR HTML with flag=classic contains ONLY classic pill markers.
+- NEW src/components/scroll-arrow.tsx — ScrollArrowButton: circular
+  arrow pinned AFTER the scroll row (never scrolls away). Right chevron
+  while more content exists (click = scroll 80% width); flips to a left
+  chevron at the end (click = rewind to start); hides (keeps width) when
+  the row doesn't overflow; gentle 3px nudge animation every ~2.8s.
+- 'maxipills' (SubtopicMaxiPills): classic wrapping pills scaled up —
+  36px mobile / 40px desktop, 13-14px semibold, rounded-lg, sliding-pill
+  layoutId 'maxipills-indicator', primary/secondary divider kept,
+  blindspots Venn mark kept. All topics in one view (wraps, no scroll).
+  VLM: desktop 1 row all 11 topics ~40px clean; mobile 3 rows clean,
+  active pill filled.
+- 'headerdock' (SubtopicHeaderDock): the bottom-dock item style inline
+  in the header — 52px tall icon-over-label items, filled active state,
+  scrollable with edge fades + auto-centred active on mobile, all 11
+  inline on desktop. Item width 72px so 'Blindspots' (59.5px text +
+  8px pad) never truncates (first pass at 64px truncated; measured in
+  browser and fixed). VLM: clean/native in header, no cut-offs.
+- 'tabsarrow' + 'cardsarrow': SubtopicTabs / CategoryNav gained an
+  optional showArrow prop wrapping their existing row + edge fades in
+  <flex row> + ScrollArrowButton. Behaviour verified by clicking:
+  0 -> 254px scroll (80% of 318px), at end arrow flips LEFT with label
+  'Scroll back to the first topics', click rewinds to 0. Desktop (row
+  fits, scrollWidth==clientWidth) arrow auto-hides — verified opacity 0.
+- Bottom dock more visible: bg-background/90 + blur -> SOLID
+  bg-background, shadow-xl -> shadow-2xl (+ dark-mode shadows), added
+  ring-1 (light: black/6%, dark: white/9%), inactive text /70 -> /75,
+  active item + shadow-sm. Dock items w-62 -> w-68px so 'Blindspots'
+  never truncates. Mobile still fits (dock width 213px < 390px).
+- Wiring: /api/flags VALID_MODES + docs -> 10 modes; page-client
+  NavVariant widened (type moved to module scope), maxipills renders in
+  the classic-style wrapping branch (+ lg search pill), headerdock/
+  tabsarrow/cardsarrow in the generic branch; /debug NAV_OPTIONS -> 10
+  cards (Pill / PanelTop / MoveHorizontal / ChevronsRight icons),
+  copy updated to say designs render server-side with no flash.
+- VERIFICATION (agent-browser + z-ai vision): every variant screenshotted
+  desktop 1440x900 + mobile 390x844 (download/nav-variants/), arrow click
+  + flip + rewind tested live, /debug shows 10 options with Live badge on
+  the currently-selected 'Classic pills', homepage console errors: none.
+  bun run lint: PASS (0 errors). Pushed a97b08f -> main.
+- Flag restored to 'classic' (the value the user had selected) after all
+  testing.
+
+Stage Summary:
+- /debug now offers TEN subtopic header designs: cards, tabs, tiles,
+  sheet, dock, classic, maxipills, headerdock, tabsarrow, cardsarrow.
+- Refreshing after a switch no longer flashes the big-chips design — the
+  selected design is server-rendered into the first paint.
+- Bottom dock is now a crisp solid card (strong shadow + ring) and no
+  label truncates.
