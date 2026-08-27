@@ -2105,3 +2105,33 @@ Stage Summary:
   selected design is server-rendered into the first paint.
 - Bottom dock is now a crisp solid card (strong shadow + ring) and no
   label truncates.
+
+---
+Task ID: nav-round-3
+Agent: main (Super Z)
+Task: User feedback round on the subtopic-header variants: (1) the scroll arrow must be a NON-clickable floating symbol, (2) maxi pills = classic pills at max size in exactly TWO rows with the header kept the same size, clearer font, rows filled edge-to-edge (use the space next to Blindspots).
+
+Work Log:
+- Rewrote src/components/scroll-arrow.tsx: ScrollArrowButton (button + onClick) → ScrollHint — a floating, non-interactive indicator: plain div (no role, no click), pointer-events-none, absolute over the row's right edge fade on a 28px frosted chip, gentle 3px nudge loop; shows while content is off-screen right, fades out (AnimatePresence) at the row's end; vertical centring via top-[calc(50%-14px)] so framer's x-animation can't clobber a translate class; exit carries its own transition so the looping nudge can't block unmount.
+- SubtopicTabs ('tabsarrow') + CategoryNav ('cardsarrow'): removed the flex-sibling button wrapper; the hint now renders INSIDE the relative row container — zero layout footprint.
+- Rebuilt SubtopicMaxiPills ('maxipills'):
+  - v1 (wrap + per-line flex-grow) FAILED: flex line-breaking uses content sizes, so grow kept every line full and the last pill landed ALONE on row 3 stretched to 358px; 11 pills can't fit 2x358px at content width ≥10px.
+  - v2 architecture: TWO EXPLICIT rows (6+5 pills, divider in its classic position after My Country), pills flex-grow within each row → every row filled edge-to-edge; row count is structural (never 3).
+  - Adaptive font stepper (13→8px, pre-paint useLayoutEffect cascade) steps down until neither row overflows (scrollWidth > clientWidth + 2); wide mode (≥1280px) = one natural-width 14px row so the desktop header stays classic-sized; Search button moved to xl: to match.
+  - Debugged TWO subtle React bugs via browser instrumentation:
+    1) Webfont timing: the first pass measures with the fallback font; Geist loads after paint and is wider → added document.fonts.ready re-run.
+    2) React bail-out trap: adapt() queueing setFontStep(1) + a restart queueing setFontStep(0) in one batch = net state unchanged → React skips the re-render → cascade died silently at step 0. Fixed with a runId counter (always increments) in the adapt-effect deps so every restart forces a commit.
+    3) Guarded restarts got stuck one size too small when the country label narrowed ("My Country"→"HK"); made restarts unconditional — the restart+cascade completes within one commit cycle (layout effects flush pre-paint) so no intermediate size paints.
+  - SSR renders the 10px step (safe on every phone incl. pre-hydration paint); floor extended to 8px so countryless users never overflow.
+- Updated /debug descriptions + page-client comment block for the three changed variants.
+
+Verification (agent-browser + z-ai vision):
+- maxipills @390px: fontSize 11px, exactly 2 rows (tops [56,84]), rowOverflow [0,0], pill height 24px; VLM confirms 2 edge-to-edge rows, no dead space, active pill, no glitches. Header height 117px vs classic 115px (+2px).
+- maxipills @768px: 13px, 2 rows, no overflow, search hidden. @1440px: single 14px row, Search inline, VLM-verified clean.
+- tabsarrow/cardsarrow @390px: hint is a DIV, pointer-events:none, visible at start, unmounts at row end, returns on scroll back; VLM: "clean floating indicator, professional". @1440px: hint auto-hides (row fits).
+
+Stage Summary:
+- Arrow variants now show a pure floating swipe symbol (not a button) that fades at the end of the row.
+- Maxi pills = classic silhouette, exactly two filled rows at the biggest font that fits (11px @390, 13px @768, 14px single row ≥1280), header same size as classic.
+- Flag left at 'cardsarrow' (the user's last /debug selection).
+- Pushed as 039e5ab.
