@@ -61,6 +61,10 @@ const GROQ_MODELS = [
   'llama-3.1-8b-instant',
 ]
 
+// Track rate-limited models to skip them in future calls (per-process)
+const rateLimitedModels = new Map<string, number>()
+const RATE_LIMIT_COOLDOWN_MS = 60 * 1000
+
 // ── LIVE MODEL DISCOVERY ──
 // One-time per server instance: fetch each provider's model list and
 // intersect it with our preferences. Solves the recurring failure mode
