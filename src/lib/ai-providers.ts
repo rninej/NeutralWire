@@ -44,11 +44,15 @@ const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
 // renames a model, discovery automatically falls through to the next
 // preference — no more permanent 404s from hallucinated/retired IDs.
 const GEMINI_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.5-pro',
+  // 2.0-flash FIRST: universally available on free-tier keys. The 2.5
+  // models are "no longer available to new users" on Gemini's free tier —
+  // they appear in ListModels but generateContent 404s for newer keys
+  // (observed in production diagnostics).
   'gemini-2.0-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash',
   'gemini-2.0-flash-001',
+  'gemini-2.5-pro',
 ]
 
 // Groq: text models in preference order. Discovery filters to what the
@@ -278,8 +282,13 @@ function isDeprecated(key: string): boolean {
 }
 
 /** Models the live discovery fetch CONFIRMED exist — never deprecate these
- *  on a 404 (the model demonstrably exists; the 404 is transient). */
+ *  on a SINGLE 404 (the model demonstrably exists; one 404 is transient).
+ *  But some models exist globally while a specific KEY can't call them
+ *  (Gemini free tier: 2.5-flash "not available to new users" — ListModels
+ *  shows it, generateContent 404s EVERY time). Those get soft-blocked
+ *  after 2 consecutive 404s via consecutive404s. */
 let discoveryConfirmed = new Set<string>()
+const consecutive404s = new Map<string, number>()
 
 /**
  * Mark a model as deprecated based on the API response.
@@ -303,10 +312,21 @@ function checkDeprecation(key: string, status: number, errText: string): boolean
     lowerErr.includes('model_not_found')
   if (!isRetirement) return false
 
-  // Discovery-confirmed models are NEVER deprecated on 404 (transient).
+  // Discovery-confirmed model: the model exists for the PROVIDER, but this
+  // key may still not have access. Allow ONE transient 404; after 2
+  // consecutive, soft-block it for the deprecation TTL (it's a key-level
+  // restriction, not a fluke).
   if (discoveryConfirmed.has(key)) {
-    diag(`${key}: ${status} ignored (model confirmed by discovery — transient)`)
-    return false
+    const n = (consecutive404s.get(key) || 0) + 1
+    consecutive404s.set(key, n)
+    if (n < 2) {
+      diag(`${key}: ${status} ignored (discovery-confirmed, transient #${n})`)
+      return false
+    }
+    deprecatedModels.set(key, Date.now())
+    consecutive404s.set(key, 0)
+    console.warn(`[ai] soft-blocked ${key} for 10min (${n} consecutive 404s — key-level restriction)`)
+    return true
   }
   if (!deprecatedModels.has(key)) {
     deprecatedModels.set(key, Date.now())
@@ -792,6 +812,7 @@ async function callGroq(
     }
 
     const data = await res.json()
+    consecutive404s.delete(`groq-${model}`)
     return stripThinking(data.choices?.[0]?.message?.content?.trim() || '') || null
   } catch {
     clearTimeout(timeout)
@@ -854,6 +875,7 @@ async function callGemini(
 
     const data = await res.json()
     const parts = data.candidates?.[0]?.content?.parts || []
+    consecutive404s.delete(`gemini-${model}`)
     for (const part of parts) {
       if (part.text) return stripThinking(part.text.trim())
     }
