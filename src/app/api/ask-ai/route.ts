@@ -5,7 +5,10 @@ import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-export const maxDuration = 10
+// Generous ceiling: parallel provider race + possible web-search compound
+// retry + training-data fallback can legitimately take 8-12s. The client
+// aborts at 17s (above this) so the server's own JSON error wins.
+export const maxDuration = 15
 
 interface AskAiRequest {
   question: string
@@ -37,7 +40,7 @@ function hash(s: string): string {
  * questions.
  */
 export async function POST(req: NextRequest) {
-  const deadline = Date.now() + 9000
+  const deadline = Date.now() + 12500
 
   try {
     const body = (await req.json()) as AskAiRequest
@@ -49,10 +52,13 @@ export async function POST(req: NextRequest) {
     // ── Check Firebase cache first ──
     // Cache key is a hash of question + topicTitle. This means the same
     // question for the same topic always returns the same cached answer.
+    // KNOWN-BAD GUARD: failure fallback messages used to be cached too —
+    // everyone asking that question afterwards got the error forever.
+    // Now those are recognised and treated as cache misses.
     const cacheKey = hash(body.question.toLowerCase().trim() + '|' + body.topicTitle.toLowerCase().trim())
     try {
       const cached = await firebaseRead<{ answer: string; model?: string }>(`ask-ai-cache/${cacheKey}`)
-      if (cached?.answer) {
+      if (cached?.answer && !isKnownFailureAnswer(cached.answer)) {
         return NextResponse.json({
           answer: cached.answer,
           qaId: cacheKey,
@@ -92,6 +98,7 @@ ${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
     // ── Call AI (parallel, NO search) ──
     let answer = await callAI({ systemPrompt, userPrompt: body.question })
     let modelUsed = getLastProvider()
+    let isFallback = false
 
     // Check if the model requested compound (web search)
     if (answer && (answer.startsWith('({/compound})') || answer.startsWith('{/compound}'))) {
@@ -110,16 +117,20 @@ ${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
         })
         if (compoundAnswer) {
           answer = stripSources(compoundAnswer)
-          modelUsed = getLastProvider() + ' (web search)'
+          modelUsed = getLastProvider()
         } else {
-          // Compound failed — give a helpful message instead of empty
+          // All web-search providers failed — callAICompound already tried
+          // its own no-search fallback internally. Helpful message, NOT
+          // cached (isFallback guard below).
           answer =
-            "I couldn't find reliable information on that. Try rephrasing your question, or check back in a few minutes — the news catalog updates regularly."
+            "I couldn't verify that with a live web search right now. Try rephrasing, or ask again in a few minutes."
+          isFallback = true
         }
       } else {
-        // Out of time — return a helpful message
+        // Out of time — return a helpful message (also not cached)
         answer =
           'That question needs a web search but I ran out of time. Please try again in a moment.'
+        isFallback = true
       }
     } else if (answer) {
       answer = stripSources(answer)
@@ -137,13 +148,17 @@ ${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
 
     // Store Q&A in Firebase cache (using the hash key so repeated questions
     // for the same topic return the cached answer — saves AI costs).
-    void firebaseWrite(`ask-ai-cache/${cacheKey}`, {
-      answer,
-      question: body.question,
-      topicTitle: body.topicTitle,
-      model: modelUsed,
-      timestamp: Date.now(),
-    })
+    // FAILURE ANSWERS ARE NEVER CACHED — a transient provider outage must
+    // not poison the answer for every future user asking this question.
+    if (!isFallback) {
+      void firebaseWrite(`ask-ai-cache/${cacheKey}`, {
+        answer,
+        question: body.question,
+        topicTitle: body.topicTitle,
+        model: modelUsed,
+        timestamp: Date.now(),
+      })
+    }
 
     return NextResponse.json({ answer, qaId: cacheKey, model: modelUsed })
   } catch (err) {
@@ -157,6 +172,21 @@ ${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
       { status: 500 },
     )
   }
+}
+
+/** Answers that must never be served from (or written to) the cache —
+ *  they're failure fallbacks, not real answers. Previously a cached
+ *  "I couldn't find reliable information…" was served to every user who
+ *  asked the same question, forever. */
+const KNOWN_FAILURE_ANSWERS = [
+  "I couldn't find reliable information on that. Try rephrasing your question, or check back in a few minutes — the news catalog updates regularly.",
+  "I couldn't verify that with a live web search right now. Try rephrasing, or ask again in a few minutes.",
+  'That question needs a web search but I ran out of time. Please try again in a moment.',
+]
+
+function isKnownFailureAnswer(answer: string): boolean {
+  const a = answer.trim()
+  return KNOWN_FAILURE_ANSWERS.some((f) => a === f)
 }
 
 function stripSources(answer: string): string {

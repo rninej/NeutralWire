@@ -1475,8 +1475,9 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
         // the full topic (with articles) to Firebase. This runs on the
         // user's device — spreads work across users, saves Vercel CPU.
         // Only archives topics that haven't been archived yet (tracked
-        // in localStorage).
-        archiveTopicsInBackground(allTopics)
+        // in localStorage). The visitor's country is sent along so the
+        // server can search their relevant__CC / mycountry__CC caches.
+        archiveTopicsInBackground(allTopics, country?.code)
 
         // If there's a ?topic= URL param (from a shared link), auto-open
         // that topic's detail view.
@@ -1582,13 +1583,32 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
   )
 
   // Auto-trigger silent background refresh when stale (no UI indication).
-  // The 12s delay gives the server's own `after()` background refresh
-  // (kicked off by the /api/news request that returned the stale data)
-  // time to COMPLETE first — so this /api/refresh call usually finds the
-  // cache already fresh (rate-limit hit → serves cached data instantly)
-  // or piggybacks on the in-flight refresh instead of re-aggregating.
+  //
+  // TWO staleness triggers (belt + braces — fixes "opened the site to
+  // 3-day-old Relevant news"):
+  //   1. `!isFresh` — the server explicitly marked the payload stale.
+  //      12s delay: gives the server's own `after()` background refresh
+  //      time to COMPLETE first, so this /api/refresh call usually finds
+  //      the cache already fresh instead of re-aggregating.
+  //   2. `fetchedAt` older than 10 min — the payload may have CLAIMED to
+  //      be fresh when it was cached (e.g. served by the service worker
+  //      or CDN from a days-old cache entry that said fresh:true at the
+  //      time it was stored). /api/refresh is NOT intercepted by the SW,
+  //      so it always hits the server → reads Firebase directly → swaps
+  //      the real current topics into the UI seconds after load.
+  //      Short 3s delay: the server-side Firebase read is fast (~300ms).
+  //
+  // No-loop safety: after a successful refresh, isFresh=true AND fetchedAt
+  // updates (breaking the trigger). If the refresh returns the SAME old
+  // fetchedAt (Firebase cache itself is old), the deps don't change, so
+  // the effect never re-fires — at most ONE heal per state change.
+  const FEED_HEAL_STALE_MS = 10 * 60 * 1000
+  const feedAgeMs = fetchedAt ? Date.now() - fetchedAt.getTime() : 0
+  const feedTooOld = fetchedAt !== null && feedAgeMs > FEED_HEAL_STALE_MS
   useEffect(() => {
-    if (!isFresh && !loading) {
+    if (loading) return
+    if (!isFresh || feedTooOld) {
+      const delay = feedTooOld && isFresh ? 3000 : 12000
       const t = setTimeout(async () => {
         try {
           const params = new URLSearchParams({
@@ -1612,10 +1632,10 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
         } catch {
           // silent
         }
-      }, 12000)
+      }, delay)
       return () => clearTimeout(t)
     }
-  }, [isFresh, loading, category, minCoverage, country])
+  }, [isFresh, loading, feedTooOld, category, minCoverage, country])
 
   const handleClearSearch = () => {
     setSearch('')

@@ -1232,16 +1232,18 @@ function extractImageFromHtml(html: string): string | null {
     })
     // Pick the entry with the highest width (fallback to first if no widths)
     const best = entries.sort((a, b) => b.width - a.width)[0]
-    if (best?.url) return best.url
+    // decodeEntities: srcset URLs inside RSS HTML carry &amp; between
+    // query params — decode so the proxy fetches the real URL.
+    if (best?.url) return decodeEntities(best.url)
   }
 
   // ── data-src / data-lazy-src: some feeds lazy-load images ──
   const dataSrcMatch = html.match(/<img[^>]+data-src=["']([^"']+)["']/i)
-  if (dataSrcMatch?.[1]) return dataSrcMatch[1]
+  if (dataSrcMatch?.[1]) return decodeEntities(dataSrcMatch[1])
 
   // ── Fallback: plain src attribute ──
   const m = html.match(/<img[^>]+src=["']([^"']+)["']/i)
-  return m ? m[1] : null
+  return m ? decodeEntities(m[1]) : null
 }
 
 function escapeReg(s: string): string {
@@ -1647,12 +1649,14 @@ async function fetchOgImage(articleUrl: string): Promise<string | null> {
       return null
     }
     const html = await res.text()
-    // Extract og:image or twitter:image meta tag.
+    // Extract og:image or twitter:image meta tag. decodeEntities: meta
+    // content attributes are HTML-escaped (&amp; between query params) —
+    // decode so the image proxy gets a working URL.
     const ogMatch = html.match(
       /<meta\s+(?:property|name)=["']og:image["']\s+content=["']([^"']+)["']/i,
     )
     if (ogMatch?.[1]) {
-      const url = ogMatch[1]
+      const url = decodeEntities(ogMatch[1].trim())
       OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url })
       return url
     }
@@ -1660,7 +1664,7 @@ async function fetchOgImage(articleUrl: string): Promise<string | null> {
       /<meta\s+(?:property|name)=["']twitter:image["']\s+content=["']([^"']+)["']/i,
     )
     if (twMatch?.[1]) {
-      const url = twMatch[1]
+      const url = decodeEntities(twMatch[1].trim())
       OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url })
       return url
     }
@@ -1669,7 +1673,7 @@ async function fetchOgImage(articleUrl: string): Promise<string | null> {
       /<meta\s+(?:property|name)=["']og:image:(?:secure_)?url["']\s+content=["']([^"']+)["']/i,
     )
     if (ogAltMatch?.[1]) {
-      const url = ogAltMatch[1]
+      const url = decodeEntities(ogAltMatch[1].trim())
       OG_IMAGE_CACHE.set(articleUrl, { ts: Date.now(), url })
       return url
     }
@@ -1818,7 +1822,15 @@ function scoreImageUrl(url: string): number {
   // Known high-quality OG image hosts
   if (/ichef\.bbci\.co\.uk\/ace\/(?:standard|ic)\/[6-9]\d{2}\//.test(u)) score += 15
   if (/static\d?\.nyt\.com\/images\/.*-(?:jumbo|articleLarge|superJumbo)\./.test(u)) score += 15
-  if (/i\.guim\.co\.uk\/.*width=1[0-9]{3}/.test(u)) score += 15
+
+  // ── Guardian media URLs are TIME-SIGNED (`s=` param) ──
+  // The signature expires hours after the RSS feed is fetched, so every
+  // cached i.guim.co.uk URL 401s permanently afterwards (the console 502
+  // storms). Penalise them heavily so a cluster with ANY other outlet's
+  // image uses that instead; the Guardian photo stays only as a last
+  // resort (it works briefly, then falls back to the gradient placeholder).
+  if (/i\.guim\.co\.uk\//.test(u)) score -= 45
+  if (/media\.guim\.co\.uk\//.test(u)) score -= 45
 
   return score
 }

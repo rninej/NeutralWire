@@ -33,10 +33,27 @@ const IMG_CDN_CACHE = 'public, s-maxage=604800, stale-while-revalidate=86400'
  * through this function (each ~50ms CPU = 500-1500ms CPU per page).
  */
 export async function GET(req: NextRequest) {
-  const url = req.nextUrl.searchParams.get('url')
+  let url = req.nextUrl.searchParams.get('url')
   if (!url) {
     return new NextResponse('Missing url param', { status: 400 })
   }
+
+  // ── HTML-entity repair ──
+  // Some feed image URLs are extracted from RSS <description> HTML without
+  // entity decoding, so the proxy receives e.g.
+  //   ...jpg?width=1200&amp;quality=85&amp;auto=format
+  // The literal "&amp;" breaks the upstream query string (unknown params →
+  // 403/404 → the 502s users saw in console for Guardian images). Decode
+  // the common XML/HTML entities before proxying. This also repairs every
+  // ALREADY-CACHED url in Firebase (decode happens at request time).
+  url = url
+    .replace(/&amp;/g, '&')
+    .replace(/&#38;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .trim()
 
   // Validate URL is http/https
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -72,6 +89,13 @@ export async function GET(req: NextRequest) {
     })
 
     if (!res.ok) {
+      // Upstream says the image is GONE (401/403/404 — e.g. Guardian
+      // time-signed URLs whose `s=` signature expired). That's a permanent
+      // "not found", not a gateway error: return 404 so monitoring doesn't
+      // flag 5xx storms and the client's onError fallback kicks in.
+      if (res.status === 401 || res.status === 403 || res.status === 404) {
+        return new NextResponse('Image no longer available upstream', { status: 404 })
+      }
       return new NextResponse('Failed to fetch image', { status: 502 })
     }
 

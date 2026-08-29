@@ -907,11 +907,11 @@ function AskAiPanel({
     const minDelay = new Promise((resolve) => setTimeout(resolve, 1500))
 
     try {
-      // Client-side timeout: 12s (slightly above server's 10s maxDuration
+      // Client-side timeout: 17s (slightly above the server's 15s maxDuration
       // so the server has time to return its own error JSON before we
-      // give up).
+      // give up — the compound/web-search path can legitimately take 8-12s).
       const controller = new AbortController()
-      const clientTimeout = setTimeout(() => controller.abort(), 12000)
+      const clientTimeout = setTimeout(() => controller.abort(), 17000)
 
       const [_, res] = await Promise.all([
         minDelay,

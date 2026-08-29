@@ -59,8 +59,15 @@ let archiverRunning = false
  * topics are loaded. Only processes topics that haven't been archived yet.
  *
  * @param topics The current list of topics in the feed
+ * @param countryCode The visitor's country code (GB, US, IN, HK, …). Sent
+ *   with each request so the server can also search the visitor's
+ *   `relevant__CC` / `mycountry__CC` caches — without it, topics from
+ *   non-GB/US/IN countries were never found (the 404s in console).
  */
-export function archiveTopicsInBackground(topics: Array<{ topicId: string }>): void {
+export function archiveTopicsInBackground(
+  topics: Array<{ topicId: string }>,
+  countryCode?: string | null,
+): void {
   if (archiverRunning) return
   if (typeof window === 'undefined') return
   if (topics.length === 0) return
@@ -86,11 +93,13 @@ export function archiveTopicsInBackground(topics: Array<{ topicId: string }>): v
     const topic = toArchive[index]
     index++
 
-    // Send the topic to the archive endpoint (fire-and-forget)
+    // Send the topic to the archive endpoint (fire-and-forget).
+    // The country code lets the server find the topic in the visitor's
+    // own country caches (relevant__HK etc.), not just the GB/US/IN ones.
     fetch('/api/archive-topic', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(topic),
+      body: JSON.stringify({ ...topic, countryCode: countryCode || '' }),
       keepalive: true,
     })
       .then(() => {

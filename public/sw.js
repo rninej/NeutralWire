@@ -1,6 +1,16 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v21: STALE-NEWS FIX — /api/news is now NETWORK-FIRST whenever the cached
+//      copy is older than 5 minutes. Previously the SW served a cached
+//      response INSTANTLY no matter its age and only revalidated in the
+//      background — the fresh response updated the CACHE but the user
+//      kept staring at the OLD feed (days old if they hadn't visited in
+//      days). Now: cache < 5 min old → served instantly with zero network
+//      (the invocation saver stays); cache ≥ 5 min → wait for the network
+//      (the server answers from the Firebase cache in ~200-600ms), fall
+//      back to the cached copy only when offline. Users never see news
+//      older than ~5 minutes while online.
 // v20: REVALIDATION THROTTLE — SWR handlers no longer fire a background
 //      network fetch on EVERY request. A cached response younger than its
 //      revalidation threshold is served with ZERO network activity. The
@@ -18,14 +28,12 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v19'
-const API_CACHE = 'neutralwire-api-v19'
-const IMG_CACHE = 'neutralwire-img-v19'
-// Legacy cache names to purge on activate (v18 and older).
-const LEGACY_CACHES = [
-  'neutralwire-v18', 'neutralwire-v17', 'neutralwire-v16',
-  'neutralwire-v15', 'neutralwire-v14',
-]
+const SHELL_CACHE = 'neutralwire-shell-v21'
+const API_CACHE = 'neutralwire-api-v21'
+const IMG_CACHE = 'neutralwire-img-v21'
+// ALL caches from previous versions are purged on activate (any name
+// starting with 'neutralwire-' that isn't one of the three current names).
+const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
 const STATIC_ASSETS = ['/manifest.json', '/favicon-32.png', '/icon-192.png', '/icon-512.png', '/']
 
 // ── Cache eviction limits ──
@@ -96,10 +104,15 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const names = await caches.keys()
-      // Delete legacy caches + old shell/api/img caches from previous versions
+      // Delete EVERY cache from previous SW versions (any 'neutralwire-*'
+      // name that isn't one of the three current ones). The stale-news fix
+      // needs a clean start — old v19 API entries could still be days old.
       await Promise.all(
         names
-          .filter((n) => LEGACY_CACHES.includes(n) || n.endsWith('-v18') || n.endsWith('-v17'))
+          .filter(
+            (n) =>
+              n.startsWith('neutralwire-') && !CURRENT_CACHES.has(n),
+          )
           .map((n) => caches.delete(n)),
       )
       // Sweep stale entries from the current caches
@@ -255,41 +268,41 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // ── /api/news → STALE-WHILE-REVALIDATE (instant PWA load) ──
-  // Serves the cached response INSTANTLY (if available). A background
-  // revalidation only fires when the cached copy is older than
-  // REVALIDATE_NEWS_MS — fresh copies are served with ZERO network
-  // activity, which is the biggest Vercel-invocation saver in the SW.
+  // ── /api/news → FRESH-CACHE-FIRST, STALE-NETWORK-FIRST ──
+  // Cache younger than REVALIDATE_NEWS_MS: serve it with ZERO network
+  // activity (the big Vercel-invocation saver — unchanged from v20).
+  // Cache older than that (or missing): go NETWORK-FIRST. The server
+  // answers from its Firebase cache in ~200-600ms, so users online never
+  // see news older than ~5 minutes. The cached copy is only used as an
+  // OFFLINE fallback. (v21 — fixes "site opened with 3-day-old news".)
   if (req.url.includes('/api/news')) {
     event.respondWith(
       (async () => {
         const cache = await caches.open(API_CACHE)
         const cached = await cache.match(req)
 
-        // Only revalidate when the cached copy is old (or missing).
-        let networkFetch = null
-        if (!cached || cachedAgeMs(cached) > REVALIDATE_NEWS_MS) {
-          networkFetch = fetch(req, { cache: 'no-store' })
-            .then((res) => {
-              if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
-              return res
-            })
-            .catch(() => null)
+        // Fresh cache hit → instant, no network at all.
+        if (cached && cachedAgeMs(cached) <= REVALIDATE_NEWS_MS) {
+          return cached
         }
 
-        // If we have a cached response, return it INSTANTLY.
-        if (cached) return cached
-
-        // No cache — wait for the network (first-ever load).
-        const networkRes = await networkFetch
-        if (networkRes) return networkRes
-
-        // Network failed and no cache — empty response (app shows
-        // "no stories" gracefully).
-        return new Response(
-          JSON.stringify({ topics: [], sourceCount: 0, articleCount: 0 }),
-          { headers: { 'Content-Type': 'application/json' } },
-        )
+        // Stale or missing → network first.
+        try {
+          const res = await fetch(req, { cache: 'no-store' })
+          if (res.ok) {
+            putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
+          }
+          return res
+        } catch {
+          // Offline (or network error) → fall back to the stale cache so
+          // the app still works offline; the client's own staleness heal
+          // (page-client auto-refresh on old fetchedAt) handles the rest.
+          if (cached) return cached
+          return new Response(
+            JSON.stringify({ topics: [], sourceCount: 0, articleCount: 0 }),
+            { headers: { 'Content-Type': 'application/json' } },
+          )
+        }
       })(),
     )
     return

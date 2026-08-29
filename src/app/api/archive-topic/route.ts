@@ -26,7 +26,7 @@ export const maxDuration = 10
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as Partial<TopicArticle>
+    const body = (await req.json()) as Partial<TopicArticle> & { countryCode?: string }
     const topicId = body.topicId
     if (!topicId) {
       return NextResponse.json({ error: 'Missing topicId' }, { status: 400 })
@@ -43,12 +43,20 @@ export async function POST(req: NextRequest) {
     if (body.articles && Array.isArray(body.articles) && body.articles.length > 0) {
       topicToArchive = body as TopicArticle
     } else {
-      // 3. No articles — fetch from cache categories
+      // 3. No articles — fetch from cache categories.
+      // The client now sends its countryCode — include the visitor's OWN
+      // `relevant__CC` / `mycountry__CC` caches in the search. Before this,
+      // only GB/US/IN were checked and every other country's topics
+      // 404'd ("Topic not found in cache") in the console.
+      const cc = (body.countryCode || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3)
       const cacheCategories = [
         'relevant', 'top', 'world', 'politics', 'business',
         'technology', 'science', 'health', 'sports',
         'relevant__GB', 'relevant__US', 'relevant__IN',
         'mycountry__GB', 'mycountry__US', 'mycountry__IN',
+        ...(cc && cc !== 'GB' && cc !== 'US' && cc !== 'IN'
+          ? [`relevant__${cc}`, `mycountry__${cc}`]
+          : []),
       ]
       for (const cat of cacheCategories) {
         try {
