@@ -297,8 +297,8 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
       return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
     })
 
-  const geminiAvail = available(geminiModels.map((m) => ({ key: `gemini-${m}`, model: m }))).slice(0, 2)
-  const groqAvail = available(groqModels.map((m) => ({ key: `groq-${m}`, model: m }))).slice(0, 2)
+  const geminiAvail = available(geminiModels.map((m) => ({ key: `gemini-${m}`, model: m }))).slice(0, 1)
+  const groqAvail = available(groqModels.map((m) => ({ key: `groq-${m}`, model: m }))).slice(0, 1)
 
   // ── Cooldown escape hatch ──
   // If EVERY model of a provider is in the 60s rate-limit cooldown, the
@@ -328,8 +328,13 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   if (geminiRescue) geminiAvail.push({ key: `gemini-${geminiRescue}`, model: geminiRescue })
   if (groqRescue) groqAvail.push({ key: `groq-${groqRescue}`, model: groqRescue })
 
-  // 1+2. Fire off up to TWO models from BOTH Gemini and Groq in parallel —
-  // if the first model is rate-limited or slow, the second still races.
+  // 1+2. Fire ONE model from EACH provider in parallel (3 requests total
+  //  incl. OpenRouter). This is deliberate rate-limit economics: free-tier
+  // RPM is shared across the whole site (summaries, title shortening, image
+  // verification, ask-ai), and a 5-request volley per question was causing
+  // 429 bursts that blacked out whole minutes. One model per provider +
+  // sequential fallback below = same coverage, ~40% less quota per call.
+  // If the raced model is slow, ANOTHER provider still wins the race.
   for (const { model } of geminiAvail) {
     if (GEMINI_API_KEY) {
       candidates.push(callGemini(opts.systemPrompt, opts.userPrompt, model, false, maxTokens))
