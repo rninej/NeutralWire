@@ -124,6 +124,15 @@ async function discoverProviderModels(): Promise<DiscoveredModels> {
     groq: groqList ? GROQ_MODELS.filter((m) => groqList.includes(m)) : null,
     openrouter: orList ? OPENROUTER_MODELS.filter((m) => orList.includes(m)) : null,
   }
+
+  // Record every model the providers CONFIRM exist — checkDeprecation
+  // never retires these on a 404 (transient errors can't blacklist a
+  // model the provider itself says exists).
+  discoveryConfirmed = new Set([
+    ...(result.gemini || []).map((m) => `gemini-${m}`),
+    ...(result.groq || []).map((m) => `groq-${m}`),
+    ...(result.openrouter || []).map((m) => `openrouter`),
+  ])
   console.log(
     `[ai] model discovery: gemini=${result.gemini?.length ?? 'n/a'} groq=${result.groq?.length ?? 'n/a'} openrouter=${result.openrouter?.length ?? 'n/a'}`,
   )
@@ -157,7 +166,8 @@ function effectiveModels(
 // skipped for ALL future calls in this server instance. This makes the
 // fallback chain self-healing — when a provider retires a model, the
 // system automatically stops using it without needing a code update.
-const deprecatedModels = new Set<string>()
+// (deprecatedModels now lives next to checkDeprecation below, as a
+// TTL-based Map — see the DEPRECATION comment.)
 
 const OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it:free'
 const GROQ_COMPOUND_MODEL = 'compound-beta'
@@ -249,11 +259,27 @@ function stripThinking(text: string): string {
 
 /**
  * Check if a model has been auto-deprecated (returned 404 or deprecation
- * error in a previous call). Deprecated models are skipped entirely.
+ * error in a previous call). Deprecated models are skipped for
+ * DEPRECATION_TTL_MS (10 min) — NOT forever: warm serverless instances
+ * live for hours, and a transient 404 (provider hiccup) used to remove a
+ * provider PERMANENTLY from the instance (the "gemini=[NONE]" blackout).
  */
+const DEPRECATION_TTL_MS = 10 * 60 * 1000
+const deprecatedModels = new Map<string, number>()
+
 function isDeprecated(key: string): boolean {
-  return deprecatedModels.has(key)
+  const ts = deprecatedModels.get(key)
+  if (!ts) return false
+  if (Date.now() - ts >= DEPRECATION_TTL_MS) {
+    deprecatedModels.delete(key)
+    return false
+  }
+  return true
 }
+
+/** Models the live discovery fetch CONFIRMED exist — never deprecate these
+ *  on a 404 (the model demonstrably exists; the 404 is transient). */
+let discoveryConfirmed = new Set<string>()
 
 /**
  * Mark a model as deprecated based on the API response.
@@ -262,23 +288,31 @@ function isDeprecated(key: string): boolean {
  *   - HTTP 404 (model not found)
  *   - HTTP 400 with "deprecat" / "decommission" / "not available" in the error
  *   - Any response containing "has been deprecated" or "is no longer supported"
+ *
+ * EXCEPT when live model discovery confirmed the model exists — a 404 for
+ * a model that appears in the provider's /models list is a transient
+ * error (overload, routing), not a retirement.
  */
 function checkDeprecation(key: string, status: number, errText: string): boolean {
   const lowerErr = errText.toLowerCase()
-  if (
+  const isRetirement =
     status === 404 ||
     (status === 400 && (lowerErr.includes('deprecat') || lowerErr.includes('decommission') || lowerErr.includes('not available'))) ||
     lowerErr.includes('has been deprecated') ||
     lowerErr.includes('is no longer supported') ||
     lowerErr.includes('model_not_found')
-  ) {
-    if (!deprecatedModels.has(key)) {
-      deprecatedModels.add(key)
-      console.warn(`[ai] Auto-deprecated ${key} (status ${status}: ${errText.slice(0, 100)})`)
-    }
-    return true
+  if (!isRetirement) return false
+
+  // Discovery-confirmed models are NEVER deprecated on 404 (transient).
+  if (discoveryConfirmed.has(key)) {
+    diag(`${key}: ${status} ignored (model confirmed by discovery — transient)`)
+    return false
   }
-  return false
+  if (!deprecatedModels.has(key)) {
+    deprecatedModels.set(key, Date.now())
+    console.warn(`[ai] Auto-deprecated ${key} for 10min (status ${status}: ${errText.slice(0, 100)})`)
+  }
+  return true
 }
 
 /**
