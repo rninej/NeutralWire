@@ -420,11 +420,18 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
     candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, true))
   }
 
-  // 4. Race them
+  // 4. Race them. A model that can't answer without search may reply with
+  //    ONLY the ({/compound}) marker — that's a failure for our purposes
+  //    (no real content), so treat it as a lost race and continue to the
+  //    sequential retries + fallback below.
   if (candidates.length > 0) {
     try {
       const answer = await Promise.any(candidates)
-      if (answer) {
+      const cleaned = answer
+        .replace(/^\(?(\{\/compound\})\)?\s*/g, '')
+        .replace(/^\{\/compound\}\s*/g, '')
+        .trim()
+      if (answer && cleaned.length > 0) {
         lastProvider = 'AI (web search, parallel)'
         return answer
       }
@@ -452,11 +459,20 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
   //    system prompt said to use ({/compound}) only when it genuinely
   //    can't answer from training data, so this path is rare — but an
   //    honest "here's what I know, may be outdated" answer beats a
-  //    refusal. The caveat prefix tells the user it's not live info.
+  //    refusal. Models asked to search often reply with JUST the
+  //    ({/compound}) marker — strip it; if nothing real remains, the
+  //    question truly needs live search → null (caller shows the honest
+  //    "couldn't verify" message instead of a marker leak).
   const noSearchAnswer = await callAI(opts)
   if (noSearchAnswer) {
-    lastProvider = 'AI (training-data fallback)'
-    return `(From my training data — may not reflect the latest developments:) ${noSearchAnswer}`
+    const cleaned = noSearchAnswer
+      .replace(/^\(?(\{\/compound\})\)?\s*/g, '')
+      .replace(/^\{\/compound\}\s*/g, '')
+      .trim()
+    if (cleaned.length > 10) {
+      lastProvider = 'AI (training-data fallback)'
+      return `(From my training data — may not reflect the latest developments:) ${cleaned}`
+    }
   }
   return null
 }
