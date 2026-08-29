@@ -434,6 +434,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
 export async function callAICompound(opts: ChatCall): Promise<string | null> {
   const now = Date.now()
   const candidates: Array<Promise<string | null>> = []
+  lastDiagnostics = []
 
   // Make sure model discovery has run (no-op after the first call).
   const disc = await getDiscoveredModels()
@@ -473,6 +474,10 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
   if (OPENROUTER_API_KEY && !isDeprecated('openrouter')) {
     candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, true))
   }
+
+  diag(
+    `compound volley: gemini-search=[${geminiSearchModels.join(',') || 'NONE'}] groq=${GROQ_API_KEY ? 'compound-beta+regular' : 'no-key'} openrouter=${OPENROUTER_API_KEY ? ':online' : 'no-key'}`,
+  )
 
   // 4. Race them. A model that can't answer without search may reply with
   //    ONLY the ({/compound}) marker — that's a failure for our purposes

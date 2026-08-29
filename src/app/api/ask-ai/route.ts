@@ -125,6 +125,7 @@ ${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
           answer =
             "I couldn't verify that with a live web search right now. Try rephrasing, or ask again in a few minutes."
           isFallback = true
+          console.warn('[ask-ai] compound path failed:', getLastDiagnostics())
         }
       } else {
         // Out of time — return a helpful message (also not cached)
