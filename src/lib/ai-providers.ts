@@ -300,6 +300,34 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   const geminiAvail = available(geminiModels.map((m) => ({ key: `gemini-${m}`, model: m }))).slice(0, 2)
   const groqAvail = available(groqModels.map((m) => ({ key: `groq-${m}`, model: m }))).slice(0, 2)
 
+  // ── Cooldown escape hatch ──
+  // If EVERY model of a provider is in the 60s rate-limit cooldown, the
+  // volley would fire zero candidates and the call is guaranteed to fail
+  // — one 429 burst could silence an instance for a minute (observed:
+  // repeated ask-ai 502s while /api/summary worked). Always keep ONE
+  // candidate: the least-recently-limited model. Worst case it 429s
+  // again (one cheap request); best case the limit cleared and it works.
+  const rescueCandidate = (keys: Array<{ key: string; model: string }>, have: string[]) => {
+    if (keys.length === 0 || have.length > 0) return null
+    const limited = keys
+      .filter((k) => !isDeprecated(k.key) && rateLimitedModels.has(k.key))
+      .sort(
+        (a, b) =>
+          (rateLimitedModels.get(a.key) ?? 0) - (rateLimitedModels.get(b.key) ?? 0),
+      )
+    return limited[0]?.model ?? keys.find((k) => !isDeprecated(k.key))?.model ?? null
+  }
+  const geminiRescue = rescueCandidate(
+    geminiModels.map((m) => ({ key: `gemini-${m}`, model: m })),
+    geminiAvail.map((a) => a.model),
+  )
+  const groqRescue = rescueCandidate(
+    groqModels.map((m) => ({ key: `groq-${m}`, model: m })),
+    groqAvail.map((a) => a.model),
+  )
+  if (geminiRescue) geminiAvail.push({ key: `gemini-${geminiRescue}`, model: geminiRescue })
+  if (groqRescue) groqAvail.push({ key: `groq-${groqRescue}`, model: groqRescue })
+
   // 1+2. Fire off up to TWO models from BOTH Gemini and Groq in parallel —
   // if the first model is rate-limited or slow, the second still races.
   for (const { model } of geminiAvail) {
