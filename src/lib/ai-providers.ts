@@ -455,25 +455,13 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
     }
   }
 
-  // 6. Last resort: ANY regular model WITHOUT web search. The caller's
-  //    system prompt said to use ({/compound}) only when it genuinely
-  //    can't answer from training data, so this path is rare — but an
-  //    honest "here's what I know, may be outdated" answer beats a
-  //    refusal. Models asked to search often reply with JUST the
-  //    ({/compound}) marker — strip it; if nothing real remains, the
-  //    question truly needs live search → null (caller shows the honest
-  //    "couldn't verify" message instead of a marker leak).
-  const noSearchAnswer = await callAI(opts)
-  if (noSearchAnswer) {
-    const cleaned = noSearchAnswer
-      .replace(/^\(?(\{\/compound\})\)?\s*/g, '')
-      .replace(/^\{\/compound\}\s*/g, '')
-      .trim()
-    if (cleaned.length > 10) {
-      lastProvider = 'AI (training-data fallback)'
-      return `(From my training data — may not reflect the latest developments:) ${cleaned}`
-    }
-  }
+  // 6. Everything failed. NO third volley here — the compound race above
+  //    already included a regular (no-search) model as a candidate, so a
+  //    training-data answer would have won the race if any provider had
+  //    quota left. Firing yet another volley now would just hammer the
+  //    same rate-limited free tiers (the 502 domino: volley 1 callAI →
+  //    volley 2 compound → volley 3 fallback = up to 15 requests for ONE
+  //    question). The caller shows an honest "couldn't verify" message.
   return null
 }
 
