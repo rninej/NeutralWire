@@ -22,7 +22,16 @@ const FIREBASE_ROOT = 'summaries'
 // Guard against concurrent summary generation for the same topicId.
 // If two users open the same topic simultaneously, only one LLM call runs;
 // the other waits and reuses the result.
-const IN_FLIGHT = new Map<string, Promise<string>>()
+// The promise resolves to { summary, fallback } — `fallback: true` means
+// the LLM failed and an extractive (template) summary was produced. Those
+// are served as a TEMPORARY answer but NEVER persisted, so the next visitor
+// retries the LLM instead of being stuck with the template forever.
+const IN_FLIGHT = new Map<string, Promise<GenerateResult | null>>()
+
+interface GenerateResult {
+  summary: string
+  fallback: boolean
+}
 
 interface SummaryRequest {
   topicId: string
@@ -41,6 +50,20 @@ interface StoredSummary {
   generatedAt: number
   title: string
   sourceCount: number
+}
+
+/** True when a stored summary is the EXTRACTIVE (template) fallback that
+ *  the old code persisted when every AI provider failed. These read like
+ *  "This story is being covered by N sources across the political spectrum,
+ *  indicating significant public interest" — technically valid but exactly
+ *  the "ruined neutral summary" users complained about. They must be
+ *  regenerated with the LLM, not served forever from Firebase. */
+function isTemplateSummary(summary: string): boolean {
+  return (
+    summary.includes('indicating significant public interest') ||
+    summary.includes('The breadth of coverage suggests') ||
+    summary.includes('Source details are no longer available for this archived story')
+  )
 }
 
 /**
@@ -120,9 +143,10 @@ export async function GET(req: NextRequest) {
     })
   }
 
-  // 2. Check Firebase.
+  // 2. Check Firebase. Template (extractive) summaries are treated as
+  // missing so the client POSTs and regenerates a real LLM summary.
   const fbCached = await firebaseRead<StoredSummary>(`${FIREBASE_ROOT}/${topicId}`)
-  if (fbCached?.summary) {
+  if (fbCached?.summary && !isTemplateSummary(fbCached.summary)) {
     SUMMARY_CACHE.set(topicId, { ts: Date.now(), summary: fbCached.summary })
     return NextResponse.json({
       topicId,
@@ -203,11 +227,13 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // 2. Check Firebase (shared across instances, ~200ms).
+    // 2. Check Firebase (shared across instances, ~200ms). Template
+    // (extractive) summaries stored by the old code are cache MISSES —
+    // regenerate with the LLM below.
     const fbCached = await firebaseRead<StoredSummary>(
       `${FIREBASE_ROOT}/${body.topicId}`,
     )
-    if (fbCached?.summary) {
+    if (fbCached?.summary && !isTemplateSummary(fbCached.summary)) {
       // Populate the in-process cache too so next time it's instant.
       SUMMARY_CACHE.set(body.topicId, { ts: Date.now(), summary: fbCached.summary })
       return NextResponse.json({
@@ -221,20 +247,20 @@ export async function POST(req: NextRequest) {
     // 3. Generate fresh. Deduplicate concurrent requests for the same topic.
     let generatePromise = IN_FLIGHT.get(body.topicId)
     if (!generatePromise) {
-      generatePromise = (async () => {
+      generatePromise = (async (): Promise<GenerateResult | null> => {
         // Try the LLM first. If it fails, use the extractive fallback.
-        let summary: string | null = null
+        let llmSummary: string | null = null
         try {
-          summary = await generateLlmSummary(body)
+          llmSummary = await generateLlmSummary(body)
         } catch (err) {
           console.warn(
             '[api/summary] LLM failed, using fallback:',
             err instanceof Error ? err.message : err,
           )
         }
-        if (!summary) {
-          summary = generateExtractiveSummary(body)
-        }
+
+        const isFallback = !llmSummary
+        const summary = llmSummary || generateExtractiveSummary(body)
 
         // If the summary is empty (no articles + no topicSummary), don't
         // persist it. Return null so the client knows to show the error.
@@ -242,29 +268,39 @@ export async function POST(req: NextRequest) {
           return null
         }
 
-        // Persist to Firebase so other instances/users get it instantly.
-        const stored: StoredSummary = {
-          summary,
-          generatedAt: Date.now(),
-          title: body.title,
-          sourceCount: Array.isArray(body.articles) ? body.articles.length : 0,
+        // Persist to Firebase so other instances/users get it instantly —
+        // but ONLY real LLM summaries. The extractive template used to be
+        // persisted too, which meant one provider outage permanently
+        // "ruined" the summary for every future visitor of that topic
+        // (the exact bug users reported). Templates stay ephemeral: the
+        // response is served now, and the next visitor retries the LLM.
+        if (!isFallback) {
+          const stored: StoredSummary = {
+            summary,
+            generatedAt: Date.now(),
+            title: body.title,
+            sourceCount: Array.isArray(body.articles) ? body.articles.length : 0,
+          }
+          await firebaseWrite(`${FIREBASE_ROOT}/${body.topicId}`, stored)
+          // Also populate in-process cache (LLM results only).
+          SUMMARY_CACHE.set(body.topicId, { ts: Date.now(), summary })
+        } else {
+          console.warn(
+            `[api/summary] serving extractive fallback for ${body.topicId} (not persisted — will retry LLM for the next visitor)`,
+          )
         }
-        await firebaseWrite(`${FIREBASE_ROOT}/${body.topicId}`, stored)
 
-        // Also populate in-process cache.
-        SUMMARY_CACHE.set(body.topicId, { ts: Date.now(), summary })
-
-        return summary
+        return { summary, fallback: isFallback }
       })()
       IN_FLIGHT.set(body.topicId, generatePromise)
     }
 
     try {
-      const summary = await generatePromise
+      const result = (await generatePromise) as GenerateResult | null
       // If summary generation returned null (no articles + no topicSummary),
       // return a 422 so the client knows to hide the summary section
       // instead of showing "Could not generate summary".
-      if (!summary) {
+      if (!result) {
         return NextResponse.json(
           { error: 'No content available to generate summary', topicId: body.topicId },
           { status: 422 },
@@ -272,9 +308,10 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json({
         topicId: body.topicId,
-        summary,
+        summary: result.summary,
         cached: false,
-        source: 'generated',
+        source: result.fallback ? 'extractive-fallback' : 'generated',
+        fallback: result.fallback,
       })
     } finally {
       IN_FLIGHT.delete(body.topicId)

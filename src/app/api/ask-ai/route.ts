@@ -100,14 +100,22 @@ ${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
     let modelUsed = getLastProvider()
     let isFallback = false
 
-    // Check if the model requested compound (web search)
-    if (answer && (answer.startsWith('({/compound})') || answer.startsWith('{/compound}'))) {
+    // Check if the model requested compound (web search). The marker is
+    // specified as ({/compound}) but models emit variants: {/compound},
+    // ( {/compound} ), leading whitespace, markdown bold around it…
+    const markerRe = /^\s*\(?\s*\{\s*\/\s*compound\s*\}\s*\)?\s*/i
+    if (answer && markerRe.test(answer)) {
       // Strip the indicator
-      answer = answer.replace(/^\(?(\{\/compound\})\)?\s*/g, '')
+      answer = answer.replace(markerRe, '')
       answer = answer.replace(/^\{\/compound\}\s*/g, '')
 
-      // Only attempt compound if we still have time before the deadline
-      if (Date.now() < deadline - 1000) {
+      // The model emitted the marker AND a real answer (over-cautious
+      // marker use). The answer is good — use it directly instead of
+      // burning another full provider volley we may not have quota for.
+      if (answer.trim().length > 40) {
+        answer = stripSources(answer)
+      } else if (Date.now() < deadline - 1000) {
+        // Marker only (or marker + refusal) — route to web search.
         const compoundAnswer = await callAICompound({
           systemPrompt: systemPrompt.replace(
             'You do NOT have web search in this mode.',

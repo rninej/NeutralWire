@@ -44,15 +44,22 @@ const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
 // renames a model, discovery automatically falls through to the next
 // preference — no more permanent 404s from hallucinated/retired IDs.
 const GEMINI_MODELS = [
-  // 2.0-flash FIRST: universally available on free-tier keys. The 2.5
+  // Google's auto-updating stable aliases FIRST — these exist for every key
+  // (new projects included) and always point at a usable flash model.
+  'gemini-flash-latest',
+  'gemini-flash-lite-latest',
+  // 2.0-flash next: universally available on free-tier keys. The 2.5
   // models are "no longer available to new users" on Gemini's free tier —
   // they appear in ListModels but generateContent 404s for newer keys
   // (observed in production diagnostics).
   'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash-001',
   'gemini-2.5-flash-lite',
   'gemini-2.5-flash',
-  'gemini-2.0-flash-001',
   'gemini-2.5-pro',
+  // gemma-3 runs on the Gemini API too (text-only, but it answers).
+  'gemma-3-27b-it',
 ]
 
 // Groq: text models in preference order. Discovery filters to what the
@@ -60,8 +67,10 @@ const GEMINI_MODELS = [
 const GROQ_MODELS = [
   'openai/gpt-oss-120b',
   'openai/gpt-oss-20b',
-  'llama-3.3-70b-versatile',
+  'moonshotai/kimi-k2-instruct-0905',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
   'qwen/qwen3-32b',
+  'llama-3.3-70b-versatile',
   'llama-3.1-8b-instant',
 ]
 
@@ -70,12 +79,16 @@ const rateLimitedModels = new Map<string, number>()
 const RATE_LIMIT_COOLDOWN_MS = 60 * 1000
 
 // ── LIVE MODEL DISCOVERY ──
-// One-time per server instance: fetch each provider's model list and
-// intersect it with our preferences. Solves the recurring failure mode
-// where a hallucinated or retired model ID made every call to that
-// provider 404 — the main cause of "cannot reach AI provider" (502).
+// One-time per server instance: fetch each provider's FULL model list and
+// keep it. At call time we intersect with our preferences; if the
+// intersection is empty (provider retired everything we like) we rank the
+// FULL live list dynamically and use the best text models it offers.
+// Solves the recurring failure mode where a hallucinated, retired, or
+// key-restricted model ID made every call to that provider 404 — the main
+// cause of "cannot reach AI provider" (502).
 // Discovery failures are non-fatal: we fall back to the static lists.
 interface DiscoveredModels {
+  /** FULL live model list per provider (null = discovery failed). */
   gemini: string[] | null
   groq: string[] | null
   openrouter: string[] | null
@@ -83,7 +96,10 @@ interface DiscoveredModels {
 let discovered: DiscoveredModels | null = null
 let discoveryInFlight: Promise<DiscoveredModels> | null = null
 
-async function fetchJson(url: string, headers: Record<string, string>): Promise<unknown> {
+async function fetchJson(
+  url: string,
+  headers: Record<string, string>,
+): Promise<unknown> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 3000)
   try {
@@ -97,25 +113,112 @@ async function fetchJson(url: string, headers: Record<string, string>): Promise<
   }
 }
 
+/** Paged JSON walker — follows nextPageToken up to `maxPages` pages so a
+ *  >200-model catalog (Gemini has 100s of variants incl. embeddings,
+ *  image, tts…) isn't truncated mid-alphabet. pageSize=200 missed
+ *  gemini-2.0-flash in production because page 1 filled up first. */
+async function fetchJsonPaged(
+  baseUrl: string,
+  headers: Record<string, string>,
+  pageParam: (token: string) => string,
+  extract: (d: unknown) => string[] | null,
+  maxPages = 3,
+): Promise<string[] | null> {
+  const out: string[] = []
+  let token: string | undefined
+  for (let page = 0; page < maxPages; page++) {
+    const data = await fetchJson(token ? pageParam(token) : baseUrl, headers)
+    if (!data) return out.length > 0 ? out : null
+    const items = extract(data)
+    if (items) out.push(...items)
+    const next = (data as { nextPageToken?: string })?.nextPageToken
+    if (!next) break
+    token = next
+  }
+  return out.length > 0 ? out : null
+}
+
+/** True when the model name is a TEXT generation model we can call with
+ *  chat completions / generateContent. Gemini's list is full of
+ *  embeddings, image, tts, audio and live models that would 404. */
+const GEMINI_BAD_MODEL =
+  /embedding|aqa|tts|audio|imagen|image|veo|lyria|live|learnlm|thinking|robotics|computer-use|native|exp-|deprecated|legacy|protection/i
+
+/** Rank ANY list of Gemini model names: best text model first.
+ *  Order: -latest aliases > flash > flash-lite > numbered gemini > gemma.
+ *  Higher version numbers win inside each tier. */
+export function rankGeminiModels(all: string[]): string[] {
+  const score = (m: string): number => {
+    if (GEMINI_BAD_MODEL.test(m)) return -1000
+    let s = 0
+    if (/^gemini-(flash|pro)-latest$/.test(m)) s += 200 // stable aliases
+    else if (/^gemini-flash-lite-latest$/.test(m)) s += 190
+    else if (/flash-lite/.test(m)) s += 120
+    else if (/flash/.test(m)) s += 150
+    else if (/^gemini-\d/.test(m)) s += 100
+    else if (/^gemini-\d+(\.\d+)?-pro/.test(m)) s += 80
+    else if (/^gemma-\d/.test(m)) s += 60
+    else return -500
+    const ver = m.match(/(\d+)\.(\d+)/)
+    if (ver) s += Number(ver[1]) * 10 + Number(ver[2])
+    if (/preview/.test(m)) s -= 5
+    return s
+  }
+  return [...new Set(all)]
+    .map((m) => ({ m, s: score(m) }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.m)
+}
+
+/** Rank ANY list of Groq model names: usable text models first. */
+export function rankGroqModels(all: string[]): string[] {
+  const bad = /whisper|tts|guard|play|embed|prompt-guard|audio/i
+  const score = (m: string): number => {
+    if (bad.test(m)) return -1000
+    let s = 0
+    if (/gpt-oss/.test(m)) s += 100
+    if (/kimi/.test(m)) s += 80
+    if (/llama-4/.test(m)) s += 70
+    if (/llama-3\.3/.test(m)) s += 60
+    if (/qwen/.test(m)) s += 50
+    if (/llama-3\.1/.test(m)) s += 40
+    if (/gemma/.test(m)) s += 30
+    if (/8b|mini/.test(m)) s += 5 // small = fast + generous limits
+    return s
+  }
+  return [...new Set(all)]
+    .map((m) => ({ m, s: score(m) }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.m)
+}
+
 async function discoverProviderModels(): Promise<DiscoveredModels> {
   const [geminiList, groqList, orList] = await Promise.all([
     GEMINI_API_KEY
-      ? fetchJson(`${GEMINI_URL}?key=${GEMINI_API_KEY}&pageSize=200`, {}).then(
-          (d) => (d as { models?: Array<{ name?: string }> })?.models
+      ? fetchJsonPaged(
+          `${GEMINI_URL}?key=${GEMINI_API_KEY}&pageSize=1000`,
+          {},
+          (t) => `${GEMINI_URL}?key=${GEMINI_API_KEY}&pageSize=1000&pageToken=${t}`,
+          (d) =>
+            (d as { models?: Array<{ name?: string }> })?.models
               ?.map((m) => (m.name || '').replace(/^models\//, ''))
               .filter(Boolean) ?? null,
         )
       : Promise.resolve(null),
     GROQ_API_KEY
       ? fetchJson(GROQ_MODELS_URL, { Authorization: `Bearer ${GROQ_API_KEY}` }).then(
-          (d) => (d as { data?: Array<{ id?: string }> })?.data
+          (d) =>
+            (d as { data?: Array<{ id?: string }> })?.data
               ?.map((m) => m.id || '')
               .filter(Boolean) ?? null,
         )
       : Promise.resolve(null),
     OPENROUTER_API_KEY
       ? fetchJson(OPENROUTER_MODELS_URL, { Authorization: `Bearer ${OPENROUTER_API_KEY}` }).then(
-          (d) => (d as { data?: Array<{ id?: string }> })?.data
+          (d) =>
+            (d as { data?: Array<{ id?: string }> })?.data
               ?.map((m) => m.id || '')
               .filter(Boolean) ?? null,
         )
@@ -123,22 +226,30 @@ async function discoverProviderModels(): Promise<DiscoveredModels> {
   ])
 
   const result: DiscoveredModels = {
-    // Keep the preference ORDER but only models that exist in the live list.
-    gemini: geminiList ? GEMINI_MODELS.filter((m) => geminiList.includes(m)) : null,
-    groq: groqList ? GROQ_MODELS.filter((m) => groqList.includes(m)) : null,
-    openrouter: orList ? OPENROUTER_MODELS.filter((m) => orList.includes(m)) : null,
+    gemini: geminiList,
+    groq: groqList,
+    openrouter: orList,
   }
 
-  // Record every model the providers CONFIRM exist — checkDeprecation
-  // never retires these on a 404 (transient errors can't blacklist a
-  // model the provider itself says exists).
+  // Record every PREFERRED model the providers CONFIRM exist —
+  // checkDeprecation never retires these on a single 404 (transient
+  // errors can't blacklist a model the provider itself says exists).
+  const geminiHit = geminiList ? GEMINI_MODELS.filter((m) => geminiList.includes(m)) : []
+  const groqHit = groqList ? GROQ_MODELS.filter((m) => groqList.includes(m)) : []
+  const orHit = orList ? OPENROUTER_MODELS.filter((m) => orList.includes(m)) : []
+  // Also confirm the top DYNAMIC candidates (they come from the provider's
+  // own live list, so a single transient 404 shouldn't retire them either).
+  const geminiDynamic = geminiList ? rankGeminiModels(geminiList).slice(0, 4) : []
+  const groqDynamic = groqList ? rankGroqModels(groqList).slice(0, 4) : []
   discoveryConfirmed = new Set([
-    ...(result.gemini || []).map((m) => `gemini-${m}`),
-    ...(result.groq || []).map((m) => `groq-${m}`),
-    ...(result.openrouter || []).map((m) => `openrouter`),
+    ...geminiHit.map((m) => `gemini-${m}`),
+    ...groqHit.map((m) => `groq-${m}`),
+    ...geminiDynamic.map((m) => `gemini-${m}`),
+    ...groqDynamic.map((m) => `groq-${m}`),
+    ...(orHit.length > 0 ? ['openrouter'] : []),
   ])
   console.log(
-    `[ai] model discovery: gemini=${result.gemini?.length ?? 'n/a'} groq=${result.groq?.length ?? 'n/a'} openrouter=${result.openrouter?.length ?? 'n/a'}`,
+    `[ai] model discovery: gemini=${geminiList?.length ?? 'n/a'} live (${geminiHit.length} preferred) groq=${groqList?.length ?? 'n/a'} live (${groqHit.length} preferred) openrouter=${orList?.length ?? 'n/a'} live (${orHit.length} preferred)`,
   )
   return result
 }
@@ -155,13 +266,36 @@ async function getDiscoveredModels(): Promise<DiscoveredModels> {
   return discoveryInFlight
 }
 
-/** Effective model list for a provider: discovered ∩ preferred, falling
- *  back to the static preference list when discovery failed. */
+/** Preferred ∩ live, in preference order. Empty when nothing overlaps. */
+function intersect(full: string[] | null, preferred: string[]): string[] {
+  if (!full) return []
+  return preferred.filter((m) => full.includes(m))
+}
+
+/** Effective model list for a provider:
+ *   1. preferred ∩ live (preference order)
+ *   2. if that's empty → dynamically ranked live text models (the
+ *      provider retired/renamed everything we preferred, but still has
+ *      usable models — e.g. only gemini-flash-latest exists for new keys)
+ *   3. if discovery failed entirely → static preference list */
+const loggedDynamicFallbacks = new Set<string>()
 function effectiveModels(
-  discoveredList: string[] | null,
+  full: string[] | null,
   preferred: string[],
+  ranker: (all: string[]) => string[],
+  providerTag = '',
 ): string[] {
-  if (discoveredList && discoveredList.length > 0) return discoveredList
+  if (!full) return preferred
+  const hits = intersect(full, preferred)
+  if (hits.length > 0) return hits
+  const dynamic = ranker(full).slice(0, 4)
+  if (dynamic.length > 0) {
+    if (!loggedDynamicFallbacks.has(providerTag)) {
+      loggedDynamicFallbacks.add(providerTag)
+      console.log(`[ai] dynamic model fallback (${providerTag}): using ${dynamic.slice(0, 3).join(', ')}`)
+    }
+    return dynamic
+  }
   return preferred
 }
 
@@ -173,28 +307,43 @@ function effectiveModels(
 // (deprecatedModels now lives next to checkDeprecation below, as a
 // TTL-based Map — see the DEPRECATION comment.)
 
-const OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it:free'
-const GROQ_COMPOUND_MODEL = 'compound-beta'
-
-// OpenRouter free-model preferences. The first one found in the LIVE model
-// list is used (discovery filters); the old single hard-coded ID 404'd
-// permanently when OpenRouter retired it — another "cannot reach AI
-// provider" contributor.
+// OpenRouter free-model preferences, in rotation order. callOpenRouter
+// tries the first available one and ROTATES to the next on failure (a
+// single retired/daily-capped model no longer kills the whole provider —
+// the old single hard-coded ID 404'd permanently when OpenRouter retired
+// it, another "cannot reach AI provider" contributor).
 const OPENROUTER_MODELS = [
   'google/gemma-4-26b-a4b-it:free',
   'google/gemma-3-27b-it:free',
   'meta-llama/llama-3.3-70b-instruct:free',
   'deepseek/deepseek-chat-v3-0324:free',
   'qwen/qwen-2.5-72b-instruct:free',
+  'mistralai/mistral-small-3.1-24b-instruct:free',
+  'meta-llama/llama-4-scout:free',
 ]
+const OPENROUTER_MODEL = OPENROUTER_MODELS[0]
+const GROQ_COMPOUND_MODEL = 'compound-beta'
+
+/** Ordered OpenRouter rotation candidates: preferences found in the live
+ *  list first, then (if none match) any other free text models the list
+ *  offers. Capped at 3 — enough coverage without burning requests. */
+function openRouterCandidates(discoveredList: string[] | null): string[] {
+  const hits = discoveredList
+    ? OPENROUTER_MODELS.filter((m) => discoveredList.includes(m))
+    : []
+  if (hits.length > 0) return hits.slice(0, 3)
+  if (discoveredList) {
+    const anyFree = discoveredList.filter(
+      (m) => m.endsWith(':free') && !/nemo|vision|guard|embed/i.test(m),
+    )
+    if (anyFree.length > 0) return anyFree.slice(0, 3)
+  }
+  return [OPENROUTER_MODEL]
+}
 
 /** First OpenRouter preference that exists in the discovered list. */
 function pickOpenRouterModel(discoveredList: string[] | null): string {
-  if (discoveredList) {
-    const found = OPENROUTER_MODELS.find((m) => discoveredList.includes(m))
-    if (found) return found
-  }
-  return OPENROUTER_MODEL
+  return openRouterCandidates(discoveredList)[0]
 }
 
 interface ChatCall {
@@ -247,14 +396,21 @@ function stripThinking(text: string): string {
   // Remove unclosed thinking tags (model started thinking but didn't close)
   cleaned = cleaned.replace(/<think>[\s\S]*$/gi, '')
   cleaned = cleaned.replace(/<reasoning>[\s\S]*$/gi, '')
-  // If the response has thinking as plain text before **The Big Picture**,
-  // strip everything before the first ** heading
+  // If the response has thinking as plain text before the first ** heading,
+  // strip everything before the first ** heading.
+  // SAFETY: only strip when the prefix does NOT end with sentence
+  // punctuation — real answer sentences end with . ! ? : " …, while
+  // reasoning trails off mid-thought. (The old rule stripped ANY 20+ char
+  // prefix, which ate legitimate answer content like
+  // "The IMF is X. **Note**: …".)
   const firstHeading = cleaned.indexOf('**')
   if (firstHeading > 0) {
     const beforeHeading = cleaned.slice(0, firstHeading).trim()
-    // Only strip if the text before the heading looks like thinking
-    // (not empty, not already a heading)
-    if (beforeHeading.length > 20 && !beforeHeading.startsWith('**')) {
+    if (
+      beforeHeading.length > 20 &&
+      !beforeHeading.startsWith('**') &&
+      !/[.!?:;"'”’)\]]$/.test(beforeHeading)
+    ) {
       cleaned = cleaned.slice(firstHeading)
     }
   }
@@ -357,8 +513,8 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
 
   // Make sure model discovery has run (no-op after the first call).
   const disc = await getDiscoveredModels()
-  const geminiModels = effectiveModels(disc.gemini, GEMINI_MODELS)
-  const groqModels = effectiveModels(disc.groq, GROQ_MODELS)
+  const geminiModels = effectiveModels(disc.gemini, GEMINI_MODELS, rankGeminiModels, 'gemini')
+  const groqModels = effectiveModels(disc.groq, GROQ_MODELS, rankGroqModels, 'groq')
 
   // Pick up to 2 available models per provider (skip deprecated + rate-limited)
   const available = (keys: Array<{ key: string; model: string }>) =>
@@ -492,7 +648,7 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
 
   // Make sure model discovery has run (no-op after the first call).
   const disc = await getDiscoveredModels()
-  const geminiModels = effectiveModels(disc.gemini, GEMINI_MODELS)
+  const geminiModels = effectiveModels(disc.gemini, GEMINI_MODELS, rankGeminiModels, 'gemini')
 
   const modelOk = (key: string) => {
     if (isDeprecated(key)) return false
@@ -515,7 +671,7 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
     candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, GROQ_COMPOUND_MODEL))
     // ALSO race a regular Groq model (no web search, but at least answers
     // from training data) — compound-beta alone has been unreliable.
-    const groqModels = effectiveModels(disc.groq, GROQ_MODELS)
+    const groqModels = effectiveModels(disc.groq, GROQ_MODELS, rankGroqModels, 'groq')
     const groqRegular = groqModels.find((m) => modelOk(`groq-${m}`))
     if (groqRegular) {
       candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, groqRegular))
@@ -584,7 +740,7 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
 // Netanyahu headline). Groq llama-4-scout and Gemini flash are both
 // multimodal and cheap; we race them and take the first answer.
 const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
-const GEMINI_VISION_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash']
+const GEMINI_VISION_MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash']
 
 // Unsupported-by-vision-models formats (Gemini/Groq don't take avif; svg
 // is usually a site logo, not a photo). These return null → caller
@@ -874,11 +1030,14 @@ async function callGemini(
     }
 
     const data = await res.json()
-    const parts = data.candidates?.[0]?.content?.parts || []
     consecutive404s.delete(`gemini-${model}`)
-    for (const part of parts) {
-      if (part.text) return stripThinking(part.text.trim())
-    }
+    const parts: Array<{ text?: string; thought?: boolean }> =
+      data.candidates?.[0]?.content?.parts || []
+    // Gemini 2.5+ thinking models emit their reasoning as a part with
+    // thought:true BEFORE the answer part — take the first NON-thought
+    // text part (falling back to any text part for older models).
+    const answerPart = parts.find((p) => p.text && !p.thought) || parts.find((p) => p.text)
+    if (answerPart?.text) return stripThinking(answerPart.text.trim())
     return null
   } catch {
     clearTimeout(timeout)
@@ -895,51 +1054,73 @@ async function callOpenRouter(
   maxTokens: number = 400,
 ): Promise<string | null> {
   if (!OPENROUTER_API_KEY) return null
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 8000)
 
-  try {
-    // Web search: OpenRouter DEPRECATED the `plugins: [{id: 'web'}]` body
-    // param in favour of appending `:online` to the model name. We try the
-    // modern suffix first and fall back to the legacy plugins body if the
-    // suffix is rejected (belt + braces while the API migrates).
-    const disc = await getDiscoveredModels()
-    const model = pickOpenRouterModel(disc.openrouter)
-    const body: Record<string, unknown> = {
-      model: useWebSearch ? `${model}:online` : model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0.5,
-    }
+  // Web search: OpenRouter DEPRECATED the `plugins: [{id: 'web'}]` body
+  // param in favour of appending `:online` to the model name. We try the
+  // modern suffix first and fall back to the legacy plugins body if the
+  // suffix is rejected (belt + braces while the API migrates).
+  const disc = await getDiscoveredModels()
+  const candidates = openRouterCandidates(disc.openrouter)
 
-    const res = await fetch(OPENROUTER_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://neutralwire.org',
-        'X-Title': 'NeutralWire',
-      },
-      body: JSON.stringify(body),
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-    clearTimeout(timeout)
+  for (let attempt = 0; attempt < candidates.length; attempt++) {
+    const model = candidates[attempt]
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 8000)
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '')
-      // The `:online` suffix can fail on models that don't support it —
-      // retry ONCE with the legacy plugins body before giving up.
-      if (useWebSearch && (res.status === 400 || res.status === 404)) {
+    try {
+      const body: Record<string, unknown> = {
+        model: useWebSearch ? `${model}:online` : model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.5,
+      }
+
+      const res = await fetch(OPENROUTER_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://neutralwire.org',
+          'X-Title': 'NeutralWire',
+        },
+        body: JSON.stringify(body),
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      clearTimeout(timeout)
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '')
+        // SELF-REPORTING: every OpenRouter failure goes into the diag
+        // array — the 502 response now says which model failed with what
+        // status (previously these were console.warn-only and invisible,
+        // which is why OpenRouter looked like it failed "silently").
+        diag(`openrouter ${model}: ${res.status} ${errText.slice(0, 120)}`)
+
+        // 401/403 = key problem → the whole provider is dead, stop.
+        if (res.status === 401 || res.status === 403) {
+          deprecatedModels.set('openrouter', Date.now())
+          return null
+        }
+        // 429 (daily free cap / RPM) on ONE model often means the whole
+        // free pool is capped for now — rotating just burns another
+        // request, so stop after logging. Other errors (404 model gone,
+        // 400 bad request) → rotate to the next candidate model.
+        if (res.status === 429) return null
+        continue
+      }
+
+      const data = await res.json()
+      const answer = stripThinking(data.choices?.[0]?.message?.content?.trim() || '')
+      if (answer) return answer
+
+      // `:online` suffix rejected for this model? Retry once with the
+      // legacy plugins body before rotating.
+      if (useWebSearch) {
         try {
-          const legacyBody = {
-            ...body,
-            model: model,
-            plugins: [{ id: 'web' }],
-          }
           const legacyRes = await fetch(OPENROUTER_URL, {
             method: 'POST',
             headers: {
@@ -948,32 +1129,30 @@ async function callOpenRouter(
               'HTTP-Referer': 'https://neutralwire.org',
               'X-Title': 'NeutralWire',
             },
-            body: JSON.stringify(legacyBody),
+            body: JSON.stringify({
+              ...body,
+              model,
+              plugins: [{ id: 'web' }],
+            }),
             cache: 'no-store',
-            signal: controller.signal,
+            signal: AbortSignal.timeout(5000),
           })
           if (legacyRes.ok) {
             const legacyData = await legacyRes.json()
-            return (
-              stripThinking(legacyData.choices?.[0]?.message?.content?.trim() || '') || null
+            const legacyAnswer = stripThinking(
+              legacyData.choices?.[0]?.message?.content?.trim() || '',
             )
+            if (legacyAnswer) return legacyAnswer
           }
         } catch {
-          // legacy retry failed — fall through
+          // legacy retry failed — rotate to next model
         }
       }
-      checkDeprecation('openrouter', res.status, errText)
-      if (!deprecatedModels.has('openrouter')) {
-        console.warn(`[ai] OpenRouter ${res.status} (web=${useWebSearch}): ${errText.slice(0, 200)}`)
-      }
-      return null
+      diag(`openrouter ${model}: empty answer`)
+    } catch (err) {
+      clearTimeout(timeout)
+      diag(`openrouter ${model}: ${err instanceof Error ? err.message : String(err)}`)
     }
-
-    const data = await res.json()
-    return stripThinking(data.choices?.[0]?.message?.content?.trim() || '') || null
-  } catch (err) {
-    clearTimeout(timeout)
-    diag(`openrouter: ${err instanceof Error ? err.message : String(err)}`)
-    return null
   }
+  return null
 }
