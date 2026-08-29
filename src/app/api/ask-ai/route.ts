@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { callAI, callAICompound, getLastProvider } from '@/lib/ai-providers'
+import { callAI, callAICompound, getLastProvider, getLastDiagnostics } from '@/lib/ai-providers'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
 export const runtime = 'nodejs'
@@ -141,6 +141,9 @@ ${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
         {
           error:
             "I couldn't reach any AI provider right now. Please try again in a moment.",
+          // Provider-level failure reasons (which model, which HTTP status)
+          // — makes the 502 self-diagnosing instead of a blind guess.
+          diag: getLastDiagnostics(),
         },
         { status: 502 },
       )

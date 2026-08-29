@@ -192,8 +192,24 @@ interface ChatCall {
 
 let lastProvider = 'none'
 
+// ── Per-call diagnostics ──
+// Records what each provider call returned so the 502 response can say
+// exactly WHY it failed (which provider, which model, what error). This
+// replaced hours of blind guessing — one failing request now self-reports.
+let lastDiagnostics: string[] = []
+
 export function getLastProvider(): string {
   return lastProvider
+}
+
+export function getLastDiagnostics(): string[] {
+  return lastDiagnostics
+}
+
+function diag(msg: string): void {
+  lastDiagnostics.push(msg)
+  if (lastDiagnostics.length > 20) lastDiagnostics.shift()
+  console.warn(`[ai:diag] ${msg}`)
 }
 
 /**
@@ -283,6 +299,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   const now = Date.now()
   const maxTokens = opts.maxTokens ?? 400
   const candidates: Array<Promise<string | null>> = []
+  lastDiagnostics = []
 
   // Make sure model discovery has run (no-op after the first call).
   const disc = await getDiscoveredModels()
@@ -327,6 +344,10 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   )
   if (geminiRescue) geminiAvail.push({ key: `gemini-${geminiRescue}`, model: geminiRescue })
   if (groqRescue) groqAvail.push({ key: `groq-${groqRescue}`, model: groqRescue })
+
+  diag(
+    `volley: gemini=[${geminiAvail.map((a) => a.model).join(',') || 'NONE'}] groq=[${groqAvail.map((a) => a.model).join(',') || 'NONE'}] openrouter=${OPENROUTER_API_KEY ? pickOpenRouterModel(disc.openrouter) : 'no-key'} | discovered gemini=${disc.gemini?.length ?? 'n/a'} groq=${disc.groq?.length ?? 'n/a'} or=${disc.openrouter?.length ?? 'n/a'} | deprecated=[${Array.from(deprecatedModels).join(',') || '-'}]`,
+  )
 
   // 1+2. Fire ONE model from EACH provider in parallel (3 requests total
   //  incl. OpenRouter). This is deliberate rate-limit economics: free-tier
@@ -722,13 +743,11 @@ async function callGroq(
 
       if (res.status === 429) {
         rateLimitedModels.set(key, Date.now())
-        console.warn(`[ai] Groq ${model} rate-limited`)
+        diag(`groq ${model}: 429 rate-limited`)
       } else {
         // Check for deprecation — auto-deprecate if detected
         checkDeprecation(key, res.status, errText)
-        if (!deprecatedModels.has(key)) {
-          console.warn(`[ai] Groq ${model} ${res.status}: ${errText.slice(0, 200)}`)
-        }
+        diag(`groq ${model}: ${res.status} ${errText.slice(0, 120)}`)
       }
       return null
     }
@@ -737,6 +756,7 @@ async function callGroq(
     return stripThinking(data.choices?.[0]?.message?.content?.trim() || '') || null
   } catch {
     clearTimeout(timeout)
+    diag(`groq ${model}: timeout/error after ${7000}ms`)
     return null
   }
 }
@@ -785,12 +805,10 @@ async function callGemini(
 
       if (res.status === 429) {
         rateLimitedModels.set(key, Date.now())
-        console.warn(`[ai] Gemini ${model} rate-limited`)
+        diag(`gemini ${model}: 429 rate-limited`)
       } else {
         checkDeprecation(key, res.status, errText)
-        if (!deprecatedModels.has(key)) {
-          console.warn(`[ai] Gemini ${model} ${res.status}: ${errText.slice(0, 200)}`)
-        }
+        diag(`gemini ${model}: ${res.status} ${errText.slice(0, 120)}`)
       }
       return null
     }
@@ -803,6 +821,7 @@ async function callGemini(
     return null
   } catch {
     clearTimeout(timeout)
+    diag(`gemini ${model}: timeout/error after ${timeoutMs}ms`)
     return null
   }
 }
@@ -893,7 +912,7 @@ async function callOpenRouter(
     return stripThinking(data.choices?.[0]?.message?.content?.trim() || '') || null
   } catch (err) {
     clearTimeout(timeout)
-    console.warn('[ai] OpenRouter failed:', err instanceof Error ? err.message : err)
+    diag(`openrouter: ${err instanceof Error ? err.message : String(err)}`)
     return null
   }
 }
