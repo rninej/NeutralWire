@@ -119,12 +119,30 @@ ${articleContext ? `\nArticles covering this story:\n${articleContext}` : ''}`
           answer = stripSources(compoundAnswer)
           modelUsed = getLastProvider()
         } else {
-          // All web-search providers failed — callAICompound already tried
-          // its own no-search fallback internally. Helpful message, NOT
-          // cached (isFallback guard below).
-          answer =
-            "I couldn't verify that with a live web search right now. Try rephrasing, or ask again in a few minutes."
-          isFallback = true
+          // All web-search providers failed. Models are sometimes
+          // over-cautious with the ({/compound}) marker (they emit it for
+          // questions they CAN answer, like "what is the IMF"). ONE rescue
+          // volley with the marker explicitly forbidden converts most of
+          // these into a real training-data answer instead of a refusal.
+          let rescue: string | null = null
+          if (Date.now() < deadline - 1500) {
+            rescue = await callAI({
+              systemPrompt: systemPrompt.replace(
+                'If the question requires information NOT in the story context below AND you do not know the answer from your training data, start your response with exactly: ({/compound})',
+                'Answer from your training data even if it may be slightly outdated — a dated answer is better than none. Do NOT use the ({/compound}) marker under any circumstances.',
+              ),
+              userPrompt: body.question,
+            })
+            if (rescue) rescue = stripSources(rescue)
+          }
+          if (rescue && rescue.length > 10) {
+            answer = rescue
+            modelUsed = getLastProvider() + ' (training data)'
+          } else {
+            answer =
+              "I couldn't verify that with a live web search right now. Try rephrasing, or ask again in a few minutes."
+            isFallback = true
+          }
           console.warn('[ask-ai] compound path failed:', getLastDiagnostics())
         }
       } else {
