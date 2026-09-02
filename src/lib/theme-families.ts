@@ -216,6 +216,33 @@ export function themeValueFor(familyId: string, mode: EffectiveMode): string {
 }
 
 /**
+ * Apply a theme value's class to <html> SYNCHRONOUSLY (mirrors what the
+ * next-themes effect does a tick later).
+ *
+ * Why: when a theme change runs INSIDE a document.startViewTransition()
+ * callback, the browser captures the "new" snapshot as soon as the
+ * callback returns. next-themes applies the class in a React effect that
+ * is only scheduled at that point — so the snapshot occasionally captured
+ * the OLD theme and the reveal animation played with nothing changing
+ * underneath (the "toggle sometimes doesn't click" glitch). Applying the
+ * class here guarantees the DOM is already correct at capture time; the
+ * next-themes effect re-applies the same class idempotently afterwards.
+ */
+export function syncThemeClassNow(value: string) {
+  if (typeof document === 'undefined') return
+  const root = document.documentElement
+  // 'system' resolves to light/dark exactly like next-themes does.
+  const resolved =
+    value === 'system'
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light'
+      : value
+  root.classList.remove(...ALL_THEME_CLASSES)
+  root.classList.add(resolved)
+}
+
+/**
  * The core controller hook. Returns the current family/mode plus actions,
  * and keeps the applied theme in sync:
  *  - on mount (applies stored family+mode — also fixes the case where the
@@ -249,6 +276,9 @@ export function useThemeController() {
       const value =
         f === 'neutral' && m === 'auto' ? 'system' : themeValueFor(f, eff)
       setTheme(value)
+      // Synchronous DOM mirror — see syncThemeClassNow. Ensures the class
+      // is on <html> before a View Transition snapshot is captured.
+      syncThemeClassNow(value)
     },
     [setTheme],
   )
@@ -286,7 +316,11 @@ export function useThemeController() {
       setSystemDark(e.matches)
       if (getThemeMode() === 'auto') {
         const f = getThemeFamily()
-        setTheme(f === 'neutral' ? 'system' : themeValueFor(f, e.matches ? 'dark' : 'light'))
+        const value =
+          f === 'neutral' ? 'system' : themeValueFor(f, e.matches ? 'dark' : 'light')
+        setTheme(value)
+        // Keep the DOM class in sync immediately (see syncThemeClassNow).
+        syncThemeClassNow(value)
       }
     }
     mq.addEventListener('change', onChange)

@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import { useTheme } from 'next-themes'
+import { syncThemeClassNow } from '@/lib/theme-families'
 
 /**
  * Hook that returns a function to set the theme with a circular reveal
@@ -25,7 +26,42 @@ import { useTheme } from 'next-themes'
  * effective mode is light). When a direct nextTheme value is passed, this
  * wrapper keeps the legacy behaviour: clearing the gradient for any solid
  * theme.
+ *
+ * ── Robustness (why the toggle "sometimes didn't click") ──
+ *  1. If document.startViewTransition() throws (document not fully active,
+ *     mid-navigation, …) the old code never called mutate() — the click did
+ *     literally nothing. Now: try/catch with a direct mutate() fallback, so
+ *     the theme ALWAYS changes.
+ *  2. If a previous reveal transition is still running when a new one
+ *     starts, some engines leave a frozen old-snapshot overlay over the
+ *     page — clicks after that looked dead. Now: any in-flight transition
+ *     is skipped (overlay torn down) before the new one starts.
+ *  3. Safety net: if a transition doesn't settle within ~1.2s (stuck
+ *     animation, engine bug), skipTransition() is called automatically so
+ *     the page can never stay frozen.
  */
+
+interface VtLike {
+  skipTransition?: () => void
+  finished?: Promise<unknown>
+}
+
+/** The currently running reveal transition (module-level: one at a time). */
+let activeVt: { settled: boolean; skip: () => void } | null = null
+
+/** How long to wait before force-skipping a stuck view transition. */
+const STUCK_TRANSITION_MS = 1200
+
+/** Tear down any in-flight reveal so its overlay can never freeze the page. */
+function teardownActiveVt() {
+  if (activeVt && !activeVt.settled) {
+    try {
+      activeVt.skip()
+    } catch {}
+  }
+  activeVt = null
+}
+
 export function useThemeReveal() {
   const { setTheme } = useTheme()
 
@@ -62,6 +98,9 @@ export function useThemeReveal() {
             window.dispatchEvent(new CustomEvent('neutralwire:gradient-changed'))
           } catch {}
         }
+        // Apply the class synchronously (next-themes' effect lands later),
+        // then let next-themes persist + re-apply it.
+        syncThemeClassNow(nextTheme)
         setTheme(nextTheme)
       }
 
@@ -70,13 +109,48 @@ export function useThemeReveal() {
       // point. Otherwise, just change the theme directly (instant switch).
       const startViewTransition = (
         document as Document & {
-          startViewTransition?: (cb: () => void) => void
+          startViewTransition?: (cb: () => void) => VtLike
         }
       ).startViewTransition
 
-      if (typeof startViewTransition === 'function') {
-        startViewTransition.call(document, mutate)
-      } else {
+      // A previous reveal still animating? Tear its overlay down first —
+      // starting a new transition on top of a live one is exactly the
+      // state where engines sometimes freeze the old snapshot over the
+      // page (clicks then appear to do nothing).
+      teardownActiveVt()
+
+      if (typeof startViewTransition !== 'function') {
+        mutate()
+        return
+      }
+
+      try {
+        const vt = startViewTransition.call(document, mutate)
+        if (vt && typeof vt.skipTransition === 'function') {
+          const guard = {
+            settled: false,
+            skip: () => {
+              try {
+                vt.skipTransition?.()
+              } catch {}
+            },
+          }
+          activeVt = guard
+          // Force the overlay off if the transition never settles (stuck
+          // animation / engine bug) so the page is never left frozen.
+          const timer = setTimeout(() => {
+            if (activeVt === guard && !guard.settled) guard.skip()
+          }, STUCK_TRANSITION_MS)
+          const settle = () => {
+            guard.settled = true
+            clearTimeout(timer)
+            if (activeVt === guard) activeVt = null
+          }
+          vt.finished?.then(settle, settle)
+        }
+      } catch {
+        // startViewTransition can throw (e.g. mid-navigation). Fall back to
+        // an instant, animation-less theme change — never swallow the click.
         mutate()
       }
     },

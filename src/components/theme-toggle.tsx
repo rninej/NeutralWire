@@ -175,14 +175,25 @@ export function ThemeSwitcher() {
                   : 'border-border hover:bg-muted/50 hover:border-foreground/30',
               )}
             >
-              {/* Split swatch: dark half + light half of the family */}
+              {/* Split swatch: dark half on top, light half below. Each
+                  half is its own layer with its own gradient background —
+                  the old version interpolated the gradient STRINGS into an
+                  outer linear-gradient() (nested gradients), which is
+                  invalid CSS: browsers dropped the whole declaration and
+                  the swatches rendered invisible. */}
               <span
-                className="h-12 w-full rounded-md border border-border/40 shadow-sm"
-                style={{
-                  background: `linear-gradient(to bottom, ${f.swatchDark} 0%, ${f.swatchDark} 50%, ${f.swatchLight} 50%, ${f.swatchLight} 100%)`,
-                }}
+                className="flex h-12 w-full flex-col overflow-hidden rounded-md border border-border/40 shadow-sm"
                 aria-hidden
-              />
+              >
+                <span
+                  className="min-h-0 flex-1"
+                  style={{ background: f.swatchDark }}
+                />
+                <span
+                  className="min-h-0 flex-1"
+                  style={{ background: f.swatchLight }}
+                />
+              </span>
               <span className="block text-sm font-medium leading-tight">{f.label}</span>
               <span className="block text-[10px] text-muted-foreground leading-tight">
                 {f.description}

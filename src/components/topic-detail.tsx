@@ -594,8 +594,11 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
             {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
           </Badge>
           {/* Total articles + distinct newsrooms (like Ground News).
-              Only shown for GDELT-sourced topics (mycountry). */}
-          {topic.totalArticles && topic.totalArticles > 0 && (
+              Only shown for GDELT-sourced topics (mycountry).
+              NOTE the (x ?? 0) > 0 guard: a bare `x && x > 0` renders a
+              literal "0" into the page when the value is 0 — that was the
+              stray 0 users saw next to the date. */}
+          {(topic.totalArticles ?? 0) > 0 && (
             <span className="text-[11px] text-muted-foreground">
               {topic.totalArticles} articles · {topic.totalNewsrooms} distinct newsrooms
             </span>
@@ -604,7 +607,7 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
             <Clock className="h-3.5 w-3.5 text-muted-foreground" />
             {mounted ? formatTime(topic.latestSeen) : ""}
           </span>
-          {topic.localCoverage && topic.localCoverage > 0 && (
+          {(topic.localCoverage ?? 0) > 0 && (
             <Badge variant="outline" className="text-[10px]">
               {topic.localCoverage} local
             </Badge>
