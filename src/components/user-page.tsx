@@ -70,10 +70,10 @@ const PERSONALIZE_TOPICS = [
 type TabId = 'profile' | 'feed' | 'theme' | 'alerts'
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
-  { id: 'profile', label: 'Profile', icon: <UserCircle className="h-4 w-4" /> },
-  { id: 'feed', label: 'Feed', icon: <Target className="h-4 w-4" /> },
-  { id: 'theme', label: 'Theme', icon: <Palette className="h-4 w-4" /> },
-  { id: 'alerts', label: 'Alerts', icon: <Bell className="h-4 w-4" /> },
+  { id: 'profile', label: 'Profile', icon: <UserCircle className="h-[18px] w-[18px]" /> },
+  { id: 'feed', label: 'Feed', icon: <Target className="h-[18px] w-[18px]" /> },
+  { id: 'theme', label: 'Theme', icon: <Palette className="h-[18px] w-[18px]" /> },
+  { id: 'alerts', label: 'Alerts', icon: <Bell className="h-[18px] w-[18px]" /> },
 ]
 
 // Easing curve shared across the page sections.
@@ -382,52 +382,55 @@ export function UserPage({ onClose }: UserPageProps) {
         </div>
       </div>
 
-      {/* ── Sticky tab bar ──
-          Pinned directly under the header, ALWAYS in view. Four tabs, one
-          tap each — replaces the old "scroll a meter to reach the
-          notification settings" experience. */}
+      {/* ── Sticky tab bar — bold segmented control ──
+          Pinned directly under the header, ALWAYS in view. The four tabs
+          ARE this page's navigation, so they are styled to STAND OUT: a
+          bordered control box (not floating text labels) with a SOLID
+          filled pill that slides between tabs. The pill inverts
+          foreground/background — maximum contrast in every theme, light
+          or dark. One tap each — replaces the old "scroll a meter to
+          reach the notification settings" experience. */}
       <div className="sticky top-14 z-10 border-b bg-background/95 backdrop-blur">
-        <div
-          className="mx-auto grid max-w-2xl grid-cols-4 gap-1 px-2 py-1.5"
-          role="tablist"
-          aria-label="Account sections"
-        >
-          {TABS.map((t) => {
-            const isActive = tab === t.id
-            return (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                onClick={() => switchTab(t.id)}
-                className={cn(
-                  'relative flex flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-[11px] font-semibold transition-colors',
-                  isActive
-                    ? 'text-foreground'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                <span
+        <div className="mx-auto max-w-2xl px-3 py-2">
+          <div
+            className="grid grid-cols-4 gap-1 rounded-xl border border-border/70 bg-muted/40 p-1 shadow-sm"
+            role="tablist"
+            aria-label="Account sections"
+          >
+            {TABS.map((t) => {
+              const isActive = tab === t.id
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => switchTab(t.id)}
                   className={cn(
-                    'flex h-7 w-9 items-center justify-center rounded-md transition-colors',
-                    isActive ? 'bg-foreground/10' : '',
+                    'relative flex min-h-[52px] items-center justify-center rounded-lg px-1 transition-colors active:scale-[.98]',
+                    isActive
+                      ? 'text-background'
+                      : 'text-muted-foreground hover:text-foreground',
                   )}
                 >
-                  {t.icon}
-                </span>
-                {t.label}
-                {/* Active indicator — slides under the active tab. */}
-                {isActive && (
-                  <motion.span
-                    layoutId="account-tab-underline"
-                    className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-foreground"
-                    transition={{ duration: 0.25, ease: EASE_OUT }}
-                  />
-                )}
-              </button>
-            )
-          })}
+                  {/* Solid active pill — slides between the four tabs. */}
+                  {isActive && (
+                    <motion.span
+                      layoutId="account-tab-pill"
+                      aria-hidden="true"
+                      className="absolute inset-0 rounded-lg bg-foreground shadow-md"
+                      transition={{ duration: 0.28, ease: EASE_OUT }}
+                    />
+                  )}
+                  {/* relative z-10 keeps the label + icon above the pill. */}
+                  <span className="relative z-10 flex flex-col items-center gap-1">
+                    {t.icon}
+                    <span className="text-xs font-semibold leading-none">{t.label}</span>
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
 

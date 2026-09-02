@@ -130,11 +130,41 @@ export default function RootLayout({
         <link rel="preload" as="fetch" href="/api/news?category=relevant&limit=24&slim=1&minCoverage=1" crossOrigin="anonymous" fetchPriority="high" />
         {/* Preload the icon — used in the header, shown immediately on load */}
         <link rel="preload" as="image" href="/icon-192.png" fetchPriority="high" />
+        {/* ── PWA launch gate — decides whether the splash plays ──
+            Runs synchronously in <head>, BEFORE the first paint, so the
+            decision is made before the splash element even renders.
+            The splash now plays ONLY when the app is FRESHLY OPENED as an
+            installed PWA:
+              • display-mode standalone (or minimal-ui) — i.e. launched from
+                the home screen / app drawer, NOT a normal browser tab. The
+                website NEVER shows the animation.
+              • NavigationTiming type === 'navigate' — a FRESH document load.
+                Pull-to-refresh, F5, location.reload() and the service-
+                worker-update reload are all type 'reload', and back/forward
+                returns are 'back_forward' — none of them replay the splash.
+            When both pass, the script adds `nw-launch` to <html>; the
+            inlined splash CSS below only renders #nw-splash under that
+            class. <html> already carries suppressHydrationWarning, so the
+            pre-hydration class mutation is hydration-safe (same pattern as
+            the theme scripts). window.__NW_LAUNCH exposes the decision for
+            debugging/testing. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var standalone=false;try{standalone=window.matchMedia('(display-mode: standalone)').matches||window.matchMedia('(display-mode: minimal-ui)').matches}catch(e){}var navType='navigate';try{var navs=performance.getEntriesByType('navigation');if(navs&&navs.length&&navs[0].type)navType=navs[0].type}catch(e){}window.__NW_LAUNCH={standalone:standalone,navType:navType};if(standalone&&navType==='navigate'){document.documentElement.classList.add('nw-launch')}}catch(e){}})();`,
+          }}
+        />
         {/* ── PWA launch splash — full-screen tri-color animation ──
             Critical CSS, inlined so it paints with the very first HTML
             byte (no waiting for the CSS bundle). REPLACES the previous
             minimal icon splash — this is the one and only launch
             animation (nothing plays after it).
+
+            PWA-ONLY + FRESH-OPEN-ONLY (see the launch-gate script above):
+            the base rule keeps #nw-splash display:none — it only becomes
+            display:flex under html.nw-launch, which the gate script sets
+            exclusively for a freshly opened installed PWA. Browser tabs
+            and in-app reloads (pull-to-refresh, SW-update reload, F5) and
+            back/forward navigations never see it.
 
             The design uses NeutralWire's 3 spectrum colors — blue (left),
             grey (center), red (right):
@@ -147,17 +177,18 @@ export default function RootLayout({
             HYDRATION-SAFE BY DESIGN: 100% CSS — the out-animation
             (0.32s hold + 0.16s fade, animation-fill-mode: forwards)
             retires the layer at a fixed ~480ms with ZERO JavaScript DOM
-            mutation, so React never sees an attribute mismatch during
-            hydration and nothing can ever re-show it. The whole
-            animation therefore never lasts more than half a second, on
-            ANY connection speed.
+            mutation of the splash element, so React never sees an
+            attribute mismatch during hydration and nothing can ever
+            re-show it. The whole animation therefore never lasts more
+            than half a second, on ANY connection speed.
             prefers-color-scheme matches the pre-paint html theme class
             (default theme is "system"), so dark-mode users see a dark
             splash, not a white flash. */}
         <style
           dangerouslySetInnerHTML={{
             __html: `
-#nw-splash{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fff;color:#171717;pointer-events:none;animation:nw-splash-out .16s ease .32s forwards}
+#nw-splash{position:fixed;inset:0;z-index:9999;display:none;overflow:hidden;background:#fff;color:#171717;pointer-events:none}
+html.nw-launch #nw-splash{display:flex;align-items:center;justify-content:center;animation:nw-splash-out .16s ease .32s forwards}
 @media (prefers-color-scheme:dark){#nw-splash{background:#0a0a0a;color:#ececec}}
 #nw-splash .nw-sp-orb{position:absolute;width:62vmax;height:62vmax;border-radius:50%;filter:blur(52px);opacity:0;animation:nw-sp-orb .34s ease-out .02s forwards}
 #nw-splash .nw-sp-orb-b{top:-18vmax;left:-16vmax;background:radial-gradient(circle at 35% 35%,rgba(59,130,246,.5),rgba(59,130,246,0) 68%)}
@@ -189,15 +220,20 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
         {/* ── PWA launch splash — full-screen tri-color animation ──
-            Server-rendered so it paints with the first HTML — the PWA opens
-            straight into the branded animation instead of a white screen.
-            Blue slides in from the left, red from the right, grey expands
-            from the center — the three converge into the NeutralWire bias
-            bar over large tinted screen orbs. The inlined CSS above fades
-            the whole layer out and retires it (opacity 0, visibility
-            hidden, animation-fill-mode: forwards) at a FIXED ~480ms —
-            320ms play + 160ms fade — so it never lasts more than half a
-            second no matter how slow the connection is.
+            Server-rendered (identical HTML for everyone → hydration is a
+            no-op) but INVISIBLE by default: the CSS only displays it under
+            html.nw-launch, which the head launch-gate script sets strictly
+            when the app is freshly opened as an installed PWA — never in a
+            browser tab, never on pull-to-refresh/reload/back-forward.
+            When it does play, the PWA opens straight into the branded
+            animation instead of a white screen: blue slides in from the
+            left, red from the right, grey expands from the center — the
+            three converge into the NeutralWire bias bar over large tinted
+            screen orbs. The inlined CSS above fades the whole layer out
+            and retires it (opacity 0, visibility hidden,
+            animation-fill-mode: forwards) at a FIXED ~480ms — 320ms play
+            + 160ms fade — so it never lasts more than half a second no
+            matter how slow the connection is.
             NO JavaScript touches this element: React renders it once, the
             CSS animation handles its whole lifecycle, and nothing can
             re-show it or fight hydration. */}
