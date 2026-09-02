@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { cookies } from 'next/headers'
 import { firebaseRead } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import PageClient from './page-client'
@@ -20,6 +21,13 @@ export const revalidate = 0
 //
 // Module-level 5s memo bounds Firebase reads on warm instances; flipping
 // the flag in /debug and refreshing therefore applies within ≤5s.
+//
+// PER-USER OVERRIDE: any visitor can pick their own design in Account →
+// Feature Flags ("Your header style"). It's stored in the `nw_nav` cookie —
+// read HERE, server-side, so the user's own choice is in the first paint
+// with the same zero-flash guarantee. The personal cookie WINS over the
+// site-wide default; when it's absent (the vast majority), the Firebase
+// flag decides. See src/lib/nav-override.ts.
 type SubtopicNavMode =
   | 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
   | 'maxipills' | 'headerdock' | 'tabsarrow' | 'cardsarrow'
@@ -123,6 +131,21 @@ export async function generateMetadata({
 export default async function Page() {
   // Read the subtopic-nav flag on the SERVER so the SSR HTML already
   // renders the selected header design (no default-then-swap flash).
-  const initialSubtopicNav = await getSubtopicNav()
+  let initialSubtopicNav = await getSubtopicNav()
+
+  // Personal override (Account → Feature Flags → "Your header style"):
+  // a cookie, so the server sees it during SSR — the visitor's own pick
+  // renders in the very first paint, no flash. Invalid values fall back
+  // to the site-wide default above.
+  try {
+    const cookieNav = (await cookies()).get('nw_nav')?.value
+    if (cookieNav && NAV_MODES.includes(cookieNav as SubtopicNavMode)) {
+      initialSubtopicNav = cookieNav as SubtopicNavMode
+    }
+  } catch {
+    // cookies() can throw in some render modes — the global flag already
+    // loaded, so just fall back to it.
+  }
+
   return <PageClient initialSubtopicNav={initialSubtopicNav} />
 }

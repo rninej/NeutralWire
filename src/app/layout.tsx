@@ -130,10 +130,64 @@ export default function RootLayout({
         <link rel="preload" as="fetch" href="/api/news?category=relevant&limit=24&slim=1&minCoverage=1" crossOrigin="anonymous" fetchPriority="high" />
         {/* Preload the icon — used in the header, shown immediately on load */}
         <link rel="preload" as="image" href="/icon-192.png" fetchPriority="high" />
+        {/* ── PWA launch splash — critical CSS, inlined so it paints with the
+            very first HTML byte (no waiting for the CSS bundle). The splash
+            shows the app icon + wordmark + a shimmer bar while the app boots.
+            HYDRATION-SAFE BY DESIGN: it is 100% CSS — the out-animation
+            (0.3s hold + 0.15s fade, animation-fill-mode: forwards) retires
+            the layer at a fixed ~450ms with ZERO JavaScript DOM mutation, so
+            React never sees an attribute mismatch during hydration and
+            nothing can ever re-show it. The whole animation therefore never
+            lasts more than half a second, on ANY connection speed.
+            prefers-color-scheme matches the pre-paint html theme class
+            (default theme is "system"), so dark-mode users see a dark
+            splash, not a white flash. Colors are neutral on purpose:
+            custom family themes are applied client-side AFTER the splash
+            is already gone. */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
+#nw-splash{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:#fff;color:#171717;pointer-events:none;animation:nw-splash-out .15s ease .3s forwards}
+@media (prefers-color-scheme:dark){#nw-splash{background:#0a0a0a;color:#ececec}}
+#nw-splash .nw-sp-wrap{display:flex;flex-direction:column;align-items:center;gap:14px;transform:translateZ(0)}
+#nw-splash .nw-sp-icon{width:56px;height:56px;border-radius:14px;animation:nw-sp-pop .28s cubic-bezier(.16,1,.3,1) both}
+#nw-splash .nw-sp-word{font-family:var(--font-geist-sans),system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:20px;font-weight:800;letter-spacing:.02em;animation:nw-sp-fade .3s ease both .05s}
+#nw-splash .nw-sp-bar{width:120px;height:3px;border-radius:99px;overflow:hidden;background:rgba(127,127,127,.22)}
+#nw-splash .nw-sp-bar i{display:block;height:100%;width:40%;border-radius:99px;background:currentColor;opacity:.55;animation:nw-sp-slide .6s ease-in-out infinite}
+@keyframes nw-splash-out{to{opacity:0;visibility:hidden}}
+@keyframes nw-sp-pop{from{transform:scale(.7);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes nw-sp-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes nw-sp-slide{0%{transform:translateX(-140%)}100%{transform:translateX(320%)}}
+@media (prefers-reduced-motion:reduce){#nw-splash .nw-sp-icon,#nw-splash .nw-sp-word,#nw-splash .nw-sp-bar i{animation:none}#nw-splash .nw-sp-bar i{transform:translateX(60%);opacity:.35}}
+            `,
+          }}
+        />
       </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
+        {/* ── PWA launch splash (≤0.5s brand flash) ──
+            Server-rendered so it paints with the first HTML — the PWA opens
+            straight into branded content instead of a white screen. The
+            inlined CSS above fades it out and retires it (opacity 0,
+            visibility hidden, animation-fill-mode: forwards) at a FIXED
+            ~450ms — 300ms hold + 150ms fade — so it never lasts more than
+            half a second no matter how slow the connection is.
+            NO JavaScript touches this element: React renders it once, the
+            CSS animation handles its whole lifecycle, and nothing can
+            re-show it or fight hydration. */}
+        <div id="nw-splash" aria-hidden="true">
+          <div className="nw-sp-wrap">
+            {/* Plain <img> on purpose: it's preloaded in <head>, above
+                React's control, and must render identically before and
+                after hydration. */}
+            <img className="nw-sp-icon" src="/icon-192.png" alt="" width={56} height={56} />
+            <div className="nw-sp-word">NeutralWire</div>
+            <div className="nw-sp-bar">
+              <i />
+            </div>
+          </div>
+        </div>
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

@@ -58,6 +58,7 @@ import { detectCountryClient, detectCountryClientFresh, DEFAULT_COUNTRY } from '
 import { getDeviceId } from '@/lib/referral'
 import { trackPageView } from '@/lib/analytics-tracker'
 import { usePlatform } from '@/lib/use-platform'
+import { NAV_STYLE_EVENT, readNavOverride, type NavMode } from '@/lib/nav-override'
 import { restoreGradient } from '@/lib/use-theme-reveal'
 import { archiveTopicsInBackground } from '@/lib/background-archiver'
 import {
@@ -361,12 +362,14 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
   const [apiSearchResult, setApiSearchResult] = useState<SearchResponse | null>(null)
   const [localSearchAttempted, setLocalSearchAttempted] = useState(false)
 
-  // --- Subtopic header style (server-side feature flag) ---
+  // --- Subtopic header style (server-side feature flag + personal override) ---
   // Which of the 10 category-header designs this visitor sees. The server
-  // passes the current flag value as initialSubtopicNav (SSR renders it
-  // directly — no flash). A lightweight client fetch still runs so a flag
-  // flip reaches already-loaded pages on their next visit; any fetch
-  // failure keeps the server-provided value.
+  // passes the EFFECTIVE value as initialSubtopicNav — the visitor's own
+  // pick (nw_nav cookie) when set, otherwise the site-wide flag — so SSR
+  // renders it directly (no flash). A lightweight client fetch still runs
+  // so a flag flip reaches already-loaded pages on their next visit; any
+  // fetch failure keeps the server-provided value. A personal override
+  // always WINS: the fetch result is ignored for that visitor.
   const [subtopicNav, setSubtopicNav] = useState<NavVariant>(
     initialSubtopicNav ?? 'cards',
   )
@@ -384,6 +387,10 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
           !cancelled &&
           ['classic', 'tabs', 'tiles', 'sheet', 'dock', 'maxipills', 'headerdock', 'tabsarrow', 'cardsarrow'].includes(v)
         ) {
+          // Personal override (Account → Feature Flags → "Your header
+          // style") beats the site default — never stomp the visitor's
+          // own choice with the global flag.
+          if (readNavOverride()) return
           setSubtopicNav((prev) => (prev === v ? prev : (v as NavVariant)))
         }
       })
@@ -391,6 +398,22 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
     return () => {
       cancelled = true
     }
+  }, [])
+
+  // --- Live nav-style changes from Account → Feature Flags ---
+  // The Feature Flags card dispatches NAV_STYLE_EVENT when the visitor
+  // picks their own header design (or returns to "Follow site default").
+  // Applying it here means the change is visible IMMEDIATELY while the
+  // Account overlay is still open — no refresh needed. Future page loads
+  // render the same design server-side (page.tsx reads the nw_nav cookie
+  // during SSR), so there's no flash on refresh either.
+  useEffect(() => {
+    const onNavStyle = (e: Event) => {
+      const v = (e as CustomEvent<NavMode>).detail
+      if (v) setSubtopicNav(v)
+    }
+    window.addEventListener(NAV_STYLE_EVENT, onNavStyle)
+    return () => window.removeEventListener(NAV_STYLE_EVENT, onNavStyle)
   }, [])
 
   // --- News data state ---
