@@ -1,6 +1,10 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v22: DARK OS LAUNCH — manifest.json background_color/theme_color →
+//      #0a0a0a + iOS apple-touch-startup-image set. The SW precaches
+//      /manifest.json, so bumping the shell cache forces installed PWAs
+//      to drop the old white-launch manifest and pick up the dark one.
 // v21: STALE-NEWS FIX — /api/news is now NETWORK-FIRST whenever the cached
 //      copy is older than 5 minutes. Previously the SW served a cached
 //      response INSTANTLY no matter its age and only revalidated in the
@@ -28,9 +32,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v21'
-const API_CACHE = 'neutralwire-api-v21'
-const IMG_CACHE = 'neutralwire-img-v21'
+const SHELL_CACHE = 'neutralwire-shell-v22'
+const API_CACHE = 'neutralwire-api-v22'
+const IMG_CACHE = 'neutralwire-img-v22'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
