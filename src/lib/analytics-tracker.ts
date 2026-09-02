@@ -21,7 +21,14 @@
  *   - Respects sendBeacon for reliability on page unload
  *   - No cookies — uses localStorage for session ID
  *   - Country detected server-side (privacy: no precise location)
+ *   - COOKIE-CONSENT AWARE: this is a "non-necessary" data flow. If the
+ *     visitor rejected non-necessary cookies, NOTHING is ever sent. If
+ *     they haven't decided yet (banner is up), the ping WAITS for their
+ *     decision — so a first visit is never tracked behind the user's
+ *     back; it only sends after "Accept all".
  */
+
+import { getCookieChoice, onCookieChoice } from '@/lib/cookie-consent'
 
 const SESSION_ID_KEY = 'neutralwire:analytics-session'
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000 // 30 min idle = new session
@@ -87,16 +94,43 @@ function detectOS(ua: string): string {
 }
 
 let trackedThisLoad = false
+// Absolute one-ping-per-load guard for the consent-deferred path (the
+// consent event can in theory fire more than once in a session).
+let pingFiredThisLoad = false
 
 export function trackPageView(deviceId: string): void {
   if (trackedThisLoad) return
   if (typeof window === 'undefined') return
+
+  // ── Cookie consent gate (non-necessary data flow) ──
+  // Rejected → never track. Undecided (banner up) → WAIT for the
+  // decision and only track on an explicit "Accept all".
+  const choice = getCookieChoice()
+  if (choice === 'rejected') {
+    trackedThisLoad = true
+    return
+  }
+  if (choice === null) {
+    trackedThisLoad = true // claim the slot; the handler below may still fire
+    onCookieChoice((c) => {
+      if (c === 'accepted') sendPageViewPing(deviceId)
+    })
+    return
+  }
+
+  sendPageViewPing(deviceId)
+}
+
+function sendPageViewPing(deviceId: string): void {
+  if (typeof window === 'undefined') return
+  if (pingFiredThisLoad) return
 
   // Don't track the debug/analytics page itself (skews metrics)
   const path = window.location.pathname
   if (path.startsWith('/debug')) return
 
   trackedThisLoad = true
+  pingFiredThisLoad = true
 
   // Check if we already tracked this path in this session
   // (prevents double-counting on fast re-renders)

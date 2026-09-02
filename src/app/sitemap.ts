@@ -43,6 +43,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: 1.0,
   })
 
+  // Privacy policy (linked from the cookie banner — stable page)
+  entries.push({
+    url: `${SITE_URL}/privacy`,
+    changeFrequency: 'yearly',
+    priority: 0.3,
+  })
+
   // Category pages
   for (const cat of CATEGORIES) {
     entries.push({

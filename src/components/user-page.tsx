@@ -14,10 +14,11 @@ import {
   RotateCcw,
   Heart,
   Bell,
-  TrendingUp,
   Palette,
   Target,
   ExternalLink,
+  ChevronDown,
+  ShieldCheck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -59,10 +60,50 @@ const PERSONALIZE_TOPICS = [
   { id: 'top', label: 'Top Stories', emoji: '📰' },
 ] as const
 
+// ── Tabs ──
+// The Account page used to be one very long column (identity → referral
+// → interests → feature flags → theme → gradients → notifications →
+// support) — over a screen's worth of scrolling on mobile. It is now a
+// fixed 4-tab layout with a tab bar pinned UNDER the header: every
+// section is exactly ONE tap away, and each tab's content fits roughly
+// one screen. Everything is reachable without "scrolling a meter".
+type TabId = 'profile' | 'feed' | 'theme' | 'alerts'
+
+const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
+  { id: 'profile', label: 'Profile', icon: <UserCircle className="h-4 w-4" /> },
+  { id: 'feed', label: 'Feed', icon: <Target className="h-4 w-4" /> },
+  { id: 'theme', label: 'Theme', icon: <Palette className="h-4 w-4" /> },
+  { id: 'alerts', label: 'Alerts', icon: <Bell className="h-4 w-4" /> },
+]
+
 // Easing curve shared across the page sections.
 const EASE_OUT = [0.16, 1, 0.3, 1] as const
 
 export function UserPage({ onClose }: UserPageProps) {
+  const pageRef = React.useRef<HTMLDivElement | null>(null)
+
+  // ── Active tab (persisted for the session so reopening lands where
+  // the user left off — nice touch, zero cost) ──
+  const [tab, setTab] = React.useState<TabId>(() => {
+    try {
+      const saved = sessionStorage.getItem('neutralwire:account-tab')
+      if (saved === 'profile' || saved === 'feed' || saved === 'theme' || saved === 'alerts') {
+        return saved
+      }
+    } catch {}
+    return 'profile'
+  })
+
+  const switchTab = (t: TabId) => {
+    setTab(t)
+    try {
+      sessionStorage.setItem('neutralwire:account-tab', t)
+    } catch {}
+    // Tabs replace long scrolling — jump back to the top of the new
+    // section so the tab bar + content always start aligned.
+    pageRef.current?.scrollTo({ top: 0 })
+  }
+
   // ── Guest name ──
   // getOrCreateGuestName is synchronous (reads localStorage) — no flicker.
   const [guestName] = React.useState<string>(() => getOrCreateGuestName())
@@ -83,11 +124,18 @@ export function UserPage({ onClose }: UserPageProps) {
   const [notifFrequency, setNotifFrequency] = React.useState<'daily3' | 'all'>('daily3')
   const [notifLoading, setNotifLoading] = React.useState(false)
 
-  // Lock body scroll when open.
+  // ── Collapsible custom gradient maker (Theme tab) ──
+  const [showGradientMaker, setShowGradientMaker] = React.useState(false)
+
+  // Lock body scroll when open. Also announce open/close so other
+  // overlays (PWA install banner, z-60/70) can yield while the Account
+  // page is up instead of stacking on top of it.
   React.useEffect(() => {
     document.body.style.overflow = 'hidden'
+    window.dispatchEvent(new CustomEvent('neutralwire:account-opened'))
     return () => {
       document.body.style.overflow = ''
+      window.dispatchEvent(new CustomEvent('neutralwire:account-closed'))
     }
   }, [])
 
@@ -310,15 +358,9 @@ export function UserPage({ onClose }: UserPageProps) {
     }
   }
 
-  // Section reveal animation: staggered fade-in + slide-up.
-  const sectionMotion = (delay: number) => ({
-    initial: { opacity: 0, y: 12 },
-    animate: { opacity: 1, y: 0 },
-    transition: { duration: 0.35, delay, ease: EASE_OUT },
-  })
-
   return (
     <motion.div
+      ref={pageRef}
       className="fixed inset-0 z-50 overflow-y-auto bg-background"
       role="dialog"
       aria-modal="true"
@@ -329,7 +371,7 @@ export function UserPage({ onClose }: UserPageProps) {
       transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
     >
       {/* Sticky top bar */}
-      <div className="glass sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
+      <div className="glass sticky top-0 z-20 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5 flex-shrink-0">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
@@ -340,318 +382,426 @@ export function UserPage({ onClose }: UserPageProps) {
         </div>
       </div>
 
-      <div className="mx-auto max-w-2xl px-4 py-6 space-y-5">
-        {/* ── Guest name ── */}
-        <motion.div {...sectionMotion(0)}>
-          <Card className="p-5">
-            <div className="flex items-center gap-4">
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-foreground text-background">
-                <UserCircle className="h-7 w-7" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wider">
-                  Signed in as
-                </div>
-                <div className="text-xl font-bold truncate">{guestName}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  Your guest ID is used to personalize your feed + track your
-                  referrals. No login required.
-                </div>
-              </div>
-            </div>
-          </Card>
-        </motion.div>
-
-        {/* ── Refer others ── */}
-        <motion.div {...sectionMotion(0.05)}>
-          <Card className="p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Gift className="h-4 w-4 text-amber-500" />
-              <h2 className="text-sm font-bold">Refer others</h2>
-            </div>
-            <p className="mb-4 text-xs text-muted-foreground">
-              Share your referral link. When friends install the app and use it
-              for 3 days, you help grow the NeutralWire community.
-            </p>
-
-            {/* Stats */}
-            {stats && (
-              <div className="mb-4 grid grid-cols-2 gap-3">
-                <div className="rounded-lg border p-3 text-center">
-                  <Users className="mx-auto mb-1 h-4 w-4 text-muted-foreground" />
-                  <div className="text-xl font-bold">{stats.totalClicks}</div>
-                  <div className="text-[10px] text-muted-foreground">Link clicks</div>
-                </div>
-                <div className="rounded-lg border p-3 text-center">
-                  <Check className="mx-auto mb-1 h-4 w-4 text-emerald-500" />
-                  <div className="text-xl font-bold">{stats.successfulReferrals}</div>
-                  <div className="text-[10px] text-muted-foreground">Successful</div>
-                </div>
-              </div>
-            )}
-
-            {referralLoading ? (
-              <div className="rounded-lg border p-4 text-center text-xs text-muted-foreground">
-                Generating your referral link…
-              </div>
-            ) : referralCode ? (
-              <>
-                <div className="mb-2 text-[10px] font-semibold uppercase text-muted-foreground">
-                  Your referral code
-                </div>
-                <div className="mb-3 text-2xl font-bold tracking-widest text-center font-mono py-2 rounded-md bg-muted/40">
-                  {referralCode}
-                </div>
-                <div className="mb-2 text-[10px] font-semibold uppercase text-muted-foreground">
-                  Your referral link
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={referralUrl}
-                    readOnly
-                    className="flex-1 rounded-md border bg-muted/30 px-3 py-2 text-xs font-mono"
-                    onFocus={(e) => e.target.select()}
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleCopyLink}
-                    className="gap-1.5 flex-shrink-0"
-                  >
-                    {copied ? (
-                      <>
-                        <Check className="h-4 w-4" />
-                        <span className="hidden sm:inline">Copied!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-4 w-4" />
-                        <span className="hidden sm:inline">Copy</span>
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleShare}
-                    className="gap-1.5 flex-shrink-0"
-                  >
-                    <Share2 className="h-4 w-4" />
-                    <span className="hidden sm:inline">Share</span>
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <div className="rounded-lg border p-4 text-center text-xs text-muted-foreground">
-                Could not load your referral code. Check your connection and
-                reopen this page.
-              </div>
-            )}
-          </Card>
-        </motion.div>
-
-        {/* ── Ultra-personalize feed ── */}
-        <motion.div {...sectionMotion(0.1)}>
-          <Card className="p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Target className="h-4 w-4 text-blue-500" />
-              <h2 className="text-sm font-bold">Ultra-personalize feed</h2>
-            </div>
-            <p className="mb-4 text-xs text-muted-foreground">
-              Toggle the subtopics you care about. We&apos;ll boost stories
-              matching your interests in your Relevant feed. Your picks also
-              shape the daily notification briefing.
-            </p>
-
-            <div className="space-y-1.5">
-              {PERSONALIZE_TOPICS.map((t, i) => {
-                const isOn = interests.includes(t.id)
-                return (
-                  <motion.div
-                    key={t.id}
-                    initial={{ opacity: 0, x: -8 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.25, delay: 0.12 + i * 0.03, ease: EASE_OUT }}
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors',
-                      isOn ? 'border-foreground/30 bg-foreground/5' : 'border-border hover:bg-muted/40',
-                    )}
-                  >
-                    <span className="text-lg" aria-hidden>{t.emoji}</span>
-                    <span className="flex-1 text-sm font-medium">{t.label}</span>
-                    <Switch
-                      checked={isOn}
-                      onCheckedChange={(checked) => handleToggleInterest(t.id, checked)}
-                      aria-label={`Toggle ${t.label}`}
-                    />
-                  </motion.div>
-                )
-              })}
-            </div>
-
-            <div className="mt-4 flex items-center justify-between">
-              <div className="text-[11px] text-muted-foreground">
-                {interests.length === 0
-                  ? 'No interests selected — feed shows general news.'
-                  : `${interests.length} ${interests.length === 1 ? 'interest' : 'interests'} selected.`}
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleResetPersonalization}
-                disabled={interests.length === 0}
-                className="gap-1.5 text-muted-foreground hover:text-foreground"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Reset personalization
-              </Button>
-            </div>
-          </Card>
-        </motion.div>
-
-        {/* ── Feature flags — subtopic header style for ALL users ── */}
-        <motion.div {...sectionMotion(0.125)}>
-          <FeatureFlagsCard />
-        </motion.div>
-
-        {/* ── Theme switcher ── */}
-        <motion.div {...sectionMotion(0.15)}>
-          <Card className="p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Palette className="h-4 w-4 text-purple-500" />
-              <h2 className="text-sm font-bold">Theme</h2>
-            </div>
-            <p className="mb-4 text-xs text-muted-foreground">
-              Pick a color scheme and a light/dark mode. Auto mode follows
-              your device&apos;s setting — day brings the light version of
-              your theme, night the dark one. The header toggle switches
-              between the light and dark versions of the SAME theme.
-              Switching uses a circular reveal from where you tap.
-            </p>
-
-            {/* Solid themes */}
-            <ThemeSwitcher />
-
-            {/* Gradient presets */}
-            <div className="mt-5">
-              <h3 className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Gradient Backgrounds
-              </h3>
-              <p className="mb-3 text-xs text-muted-foreground">
-                Pick a gradient to overlay on the dark theme.
-              </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {GRADIENT_PRESETS.map((g) => (
-                  <GradientPreset key={g.id} id={g.id} label={g.label} gradient={g.gradient} />
-                ))}
-              </div>
-            </div>
-
-            {/* Custom gradient maker */}
-            <CustomGradientMaker />
-          </Card>
-        </motion.div>
-
-        {/* ── Notifications ── */}
-        <motion.div {...sectionMotion(0.2)}>
-          <Card className="p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Bell className="h-4 w-4 text-cyan-500" />
-              <h2 className="text-sm font-bold">Notifications</h2>
-            </div>
-            {!notifEnabled ? (
-              <>
-                <p className="mb-3 text-xs text-muted-foreground">
-                  Get 3 news notifications every day — morning, lunch, and
-                  evening. Never miss an important story.
-                </p>
-                <Button
-                  size="sm"
-                  onClick={handleEnableNotifications}
-                  disabled={notifLoading}
-                  className="gap-1.5"
-                >
-                  <Bell className="h-4 w-4" />
-                  {notifLoading ? 'Enabling…' : 'Enable notifications'}
-                </Button>
-              </>
-            ) : (
-              <>
-                <div className="mb-3 flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
-                  <Check className="h-3.5 w-3.5" />
-                  Notifications enabled
-                </div>
-                <div className="mb-2 text-xs font-medium text-muted-foreground">
-                  How often do you want news alerts?
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleFrequencyChange('daily3')}
-                    className={cn(
-                      'rounded-lg border p-3 text-left transition-all',
-                      notifFrequency === 'daily3'
-                        ? 'border-foreground bg-foreground/5 ring-1 ring-foreground/20'
-                        : 'hover:bg-muted/50',
-                    )}
-                  >
-                    <div className="text-sm font-semibold">3 per day</div>
-                    <div className="text-[10px] text-muted-foreground">
-                      Morning, lunch & evening
-                    </div>
-                  </button>
-                  <button
-                    onClick={() => handleFrequencyChange('all')}
-                    className={cn(
-                      'rounded-lg border p-3 text-left transition-all',
-                      notifFrequency === 'all'
-                        ? 'border-foreground bg-foreground/5 ring-1 ring-foreground/20'
-                        : 'hover:bg-muted/50',
-                    )}
-                  >
-                    <div className="text-sm font-semibold">All news</div>
-                    <div className="text-[10px] text-muted-foreground">
-                      Every new story (non-stop)
-                    </div>
-                  </button>
-                </div>
-              </>
-            )}
-          </Card>
-        </motion.div>
-
-        {/* ── Support NeutralWire (Ko-fi) ── */}
-        <motion.div {...sectionMotion(0.25)}>
-          <Card className="p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Heart className="h-4 w-4 fill-pink-400 text-pink-500" strokeWidth={2} />
-              <h2 className="text-sm font-bold">Support NeutralWire</h2>
-            </div>
-            <p className="mb-4 text-xs text-muted-foreground">
-              NeutralWire is free, ad-free, and paywall-free. If you find it
-              useful, consider buying us a coffee on Ko-fi. Every contribution
-              helps cover server + AI costs.
-            </p>
-            <a
-              href="https://ko-fi.com/neutralwire"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-md bg-pink-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-pink-600 active:scale-95 transition-all"
-            >
-              <Heart className="h-4 w-4 fill-white" strokeWidth={2} />
-              Donate on Ko-fi
-              <ExternalLink className="h-3.5 w-3.5 opacity-80" />
-            </a>
-          </Card>
-        </motion.div>
-
-        {/* ── Footer / how-it-works hint ── */}
-        <motion.div
-          {...sectionMotion(0.3)}
-          className="px-1 pb-4 text-center text-[11px] text-muted-foreground"
+      {/* ── Sticky tab bar ──
+          Pinned directly under the header, ALWAYS in view. Four tabs, one
+          tap each — replaces the old "scroll a meter to reach the
+          notification settings" experience. */}
+      <div className="sticky top-14 z-10 border-b bg-background/95 backdrop-blur">
+        <div
+          className="mx-auto grid max-w-2xl grid-cols-4 gap-1 px-2 py-1.5"
+          role="tablist"
+          aria-label="Account sections"
         >
-          <Sparkles className="inline-block h-3 w-3 mr-1 -mt-0.5" />
-          All settings are saved automatically to this device.
-        </motion.div>
+          {TABS.map((t) => {
+            const isActive = tab === t.id
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => switchTab(t.id)}
+                className={cn(
+                  'relative flex flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-[11px] font-semibold transition-colors',
+                  isActive
+                    ? 'text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <span
+                  className={cn(
+                    'flex h-7 w-9 items-center justify-center rounded-md transition-colors',
+                    isActive ? 'bg-foreground/10' : '',
+                  )}
+                >
+                  {t.icon}
+                </span>
+                {t.label}
+                {/* Active indicator — slides under the active tab. */}
+                {isActive && (
+                  <motion.span
+                    layoutId="account-tab-underline"
+                    className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-foreground"
+                    transition={{ duration: 0.25, ease: EASE_OUT }}
+                  />
+                )}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="mx-auto max-w-2xl px-4 pb-8 pt-4">
+        {/* Tab content — quick fade/slide on switch, no long staggered
+            reveals (the page is meant to feel instant now). */}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={tab}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18, ease: EASE_OUT }}
+            role="tabpanel"
+          >
+            {/* ═══════════════════ PROFILE ═══════════════════ */}
+            {tab === 'profile' && (
+              <div className="space-y-4">
+                {/* Identity — compact single row */}
+                <Card className="p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+                      <UserCircle className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wider">
+                        Signed in as
+                      </div>
+                      <div className="truncate text-lg font-bold leading-tight">{guestName}</div>
+                    </div>
+                    <div className="hidden sm:block">
+                      <Badge variant="secondary" className="text-[10px]">Guest — no login</Badge>
+                    </div>
+                  </div>
+                  <p className="mt-2.5 text-xs leading-relaxed text-muted-foreground">
+                    Your guest ID keeps your feed, streaks, and referrals on this
+                    device — no account, no email, nothing personal.
+                  </p>
+                </Card>
+
+                {/* Refer others — compact */}
+                <Card className="p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Gift className="h-4 w-4 text-amber-500" />
+                    <h2 className="text-sm font-bold">Refer others</h2>
+                    {stats && (
+                      <div className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <span className="inline-flex items-center gap-1">
+                          <Users className="h-3 w-3" />
+                          {stats.totalClicks}
+                        </span>
+                        <span aria-hidden>·</span>
+                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                          <Check className="h-3 w-3" />
+                          {stats.successfulReferrals}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {referralLoading ? (
+                    <div className="rounded-lg border p-4 text-center text-xs text-muted-foreground">
+                      Generating your referral link…
+                    </div>
+                  ) : referralCode ? (
+                    <>
+                      {/* Code + link + actions — one compact block */}
+                      <div className="mb-2 flex items-center justify-center gap-2 rounded-lg bg-muted/40 py-2">
+                        <span className="text-[10px] font-semibold uppercase text-muted-foreground">
+                          Code
+                        </span>
+                        <span className="font-mono text-base font-bold tracking-widest">
+                          {referralCode}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={referralUrl}
+                          readOnly
+                          className="min-w-0 flex-1 rounded-md border bg-muted/30 px-3 py-2 text-xs font-mono"
+                          onFocus={(e) => e.target.select()}
+                        />
+                        <Button
+                          size="sm"
+                          onClick={handleCopyLink}
+                          className="gap-1.5 flex-shrink-0"
+                          aria-label="Copy referral link"
+                        >
+                          {copied ? (
+                            <Check className="h-4 w-4" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
+                          <span className="hidden sm:inline">{copied ? 'Copied!' : 'Copy'}</span>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleShare}
+                          className="gap-1.5 flex-shrink-0"
+                          aria-label="Share referral link"
+                        >
+                          <Share2 className="h-4 w-4" />
+                          <span className="hidden sm:inline">Share</span>
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        When friends install the app and use it for 3 days, it
+                        counts as a successful referral.
+                      </p>
+                    </>
+                  ) : (
+                    <div className="rounded-lg border p-4 text-center text-xs text-muted-foreground">
+                      Could not load your referral code. Check your connection
+                      and reopen this page.
+                    </div>
+                  )}
+                </Card>
+
+                {/* Privacy — link row (full policy lives at /privacy) */}
+                <a
+                  href="/privacy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 rounded-xl border p-3.5 transition-colors hover:bg-muted/40"
+                >
+                  <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold">Privacy policy</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Everything NeutralWire collects, where it lives, how to
+                      delete it.
+                    </div>
+                  </div>
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                </a>
+              </div>
+            )}
+
+            {/* ═══════════════════ FEED ═══════════════════ */}
+            {tab === 'feed' && (
+              <div className="space-y-4">
+                {/* Ultra-personalize — chip grid instead of 9 tall rows */}
+                <Card className="p-4">
+                  <div className="mb-1 flex items-center gap-2">
+                    <Target className="h-4 w-4 text-blue-500" />
+                    <h2 className="text-sm font-bold">Personalize your feed</h2>
+                    <span className="ml-auto text-[11px] text-muted-foreground">
+                      {interests.length}/8 selected
+                    </span>
+                  </div>
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    Tap the subtopics you care about — stories matching them get
+                    boosted in your Relevant feed and daily briefing.
+                  </p>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    {PERSONALIZE_TOPICS.map((t, i) => {
+                      const isOn = interests.includes(t.id)
+                      return (
+                        <motion.button
+                          key={t.id}
+                          type="button"
+                          onClick={() => handleToggleInterest(t.id, !isOn)}
+                          aria-pressed={isOn}
+                          aria-label={`Toggle ${t.label}`}
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.2, delay: i * 0.02, ease: EASE_OUT }}
+                          className={cn(
+                            'relative flex flex-col items-center gap-1 rounded-lg border py-2.5 transition-all active:scale-95',
+                            isOn
+                              ? 'border-foreground/30 bg-foreground/5 ring-1 ring-foreground/20'
+                              : 'border-border hover:bg-muted/40',
+                          )}
+                        >
+                          <span className="text-lg" aria-hidden>{t.emoji}</span>
+                          <span className="text-xs font-medium leading-tight text-center">
+                            {t.label}
+                          </span>
+                          {isOn && (
+                            <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-[8px] font-bold text-background">
+                              ✓
+                            </span>
+                          )}
+                        </motion.button>
+                      )
+                    })}
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between">
+                    <div className="text-[11px] text-muted-foreground">
+                      {interests.length === 0
+                        ? 'No interests — feed shows general news.'
+                        : 'Saved. Your feed updates instantly.'}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleResetPersonalization}
+                      disabled={interests.length === 0}
+                      className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      Reset
+                    </Button>
+                  </div>
+                </Card>
+
+                {/* Feature flags — your header style + admin default */}
+                <FeatureFlagsCard />
+              </div>
+            )}
+
+            {/* ═══════════════════ THEME ═══════════════════ */}
+            {tab === 'theme' && (
+              <div className="space-y-4">
+                <Card className="p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Palette className="h-4 w-4 text-purple-500" />
+                    <h2 className="text-sm font-bold">Theme</h2>
+                    <span className="ml-auto text-[11px] text-muted-foreground">
+                      Auto follows your device
+                    </span>
+                  </div>
+
+                  {/* Solid themes (mode control + family grid) */}
+                  <ThemeSwitcher />
+
+                  {/* Gradient presets */}
+                  <div className="mt-4 border-t pt-4">
+                    <h3 className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                      Gradient backgrounds
+                    </h3>
+                    <div className="grid grid-cols-3 gap-2">
+                      {GRADIENT_PRESETS.map((g) => (
+                        <GradientPreset key={g.id} id={g.id} label={g.label} gradient={g.gradient} />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Custom gradient maker — collapsed by default (it's the
+                      longest control; one tap unfolds it). */}
+                  <button
+                    type="button"
+                    onClick={() => setShowGradientMaker((v) => !v)}
+                    aria-expanded={showGradientMaker}
+                    className="mt-3 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Custom gradient maker
+                    <ChevronDown
+                      className={cn(
+                        'ml-auto h-4 w-4 transition-transform',
+                        showGradientMaker && 'rotate-180',
+                      )}
+                    />
+                  </button>
+                  <AnimatePresence initial={false}>
+                    {showGradientMaker && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.25, ease: EASE_OUT }}
+                        className="overflow-hidden"
+                      >
+                        <CustomGradientMaker />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </Card>
+              </div>
+            )}
+
+            {/* ═══════════════════ ALERTS ═══════════════════ */}
+            {tab === 'alerts' && (
+              <div className="space-y-4">
+                <Card className="p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Bell className="h-4 w-4 text-cyan-500" />
+                    <h2 className="text-sm font-bold">Notifications</h2>
+                  </div>
+                  {!notifEnabled ? (
+                    <>
+                      <p className="mb-3 text-xs text-muted-foreground">
+                        3 news notifications every day — morning, lunch, and
+                        evening. Never miss an important story.
+                      </p>
+                      <Button
+                        size="sm"
+                        onClick={handleEnableNotifications}
+                        disabled={notifLoading}
+                        className="gap-1.5"
+                      >
+                        <Bell className="h-4 w-4" />
+                        {notifLoading ? 'Enabling…' : 'Enable notifications'}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="mb-3 flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
+                        <Check className="h-3.5 w-3.5" />
+                        Notifications enabled
+                      </div>
+                      <div className="mb-2 text-xs font-medium text-muted-foreground">
+                        How often do you want news alerts?
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => handleFrequencyChange('daily3')}
+                          className={cn(
+                            'rounded-lg border p-3 text-left transition-all',
+                            notifFrequency === 'daily3'
+                              ? 'border-foreground bg-foreground/5 ring-1 ring-foreground/20'
+                              : 'hover:bg-muted/50',
+                          )}
+                        >
+                          <div className="text-sm font-semibold">3 per day</div>
+                          <div className="text-[10px] text-muted-foreground">
+                            Morning, lunch & evening
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => handleFrequencyChange('all')}
+                          className={cn(
+                            'rounded-lg border p-3 text-left transition-all',
+                            notifFrequency === 'all'
+                              ? 'border-foreground bg-foreground/5 ring-1 ring-foreground/20'
+                              : 'hover:bg-muted/50',
+                          )}
+                        >
+                          <div className="text-sm font-semibold">All news</div>
+                          <div className="text-[10px] text-muted-foreground">
+                            Every new story (non-stop)
+                          </div>
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </Card>
+
+                {/* Support — compact single row + button */}
+                <Card className="p-4">
+                  <div className="mb-2.5 flex items-center gap-2">
+                    <Heart className="h-4 w-4 fill-pink-400 text-pink-500" strokeWidth={2} />
+                    <h2 className="text-sm font-bold">Support NeutralWire</h2>
+                  </div>
+                  <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+                    Free, ad-free, paywall-free. A coffee on Ko-fi covers the
+                    server + AI costs.
+                  </p>
+                  <a
+                    href="https://ko-fi.com/neutralwire"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 rounded-md bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pink-600 active:scale-95 transition-all"
+                  >
+                    <Heart className="h-4 w-4 fill-white" strokeWidth={2} />
+                    Donate on Ko-fi
+                    <ExternalLink className="h-3.5 w-3.5 opacity-80" />
+                  </a>
+                </Card>
+
+                {/* Footer note */}
+                <div className="px-1 pb-2 text-center text-[11px] text-muted-foreground">
+                  <Sparkles className="inline-block h-3 w-3 mr-1 -mt-0.5" />
+                  All settings are saved automatically to this device.
+                </div>
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
       </div>
     </motion.div>
   )
@@ -726,18 +876,18 @@ function GradientPreset({ id, label, gradient }: {
       type="button"
       onClick={handleClick}
       className={cn(
-        'group relative flex flex-col items-center gap-1.5 rounded-lg border p-2 transition-all active:scale-95',
+        'group relative flex flex-col items-center gap-1 rounded-lg border p-1.5 transition-all active:scale-95',
         active
           ? 'border-foreground ring-2 ring-foreground/20'
           : 'border-border hover:border-foreground/30',
       )}
     >
       <span
-        className="h-10 w-full rounded-md"
+        className="h-8 w-full rounded-md"
         style={{ background: gradient }}
         aria-hidden
       />
-      <span className="text-[10px] font-medium">{label}</span>
+      <span className="text-[10px] font-medium leading-tight text-center">{label}</span>
       {active && (
         <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-background text-[8px] font-bold">
           ✓
@@ -776,17 +926,14 @@ function CustomGradientMaker() {
   }
 
   return (
-    <div className="mt-5">
-      <h3 className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-        Custom Gradient Maker
-      </h3>
-      <p className="mb-3 text-xs text-muted-foreground">
-        Pick your own colors + angle to create a unique gradient background.
+    <div className="mt-3">
+      <p className="mb-2 text-xs text-muted-foreground">
+        Pick your own colors + angle for a unique gradient background.
       </p>
 
       {/* Live preview */}
       <div
-        className="mb-3 h-16 w-full rounded-lg border border-border"
+        className="mb-3 h-14 w-full rounded-lg border border-border"
         style={{ background: gradient }}
       />
 

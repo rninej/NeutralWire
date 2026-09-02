@@ -12,6 +12,7 @@ import {
 } from '@/lib/user-interests'
 import { getDeviceId } from '@/lib/referral'
 import { getCountryLanguage, ALL_LANGUAGES, type LanguageInfo } from '@/lib/country-languages'
+import { hasCookieChoice, onCookieChoice } from '@/lib/cookie-consent'
 
 const ONBOARDED_KEY = 'neutralwire:onboarded'
 const ONBOARDING_DISMISSED_KEY = 'neutralwire:onboarding-dismissed-at'
@@ -79,7 +80,15 @@ export function PwaOnboarding() {
     const onboarded = localStorage.getItem(ONBOARDED_KEY)
     const dismissedAt = localStorage.getItem(ONBOARDING_DISMISSED_KEY)
     const dismissedRecently = dismissedAt && (Date.now() - parseInt(dismissedAt, 10) < ONBOARDING_DISMISS_DURATION)
-    if (!onboarded && !dismissedRecently) {
+
+    // ── First-run sequencing: cookies BEFORE onboarding ──
+    // The very first standalone launch may still show the cookie banner
+    // (a user can install straight from the browser share menu without
+    // ever answering it in the tab). The onboarding quiz / language
+    // picker must wait until the visitor has answered it — the exact
+    // same ordering rule as the install prompt.
+    const startFirstRunFlow = () => {
+      if (onboarded || dismissedRecently) return
       // ── Language selection check ──
       // Before showing the personalization quiz, check if the user's
       // country speaks a non-English language. If so, show the language
@@ -109,6 +118,16 @@ export function PwaOnboarding() {
 
       // English-speaking country or language already selected → show onboarding
       setTimeout(() => setShowOnboarding(true), 1500)
+    }
+
+    if (hasCookieChoice()) {
+      startFirstRunFlow()
+    } else {
+      // No cookie decision yet — wait for it, then run the flow.
+      const unsub = onCookieChoice(() => {
+        unsub()
+        startFirstRunFlow()
+      })
     }
 
     // Load saved interests

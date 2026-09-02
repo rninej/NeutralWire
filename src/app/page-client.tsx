@@ -37,6 +37,7 @@ import { TopicDetail } from '@/components/topic-detail'
 import { PwaInstallPrompt } from '@/components/pwa-install-prompt'
 import { IosNotificationPrompt } from '@/components/ios-notification-prompt'
 import { PwaOnboarding } from '@/components/pwa-onboarding'
+import { CookieConsent } from '@/components/cookie-consent'
 import { UserPage } from '@/components/user-page'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
@@ -2166,7 +2167,12 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
         </>
       )}
 
-      {/* PWA install prompt (mobile only, dismissible) */}
+      {/* Cookie consent — FIRST popup a new visitor ever sees (the PWA
+          install prompt + onboarding below are gated on this decision). */}
+      <CookieConsent />
+
+      {/* PWA install prompt (mobile only, dismissible) — waits for the
+          cookie banner to be answered before it ever appears. */}
       <PwaInstallPrompt />
       <IosNotificationPrompt />
       <PwaOnboarding />

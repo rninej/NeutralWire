@@ -40,6 +40,7 @@ import {
   PanelTop,
   MoveHorizontal,
   ChevronsRight,
+  ChevronDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -159,8 +160,9 @@ function OptionRow({
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.25, delay, ease: EASE_OUT }}
       aria-pressed={selected}
+      title={desc}
       className={cn(
-        'flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-all',
+        'flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all',
         selected
           ? 'border-foreground/30 bg-foreground/5 ring-1 ring-foreground/20'
           : 'border-border hover:bg-muted/40',
@@ -169,7 +171,7 @@ function OptionRow({
     >
       <span
         className={cn(
-          'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+          'flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
           selected
             ? 'bg-foreground text-background'
             : 'bg-muted text-muted-foreground',
@@ -183,7 +185,7 @@ function OptionRow({
           {badge ? (
             <span
               className={cn(
-                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
+                'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
                 badgeClass,
               )}
             >
@@ -192,12 +194,14 @@ function OptionRow({
             </span>
           ) : null}
         </span>
-        <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
+        {/* One-line description (full text on hover via title attr) —
+            keeps the Account tab compact. */}
+        <span className="mt-0.5 block truncate text-[11px] leading-snug text-muted-foreground">
           {desc}
         </span>
       </span>
       {selected ? (
-        <Check className="mt-1 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        <Check className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
       ) : null}
     </motion.button>
   )
@@ -222,6 +226,11 @@ export function FeatureFlagsCard() {
   // ── Admin flip state ──
   const [flipping, setFlipping] = React.useState<NavMode | null>(null)
   const [flipResult, setFlipResult] = React.useState<string | null>(null)
+
+  // ── Admin section collapsed by default ──
+  // The site-wide default is admin-only — for everyone else it's noise.
+  // One tap expands it (auth state is remembered per session).
+  const [adminOpen, setAdminOpen] = React.useState(false)
 
   // Restore session auth + load the personal pick + current global flag.
   React.useEffect(() => {
@@ -321,24 +330,22 @@ export function FeatureFlagsCard() {
     navMode === null ? '…' : (NAV_OPTIONS.find((o) => o.id === navMode)?.name ?? navMode)
 
   return (
-    <Card className="p-5">
-      <div className="mb-3 flex items-center gap-2">
+    <Card className="p-4">
+      <div className="mb-2 flex items-center gap-2">
         <Flag className="h-4 w-4 text-amber-500" />
         <h2 className="text-sm font-bold">Feature Flags</h2>
         <span className="ml-auto rounded-full bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold text-violet-600 dark:text-violet-400">
-          Personal pick + site default
+          Header style
         </span>
       </div>
 
       {/* ═══════════ Section 1 — every visitor ═══════════ */}
-      <div className="mb-4">
+      <div className="mb-2">
         <div className="mb-1 text-xs font-semibold">Your header style</div>
         <p className="text-xs text-muted-foreground">
-          Pick the subtopic-header design <b>you</b> see — it&apos;s saved on
-          this device and rendered server-side on every load, so it never
-          flashes. It applies instantly while you&apos;re on this page (close
-          Account to see it) and survives refreshes. &quot;Follow site
-          default&quot; tracks whatever the admin sets for everyone.
+          The subtopic-header design <b>you</b> see — saved on this device,
+          rendered server-side (no flash), applied instantly, and it always
+          wins over the site default.
         </p>
       </div>
 
@@ -355,22 +362,59 @@ export function FeatureFlagsCard() {
           badgeClass="bg-violet-500/15 text-violet-600 dark:text-violet-400"
           delay={0.1}
         />
-
-        {NAV_OPTIONS.map((opt, i) => (
-          <OptionRow
-            key={opt.id}
-            name={opt.name}
-            desc={opt.desc}
-            icon={opt.icon}
-            selected={myNav === opt.id}
-            onSelect={() => pickPersonal(opt.id)}
-            disabled={false}
-            badge={myNav === opt.id ? 'Yours' : null}
-            badgeClass="bg-violet-500/15 text-violet-600 dark:text-violet-400"
-            delay={0.13 + i * 0.03}
-          />
-        ))}
       </div>
+
+      {/* The 10 designs — compact 2-column grid (icon + name; the full
+          description of each design is available as a hover tooltip and
+          in the expanded admin section below). Keeps the whole Feed tab
+          at roughly one screen instead of a wall of 11 tall rows. */}
+      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+        {NAV_OPTIONS.map((opt, i) => {
+          const selected = myNav === opt.id
+          return (
+            <motion.button
+              key={opt.id}
+              type="button"
+              onClick={() => pickPersonal(opt.id)}
+              aria-pressed={selected}
+              title={opt.desc}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.22, delay: 0.12 + i * 0.02, ease: EASE_OUT }}
+              className={cn(
+                'flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-all active:scale-[.98]',
+                selected
+                  ? 'border-violet-500/40 bg-violet-500/5 ring-1 ring-violet-500/30'
+                  : 'border-border hover:bg-muted/40',
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
+                  selected
+                    ? 'bg-violet-600 text-white dark:bg-violet-500'
+                    : 'bg-muted text-muted-foreground',
+                )}
+              >
+                {opt.icon}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                {opt.name}
+              </span>
+              {selected ? (
+                <Check className="h-3.5 w-3.5 shrink-0 text-violet-600 dark:text-violet-400" />
+              ) : null}
+            </motion.button>
+          )
+        })}
+      </div>
+
+      {myNav !== null ? (
+        <div className="mt-1.5 text-[11px] text-muted-foreground">
+          Your pick: <b className="text-foreground">{NAV_OPTIONS.find((o) => o.id === myNav)?.name ?? myNav}</b>{' '}
+          — switches instantly and survives refreshes.
+        </div>
+      ) : null}
 
       {personalResult ? (
         <div className="mt-3 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-700 dark:text-violet-300">
@@ -381,100 +425,117 @@ export function FeatureFlagsCard() {
         </div>
       ) : null}
 
-      {/* ═══════════ Divider ═══════════ */}
-      <div className="my-5 border-t" />
-
-      {/* ═══════════ Section 2 — admin only ═══════════ */}
-      <div className="mb-3 flex items-center gap-2">
-        <Lock className="h-3.5 w-3.5 text-muted-foreground" />
-        <h3 className="text-xs font-semibold">Site-wide default (admin)</h3>
-        <span className="ml-auto rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
-          Applies to all users within seconds
-        </span>
-      </div>
-
-      <div className="mb-4">
-        <div className="mb-1 text-xs font-semibold">Subtopic header style</div>
-        <p className="text-xs text-muted-foreground">
-          The default every visitor <i>without</i> a personal pick sees.
-          Ten designs to choose from; flip it back here anytime. Refresh the
-          homepage after switching — the selected design is rendered
-          server-side, so it loads instantly with NO flash. Visitors who
-          chose their own style in &quot;Your header style&quot; above keep
-          theirs.
-        </p>
-      </div>
-
-      {/* Password gate — only when not authed this session */}
-      {!authed ? (
-        <form onSubmit={handleAuth} className="mb-2 flex gap-2">
-          <div className="relative flex-1">
-            <Lock className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              type="password"
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              placeholder="Admin password"
-              aria-label="Admin password"
-              className="w-full rounded-md border bg-muted/30 py-2 pl-9 pr-3 text-sm"
-            />
-          </div>
-          <Button type="submit" size="sm" disabled={authing || !passwordInput} className="gap-1.5">
-            {authing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}
-            Unlock
-          </Button>
-        </form>
-      ) : null}
-      {authError ? (
-        <div className="mb-2 text-xs text-red-500">{authError}</div>
-      ) : null}
-
-      {/* The 10 designs (admin) */}
-      <div className="space-y-1.5">
-        {NAV_OPTIONS.map((opt, i) => {
-          const isLive = navMode === opt.id
-          const isFlipping = flipping === opt.id
-          return (
-            <OptionRow
-              key={opt.id}
-              name={opt.name}
-              desc={opt.desc}
-              icon={isFlipping ? <Loader2 className="h-4 w-4 animate-spin" /> : opt.icon}
-              selected={isLive}
-              onSelect={() => selectMode(opt.id)}
-              disabled={!authed || flipping !== null}
-              badge={isLive ? 'Live' : null}
-              badgeClass="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-              delay={0.28 + i * 0.03}
-            />
-          )
-        })}
-      </div>
-
-      {flipResult ? (
-        <div
+      {/* ═══════════ Section 2 — admin only (collapsed by default) ═══════════
+          The site-wide default only matters to the admin, so it folds away
+          to a single summary row for everyone else — the Feed tab stays
+          compact. One tap expands it. */}
+      <div className="mt-4 border-t" />
+      <button
+        type="button"
+        onClick={() => setAdminOpen((v) => !v)}
+        aria-expanded={adminOpen}
+        className="mt-3 flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-muted/30"
+      >
+        <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="text-xs font-semibold">Site-wide default (admin)</span>
+        <span
           className={cn(
-            'mt-3 rounded-md border px-3 py-2 text-xs',
-            flipResult.startsWith('Live')
-              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-              : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400',
+            'ml-auto inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400',
+            !adminOpen && 'animate-none',
           )}
         >
-          {flipResult.startsWith('Live') ? '✓ ' : ''}
-          {flipResult}{' '}
-          {flipResult.startsWith('Live') ? (
-            <span className="text-muted-foreground">
-              — refresh the homepage to see it.
-            </span>
-          ) : null}
-        </div>
-      ) : null}
+          {adminOpen ? null : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+          {navMode === null ? '…' : `Live: ${globalName}`}
+        </span>
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
+            adminOpen && 'rotate-180',
+          )}
+        />
+      </button>
 
-      {!authed ? (
-        <div className="mt-3 text-[11px] text-muted-foreground">
-          Enter the admin password to switch the default. It&apos;s remembered
-          for this session (same as /debug).
-        </div>
+      {adminOpen ? (
+        <>
+          <div className="mt-2 mb-2">
+            <p className="text-xs text-muted-foreground">
+              The default every visitor <i>without</i> a personal pick sees —
+              applies to all users within seconds. Personal picks always win.
+            </p>
+          </div>
+
+          {/* Password gate — only when not authed this session */}
+          {!authed ? (
+            <form onSubmit={handleAuth} className="mb-2 flex gap-2">
+              <div className="relative flex-1">
+                <Lock className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="password"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="Admin password"
+                  aria-label="Admin password"
+                  className="w-full rounded-md border bg-muted/30 py-2 pl-9 pr-3 text-sm"
+                />
+              </div>
+              <Button type="submit" size="sm" disabled={authing || !passwordInput} className="gap-1.5">
+                {authing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}
+                Unlock
+              </Button>
+            </form>
+          ) : null}
+          {authError ? (
+            <div className="mb-2 text-xs text-red-500">{authError}</div>
+          ) : null}
+
+          {/* The 10 designs (admin) */}
+          <div className="space-y-1.5">
+            {NAV_OPTIONS.map((opt, i) => {
+              const isLive = navMode === opt.id
+              const isFlipping = flipping === opt.id
+              return (
+                <OptionRow
+                  key={opt.id}
+                  name={opt.name}
+                  desc={opt.desc}
+                  icon={isFlipping ? <Loader2 className="h-4 w-4 animate-spin" /> : opt.icon}
+                  selected={isLive}
+                  onSelect={() => selectMode(opt.id)}
+                  disabled={!authed || flipping !== null}
+                  badge={isLive ? 'Live' : null}
+                  badgeClass="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                  delay={0.05 + i * 0.02}
+                />
+              )
+            })}
+          </div>
+
+          {flipResult ? (
+            <div
+              className={cn(
+                'mt-3 rounded-md border px-3 py-2 text-xs',
+                flipResult.startsWith('Live')
+                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                  : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400',
+              )}
+            >
+              {flipResult.startsWith('Live') ? '✓ ' : ''}
+              {flipResult}{' '}
+              {flipResult.startsWith('Live') ? (
+                <span className="text-muted-foreground">
+                  — refresh the homepage to see it.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+
+          {!authed ? (
+            <div className="mt-2 text-[11px] text-muted-foreground">
+              Enter the admin password to switch the default (same password
+              as /debug, remembered for this session).
+            </div>
+          ) : null}
+        </>
       ) : null}
     </Card>
   )

@@ -3,6 +3,10 @@
 import * as React from 'react'
 import { Download, X, Share, Plus, Bell, CheckCircle2, Menu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  hasCookieChoice,
+  onCookieChoice,
+} from '@/lib/cookie-consent'
 
 const DISMISS_KEY = 'neutralwire:pwa-install-dismissed'
 const INSTALLED_KEY = 'neutralwire:pwa-installed-flag'
@@ -65,6 +69,13 @@ type InstallMode = 'native' | 'samsung' | 'ios' | 'none'
  * Note: `page-client.tsx` also listens for `appinstalled` to report the
  * install to the server and reload the page into standalone mode. Both
  * listeners coexist fine.
+ *
+ * ── Cookie consent ordering ──
+ * The banner NEVER shows before the visitor has made their cookie choice
+ * (Accept all / Reject non-necessary). showIfAllowed() bails while no
+ * choice exists, and a one-shot listener on the consent event re-triggers
+ * the show flow ~1.5s AFTER the decision — so the cookie popup is always
+ * seen first, and the install prompt politely follows it.
  */
 export function PwaInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] =
@@ -147,13 +158,19 @@ export function PwaInstallPrompt() {
     // ── Core show logic ──
     // Only shows the banner if ALL of these are true:
     //   1. Not already shown in this session (shownRef)
-    //   2. Not dismissed within 24h (isDismissed)
-    //   3. Not already installed (installedRef)
-    //   4. For 'native' mode: deferredPrompt is available (beforeinstallprompt
+    //   2. Cookie consent decided — the cookie banner must ALWAYS be
+    //      seen (and answered) before this install popup appears.
+    //   3. Not dismissed within 24h (isDismissed)
+    //   4. Not already installed (installedRef)
+    //   5. For 'native' mode: deferredPrompt is available (beforeinstallprompt
     //      has fired). Without this, the Install button would be disabled
     //      ("Loading…") which is bad UX.
     const showIfAllowed = () => {
       if (shownRef.current) return
+      if (!hasCookieChoice()) return // cookie banner first — always
+      // Never stack on top of the full-screen Account page (z-50) — the
+      // account-closed listener re-offers once it closes.
+      if (document.querySelector('.fixed.inset-0.z-50[aria-label="Account"]')) return
       if (isDismissed()) return
       if (installedRef.current) return
       // Native mode requires the beforeinstallprompt event to have fired.
@@ -165,7 +182,8 @@ export function PwaInstallPrompt() {
 
     // ── Trigger 1: ?topic= URL param (shared story link) ──
     // Highest-conversion moment — user came from a share link and is
-    // engaged with a specific story.
+    // engaged with a specific story. (Still cookie-gated: showIfAllowed
+    // returns until the visitor has answered the cookie banner.)
     const urlParams = new URLSearchParams(window.location.search)
     const hasTopicParam = urlParams.has('topic')
 
@@ -227,7 +245,36 @@ export function PwaInstallPrompt() {
     }
     window.addEventListener('appinstalled', installedHandler)
 
+    // ── Cookie-consent follow-up ──
+    // The FIRST visit flow is: launch splash → cookie banner → install
+    // prompt. If every trigger above was blocked because no cookie choice
+    // existed yet, this listener fires once the visitor answers — then the
+    // install prompt (politely, after 1.5s) takes its turn.
+    const unsubConsent = onCookieChoice(() => {
+      setTimeout(showIfAllowed, 1500)
+    })
+
+    // ── Yield to the Account page ──
+    // The Account overlay is z-50, this banner z-60/70 — without this it
+    // would stack ON TOP of the full-screen Account page. Instead: hide
+    // while Account is open (and release the one-shot shown flag so it can
+    // come back), then re-offer ~1.2s after Account closes.
+    const accountOpened = () => {
+      if (shownRef.current) {
+        shownRef.current = false
+        setShowBanner(false)
+      }
+    }
+    const accountClosed = () => {
+      setTimeout(showIfAllowed, 1200)
+    }
+    window.addEventListener('neutralwire:account-opened', accountOpened)
+    window.addEventListener('neutralwire:account-closed', accountClosed)
+
     return () => {
+      unsubConsent()
+      window.removeEventListener('neutralwire:account-opened', accountOpened)
+      window.removeEventListener('neutralwire:account-closed', accountClosed)
       window.removeEventListener('beforeinstallprompt', beforeInstallHandler)
       window.removeEventListener('neutralwire:topic-opened', topicOpenedHandler)
       window.removeEventListener('appinstalled', installedHandler)

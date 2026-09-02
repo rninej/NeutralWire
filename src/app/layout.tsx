@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { SecretScreenRecorder } from "@/components/secret-screen-recorder";
-import { Analytics } from "@vercel/analytics/next";
+import { GatedAnalytics } from "@/components/analytics-gated";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -130,35 +130,57 @@ export default function RootLayout({
         <link rel="preload" as="fetch" href="/api/news?category=relevant&limit=24&slim=1&minCoverage=1" crossOrigin="anonymous" fetchPriority="high" />
         {/* Preload the icon — used in the header, shown immediately on load */}
         <link rel="preload" as="image" href="/icon-192.png" fetchPriority="high" />
-        {/* ── PWA launch splash — critical CSS, inlined so it paints with the
-            very first HTML byte (no waiting for the CSS bundle). The splash
-            shows the app icon + wordmark + a shimmer bar while the app boots.
-            HYDRATION-SAFE BY DESIGN: it is 100% CSS — the out-animation
-            (0.3s hold + 0.15s fade, animation-fill-mode: forwards) retires
-            the layer at a fixed ~450ms with ZERO JavaScript DOM mutation, so
-            React never sees an attribute mismatch during hydration and
-            nothing can ever re-show it. The whole animation therefore never
-            lasts more than half a second, on ANY connection speed.
+        {/* ── PWA launch splash — full-screen tri-color animation ──
+            Critical CSS, inlined so it paints with the very first HTML
+            byte (no waiting for the CSS bundle). REPLACES the previous
+            minimal icon splash — this is the one and only launch
+            animation (nothing plays after it).
+
+            The design uses NeutralWire's 3 spectrum colors — blue (left),
+            grey (center), red (right):
+              • Two large soft orbs (blue top-left, red bottom-right) tint
+                the FULL screen and breathe in.
+              • The wordmark rises in while the tri-color bar CONVERGES:
+                the blue segment slides in from the left, the red segment
+                from the right, and the grey center expands — they snap
+                together into the balanced bias bar that is the brand.
+            HYDRATION-SAFE BY DESIGN: 100% CSS — the out-animation
+            (0.32s hold + 0.16s fade, animation-fill-mode: forwards)
+            retires the layer at a fixed ~480ms with ZERO JavaScript DOM
+            mutation, so React never sees an attribute mismatch during
+            hydration and nothing can ever re-show it. The whole
+            animation therefore never lasts more than half a second, on
+            ANY connection speed.
             prefers-color-scheme matches the pre-paint html theme class
             (default theme is "system"), so dark-mode users see a dark
-            splash, not a white flash. Colors are neutral on purpose:
-            custom family themes are applied client-side AFTER the splash
-            is already gone. */}
+            splash, not a white flash. */}
         <style
           dangerouslySetInnerHTML={{
             __html: `
-#nw-splash{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:#fff;color:#171717;pointer-events:none;animation:nw-splash-out .15s ease .3s forwards}
+#nw-splash{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fff;color:#171717;pointer-events:none;animation:nw-splash-out .16s ease .32s forwards}
 @media (prefers-color-scheme:dark){#nw-splash{background:#0a0a0a;color:#ececec}}
-#nw-splash .nw-sp-wrap{display:flex;flex-direction:column;align-items:center;gap:14px;transform:translateZ(0)}
-#nw-splash .nw-sp-icon{width:56px;height:56px;border-radius:14px;animation:nw-sp-pop .28s cubic-bezier(.16,1,.3,1) both}
-#nw-splash .nw-sp-word{font-family:var(--font-geist-sans),system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:20px;font-weight:800;letter-spacing:.02em;animation:nw-sp-fade .3s ease both .05s}
-#nw-splash .nw-sp-bar{width:120px;height:3px;border-radius:99px;overflow:hidden;background:rgba(127,127,127,.22)}
-#nw-splash .nw-sp-bar i{display:block;height:100%;width:40%;border-radius:99px;background:currentColor;opacity:.55;animation:nw-sp-slide .6s ease-in-out infinite}
+#nw-splash .nw-sp-orb{position:absolute;width:62vmax;height:62vmax;border-radius:50%;filter:blur(52px);opacity:0;animation:nw-sp-orb .34s ease-out .02s forwards}
+#nw-splash .nw-sp-orb-b{top:-18vmax;left:-16vmax;background:radial-gradient(circle at 35% 35%,rgba(59,130,246,.5),rgba(59,130,246,0) 68%)}
+#nw-splash .nw-sp-orb-r{bottom:-18vmax;right:-16vmax;background:radial-gradient(circle at 65% 65%,rgba(239,68,68,.42),rgba(239,68,68,0) 68%)}
+@media (prefers-color-scheme:dark){#nw-splash .nw-sp-orb-b{background:radial-gradient(circle at 35% 35%,rgba(59,130,246,.38),rgba(59,130,246,0) 68%)}#nw-splash .nw-sp-orb-r{background:radial-gradient(circle at 65% 65%,rgba(239,68,68,.34),rgba(239,68,68,0) 68%)}}
+#nw-splash .nw-sp-wrap{position:relative;display:flex;flex-direction:column;align-items:center;gap:16px;transform:translateZ(0)}
+#nw-splash .nw-sp-word{font-family:var(--font-geist-sans),system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:26px;font-weight:800;letter-spacing:.01em;animation:nw-sp-word .28s cubic-bezier(.16,1,.3,1) both .03s}
+#nw-splash .nw-sp-bar{display:flex;width:min(62vw,300px);height:12px;border-radius:99px;overflow:hidden;background:rgba(127,127,127,.16)}
+#nw-splash .nw-seg{display:block;height:100%;transform:translateZ(0)}
+#nw-splash .nw-seg-b{width:37%;background:#3b82f6;border-radius:99px 0 0 99px;animation:nw-seg-left .34s cubic-bezier(.18,.89,.32,1.08) both}
+#nw-splash .nw-seg-g{width:26%;background:#8a8a8a;transform-origin:50% 50%;animation:nw-seg-grow .3s cubic-bezier(.16,1,.3,1) both .05s}
+@media (prefers-color-scheme:dark){#nw-splash .nw-seg-g{background:#a1a1a1}}
+#nw-splash .nw-seg-r{width:37%;background:#ef4444;border-radius:0 99px 99px 0;animation:nw-seg-right .34s cubic-bezier(.18,.89,.32,1.08) both}
+#nw-splash .nw-sp-tag{font-family:var(--font-geist-sans),system-ui,sans-serif;font-size:11px;font-weight:600;letter-spacing:.24em;text-transform:uppercase;opacity:0;color:#737373;animation:nw-sp-tag .24s ease both .12s}
+@media (prefers-color-scheme:dark){#nw-splash .nw-sp-tag{color:#9a9a9a}}
 @keyframes nw-splash-out{to{opacity:0;visibility:hidden}}
-@keyframes nw-sp-pop{from{transform:scale(.7);opacity:0}to{transform:scale(1);opacity:1}}
-@keyframes nw-sp-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-@keyframes nw-sp-slide{0%{transform:translateX(-140%)}100%{transform:translateX(320%)}}
-@media (prefers-reduced-motion:reduce){#nw-splash .nw-sp-icon,#nw-splash .nw-sp-word,#nw-splash .nw-sp-bar i{animation:none}#nw-splash .nw-sp-bar i{transform:translateX(60%);opacity:.35}}
+@keyframes nw-sp-orb{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
+@keyframes nw-sp-word{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes nw-seg-left{from{transform:translateX(-180%)}to{transform:translateX(0)}}
+@keyframes nw-seg-right{from{transform:translateX(180%)}to{transform:translateX(0)}}
+@keyframes nw-seg-grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes nw-sp-tag{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){#nw-splash .nw-sp-orb,#nw-splash .nw-sp-word,#nw-splash .nw-seg,#nw-splash .nw-sp-tag{animation:none}#nw-splash .nw-sp-orb{opacity:.5}#nw-splash .nw-seg-g{transform:none}}
             `,
           }}
         />
@@ -166,26 +188,34 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        {/* ── PWA launch splash (≤0.5s brand flash) ──
+        {/* ── PWA launch splash — full-screen tri-color animation ──
             Server-rendered so it paints with the first HTML — the PWA opens
-            straight into branded content instead of a white screen. The
-            inlined CSS above fades it out and retires it (opacity 0,
-            visibility hidden, animation-fill-mode: forwards) at a FIXED
-            ~450ms — 300ms hold + 150ms fade — so it never lasts more than
-            half a second no matter how slow the connection is.
+            straight into the branded animation instead of a white screen.
+            Blue slides in from the left, red from the right, grey expands
+            from the center — the three converge into the NeutralWire bias
+            bar over large tinted screen orbs. The inlined CSS above fades
+            the whole layer out and retires it (opacity 0, visibility
+            hidden, animation-fill-mode: forwards) at a FIXED ~480ms —
+            320ms play + 160ms fade — so it never lasts more than half a
+            second no matter how slow the connection is.
             NO JavaScript touches this element: React renders it once, the
             CSS animation handles its whole lifecycle, and nothing can
             re-show it or fight hydration. */}
         <div id="nw-splash" aria-hidden="true">
+          {/* Full-screen tinted orbs — blue (left) + red (right). */}
+          <div className="nw-sp-orb nw-sp-orb-b" />
+          <div className="nw-sp-orb nw-sp-orb-r" />
           <div className="nw-sp-wrap">
-            {/* Plain <img> on purpose: it's preloaded in <head>, above
-                React's control, and must render identically before and
-                after hydration. */}
-            <img className="nw-sp-icon" src="/icon-192.png" alt="" width={56} height={56} />
             <div className="nw-sp-word">NeutralWire</div>
+            {/* The bias bar: blue | grey | red converging into one. Plain
+                <i> elements on purpose — they render identically before
+                and after hydration and are driven purely by CSS. */}
             <div className="nw-sp-bar">
-              <i />
+              <i className="nw-seg nw-seg-b" />
+              <i className="nw-seg nw-seg-g" />
+              <i className="nw-seg nw-seg-r" />
             </div>
+            <div className="nw-sp-tag">Left · Center · Right</div>
           </div>
         </div>
         <ThemeProvider
@@ -347,8 +377,9 @@ export default function RootLayout({
             `,
           }}
         />
-        {/* Vercel Analytics — page view tracking */}
-        <Analytics />
+        {/* Vercel Analytics — page view tracking, cookie-consent gated
+            (events are dropped until "Accept all"; see analytics-gated.tsx) */}
+        <GatedAnalytics />
       </body>
     </html>
   );
