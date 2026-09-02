@@ -2135,3 +2135,32 @@ Stage Summary:
 - Maxi pills = classic silhouette, exactly two filled rows at the biggest font that fits (11px @390, 13px @768, 14px single row ≥1280), header same size as classic.
 - Flag left at 'cardsarrow' (the user's last /debug selection).
 - Pushed as 039e5ab.
+
+---
+Task ID: session4-1
+Agent: main (Super Z)
+Task: User reported 4 issues: (1) shared links sometimes show no image+title card (?topic=a7ocn3u, ad9438p), (2) replace Account "Subtopics dock" with a Feature Flags section (subtopic header style, 10 designs), (3) AI fallback keeps hitting limits — research Groq/Gemini free tiers, persist what works to Firebase, re-read models on failure, (4) light/dark should be automatic + custom themes need light/dark variants so the toggle switches within the theme.
+
+Work Log:
+- Root-caused the OG bug: newsCache contains 48 keys (relevant__GB, relevant__UK, relevant__INT, mycountry__XX...) but ALL FIVE topic lookups (page.tsx, og-image, summary, archive-topic, topic/[id]) each hardcoded a partial key list — topics in unchecked keys produced no og:title/og:image. Additionally the client archiver marked topics "archived" even on 404, so failed archives were never retried and topics died with cache rotation.
+- NEW src/lib/topic-lookup.ts — findTopicAnywhere(): archive check + LIVE newsCache key listing (?shallow=true, 60s memo) + priority ordering + AUTO-ARCHIVE of every found topic + 30s negative cache. All 5 lookups now use it.
+- background-archiver.ts: markArchived only on real success (res.ok + data.ok/alreadyArchived); failures retried next page load.
+- NEW src/components/feature-flags.tsx — Account "Feature Flags" card (10 designs, Live badge from /api/flags, password gate verified via /api/analytics/query, sessionStorage 'neutralwire:analytics-pw' shared with /debug). Replaced the Subtopics dock card in user-page.tsx (state + handlers + imports removed; dock picks still honoured by the dock design).
+- ai-providers.ts (research: Groq kimi-k2 deprecated 2026-04-15, llama-3.3-70b free tier shut 2026-08-16, replacements gpt-oss-120b/gpt-oss-20b/qwen3.6-27b; Gemini flash-latest → 3 Flash gen, 2.0-flash at 5 RPM):
+  - GROQ_MODELS/GEMINI_MODELS refreshed with dated comments.
+  - Firebase model health: aiModelHealth/<provider>/<urlencoded-model> = {ok,fail,last429,last404,lastOk}; stale-while-revalidate load (60s), recordHealth() throttled writes (429/404 always written), mirrors 429/404 into in-memory cooldown maps.
+  - sharedBlocked() cross-instance cooldowns in callAI/callAICompound model filters; healthOrdered() re-orders candidate lists by learned success rate (needs data for ≥2 models, preference order as tiebreak).
+  - invalidateDiscovery(): 30s-throttled re-read of provider model lists; triggered on every 404/deprecation (checkDeprecation + openrouter 404) AND on all-candidates-failed before the sequential retry pass (callAI + callAICompound rebuild their model lists from the fresh discovery).
+  - recordHealth wired into callGroq/callGemini/callOpenRouter for ok/429/fail/404 (incl. the legacy :online retry path).
+- Themes:
+  - NEW src/lib/theme-families.ts: 11 families × {dark,light} classes, FAMILY_KEY/MODE_KEY ('auto'|'light'|'dark', default auto), useThemeController (live matchMedia following in auto, cross-instance custom-event sync, gradient stripped when light becomes active, legacy 'ocean'→family migration).
+  - globals.css: 10 new classes — midnight-light, sepia-dark, high-contrast-dark (+ HC border/glass/focus overrides), ocean-light, forest-light, sunset-light, lavender-light, rose-light, mono-light, cyber-light (full oklch variable sets).
+  - theme-provider registers ALL_THEME_CLASSES; theme-toggle.tsx rewritten: header toggle flips mode WITHIN the family; ThemeSwitcher = mode segmented control (Auto/Light/Dark) + family grid with split dark/light swatches; use-theme-reveal.ts: callback-based reveal (run arg), clearGradientOverlay export, GRADIENT_PRESETS kept; user-page gradient preset/maker store neutral-family+dark.
+  - Fixed a two-instance race (header toggle's controller had stale family state; its sync effect overwrote the correct theme): the sync effect now reads localStorage fresh + instances mirror each other via neutralwire:theme-family/mode-changed events.
+- VERIFIED (dev server + agent-browser + z-ai vision): relevant__INT topic a1x8q8vy gets correct og:title/og:image + resolves via /api/topic + summary POST finds its articles; og-image outputs 1200x630 JPEG; Account Feature Flags card renders (Maxi pills Live badge, disabled until authed); theme: ocean+light-system → ocean-light auto, toggle → ocean dark and back (VLM verified), system emulation flips auto live, sepia → sepia-dark (lab color confirmed), default users neutral; mobile 390px clean; zero console errors. Lint PASS; tsc: my files 0 errors. Pushed 3a1a39b.
+
+Stage Summary:
+- Share previews: every topic findable (dynamic key listing), archived on sight (permanent), client retries failed archives — the missing-card failure mode is structurally eliminated. a7ocn3u itself is unrecoverable (topic already fully rotated out of Firebase) but ad9438p-class links now resolve permanently.
+- Account → Feature Flags: pick the subtopic header style every visitor sees (10 designs, server-rendered, Live badge, admin-password gate).
+- AI fallback: shared Firebase learning (which models work when), cross-instance cooldowns, success-rate ordering, automatic model re-discovery on failures, 2026-current model lists.
+- Themes: auto light/dark follows the phone; every family has both variants; the header toggle switches to the light version of YOUR theme, not white.
