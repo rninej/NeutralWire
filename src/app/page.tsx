@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { firebaseRead } from '@/lib/firebase-server'
-import type { TopicArticle } from '@/lib/news-aggregator'
-import type { Category } from '@/lib/news-sources'
+import { findTopicAnywhere } from '@/lib/topic-lookup'
 import PageClient from './page-client'
 
 // Force dynamic rendering so metadata is generated per-request (needed for
@@ -85,51 +84,11 @@ export async function generateMetadata({
   if (!topicId) return defaultMeta
 
   try {
-    // Look up the topic in the archive first (permanent storage for
-    // topics sent via notifications). If not found, check the live cache.
-    let topic: (TopicArticle & { archivedAt?: number }) | null = null
-
-    topic = await firebaseRead<TopicArticle & { archivedAt?: number }>(
-      `archive/${topicId}`,
-    )
-
-    // Fallback: check the live news cache categories.
-    // Check ALL categories (not just a few) so every topic can be found
-    // for OG metadata — missing a category means the share preview shows
-    // the default NeutralWire image instead of the article's image.
-    if (!topic) {
-      const cacheCategories: Category[] = [
-        'relevant', 'top', 'world', 'politics', 'business',
-        'technology', 'science', 'health', 'sports',
-      ]
-      // Also check mycountry for common country codes
-      const myCountryCodes = ['GB', 'US', 'IN', 'HK', 'AU', 'CA', 'IE', 'NZ']
-      for (const cat of cacheCategories) {
-        try {
-          const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${cat}`)
-          if (payload?.topics) {
-            topic = payload.topics.find((t) => t.topicId === topicId) || null
-            if (topic) break
-          }
-        } catch {
-          // continue
-        }
-      }
-      // Check mycountry caches if not found yet
-      if (!topic) {
-        for (const cc of myCountryCodes) {
-          try {
-            const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/mycountry__${cc}`)
-            if (payload?.topics) {
-              topic = payload.topics.find((t) => t.topicId === topicId) || null
-              if (topic) break
-            }
-          } catch {
-            // continue
-          }
-        }
-      }
-    }
+    // ONE shared lookup: archive first, then EVERY live newsCache key
+    // (dynamically listed — covers relevant__CC / mycountry__CC keys the
+    // old hardcoded lists missed, which is why some shared links had no
+    // image card). Found topics are archived so they're findable forever.
+    const topic = await findTopicAnywhere(topicId)
 
     if (topic) {
       // ── Dynamic OG image: article image + NW logo (bottom-right) + bias bar ──

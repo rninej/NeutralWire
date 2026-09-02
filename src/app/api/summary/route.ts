@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { callAI } from '@/lib/ai-providers'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
@@ -78,35 +79,10 @@ function isTemplateSummary(summary: string): boolean {
  * Returns the topic with articles, or null if not found.
  */
 async function fetchTopicForSummary(topicId: string): Promise<TopicArticle | null> {
-  // 1. Check archive first (most likely for topics that were sent via push)
-  try {
-    const archived = await firebaseRead<TopicArticle & { archivedAt?: number }>(`archive/${topicId}`)
-    if (archived) return archived
-  } catch {
-    // silent
-  }
-
-  // 2. Check live cache categories
-  const cacheCategories = [
-    'relevant', 'top', 'world', 'politics', 'business',
-    'technology', 'science', 'health', 'sports',
-    'relevant__GB', 'relevant__US', 'relevant__IN',
-    'mycountry__GB', 'mycountry__US', 'mycountry__IN',
-    'blindspots',
-  ]
-  for (const cat of cacheCategories) {
-    try {
-      const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${cat}`)
-      if (payload?.topics) {
-        const found = payload.topics.find((t) => t.topicId === topicId)
-        if (found) return found
-      }
-    } catch {
-      // continue to next category
-    }
-  }
-
-  return null
+  // ONE shared lookup: archive first, then EVERY live newsCache key
+  // (dynamically listed). The old hardcoded category list missed most
+  // country caches — that was the /api/summary 404 bug.
+  return findTopicAnywhere(topicId)
 }
 
 /**

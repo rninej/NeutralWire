@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
@@ -43,35 +44,15 @@ export async function POST(req: NextRequest) {
     if (body.articles && Array.isArray(body.articles) && body.articles.length > 0) {
       topicToArchive = body as TopicArticle
     } else {
-      // 3. No articles — fetch from cache categories.
-      // The client now sends its countryCode — include the visitor's OWN
-      // `relevant__CC` / `mycountry__CC` caches in the search. Before this,
-      // only GB/US/IN were checked and every other country's topics
-      // 404'd ("Topic not found in cache") in the console.
+      // 3. No articles — ONE shared lookup (archive + EVERY live cache
+      // key, dynamically listed). The visitor's own caches are covered
+      // automatically — no hardcoded country list, no more 404s for
+      // countries outside GB/US/IN.
       const cc = (body.countryCode || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3)
-      const cacheCategories = [
-        'relevant', 'top', 'world', 'politics', 'business',
-        'technology', 'science', 'health', 'sports',
-        'relevant__GB', 'relevant__US', 'relevant__IN',
-        'mycountry__GB', 'mycountry__US', 'mycountry__IN',
-        ...(cc && cc !== 'GB' && cc !== 'US' && cc !== 'IN'
-          ? [`relevant__${cc}`, `mycountry__${cc}`]
-          : []),
-      ]
-      for (const cat of cacheCategories) {
-        try {
-          const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${cat}`)
-          if (payload?.topics) {
-            const found = payload.topics.find((t) => t.topicId === topicId)
-            if (found) {
-              topicToArchive = found
-              break
-            }
-          }
-        } catch {
-          // continue
-        }
-      }
+      topicToArchive = await findTopicAnywhere(topicId, {
+        hint: cc ? `relevant__${cc}` : undefined,
+        alsoArchive: false, // we archive right below anyway
+      })
     }
 
     if (!topicToArchive) {

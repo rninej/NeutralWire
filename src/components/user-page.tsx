@@ -18,19 +18,11 @@ import {
   Palette,
   Target,
   ExternalLink,
-  LayoutGrid,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { getDeviceId, buildReferralUrl } from '@/lib/referral'
 import {
@@ -38,17 +30,14 @@ import {
   setInterestsLocal,
   syncInterestsWithFirebase,
 } from '@/lib/user-interests'
-import {
-  getDockPicks,
-  setDockPicks,
-  DOCK_PICKS_EVENT,
-  ALL_DOCK_CATEGORIES,
-} from '@/lib/dock-topics'
-import type { Category } from '@/lib/news-sources'
 import { getOrCreateGuestName } from '@/lib/guest-name'
 import { ThemeSwitcher } from '@/components/theme-toggle'
-import { CategoryIcon, categoryLabel } from '@/components/category-nav'
+import { FeatureFlagsCard } from '@/components/feature-flags'
 import { GRADIENT_PRESETS } from '@/lib/use-theme-reveal'
+import {
+  setThemeFamilyStored,
+  setThemeModeStored,
+} from '@/lib/theme-families'
 import { useTheme } from 'next-themes'
 
 interface UserPageProps {
@@ -89,11 +78,6 @@ export function UserPage({ onClose }: UserPageProps) {
   // Each subtopic is a boolean toggle. Loaded from getInterests() on mount.
   const [interests, setInterests] = React.useState<string[]>([])
 
-  // ── Subtopics dock ──
-  // The subtopics the user pinned to their bottom dock (ordered).
-  // Empty = default dock order. Saved to this device + applied live.
-  const [dockPicks, setDockPicksState] = React.useState<Category[]>([])
-
   // ── Notifications ──
   const [notifEnabled, setNotifEnabled] = React.useState(false)
   const [notifFrequency, setNotifFrequency] = React.useState<'daily3' | 'all'>('daily3')
@@ -122,14 +106,6 @@ export function UserPage({ onClose }: UserPageProps) {
     load()
     window.addEventListener('neutralwire:interests-changed', load)
     return () => window.removeEventListener('neutralwire:interests-changed', load)
-  }, [])
-
-  // Load dock picks on mount + listen for external changes.
-  React.useEffect(() => {
-    const load = () => setDockPicksState(getDockPicks())
-    load()
-    window.addEventListener(DOCK_PICKS_EVENT, load)
-    return () => window.removeEventListener(DOCK_PICKS_EVENT, load)
   }, [])
 
   // Fetch referral code + stats on mount.
@@ -234,33 +210,6 @@ export function UserPage({ onClose }: UserPageProps) {
     }
     window.dispatchEvent(new CustomEvent('neutralwire:interests-changed'))
   }
-
-  // ── Subtopics dock: add / remove / reset ──
-  // setDockPicks persists to localStorage AND fires the
-  // neutralwire:dock-topics-changed event, so an open bottom dock
-  // re-orders itself live — the user sees the change as they make it.
-  const handleAddDockPick = (cat: Category) => {
-    if (dockPicks.includes(cat)) return
-    const next = [...dockPicks, cat]
-    setDockPicksState(next)
-    setDockPicks(next)
-  }
-
-  const handleRemoveDockPick = (cat: Category) => {
-    const next = dockPicks.filter((c) => c !== cat)
-    setDockPicksState(next)
-    setDockPicks(next)
-  }
-
-  const handleResetDockPicks = () => {
-    setDockPicksState([])
-    setDockPicks([])
-  }
-
-  // Categories not yet pinned — the dropdown options (default order).
-  const unpickedCats = ALL_DOCK_CATEGORIES.filter(
-    (c) => !dockPicks.includes(c),
-  )
 
   const handleCopyLink = async () => {
     try {
@@ -560,111 +509,9 @@ export function UserPage({ onClose }: UserPageProps) {
           </Card>
         </motion.div>
 
-        {/* ── Subtopics dock ── */}
+        {/* ── Feature flags — subtopic header style for ALL users ── */}
         <motion.div {...sectionMotion(0.125)}>
-          <Card className="p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <LayoutGrid className="h-4 w-4 text-emerald-500" />
-              <h2 className="text-sm font-bold">Subtopics dock</h2>
-            </div>
-            <p className="mb-4 text-xs text-muted-foreground">
-              Pick the subtopics you want directly in your bottom dock. Your
-              picks come first — everything else stays one tap away inside the
-              Topics button. Applies to the Topics dock design, saved to this
-              device, and updates live.
-            </p>
-
-            {/* Dropdown — add any subtopic to the dock */}
-            {unpickedCats.length > 0 ? (
-              <Select value="" onValueChange={(v) => handleAddDockPick(v as Category)}>
-                <SelectTrigger className="w-full" aria-label="Add a subtopic to your dock">
-                  <SelectValue placeholder="Add a subtopic to your dock…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {unpickedCats.map((cat) => (
-                    <SelectItem key={cat} value={cat}>
-                      <span className="flex items-center gap-2">
-                        <CategoryIcon cat={cat} className="h-4 w-4" />
-                        {categoryLabel(cat)}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <div className="rounded-lg border p-3 text-center text-xs text-muted-foreground">
-                Every subtopic is pinned — remove one to add it back.
-              </div>
-            )}
-
-            {/* Ordered picks list */}
-            {dockPicks.length > 0 ? (
-              <div className="mt-3 space-y-1.5">
-                {dockPicks.map((cat, i) => (
-                  <motion.div
-                    key={cat}
-                    initial={{ opacity: 0, x: -8 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.2, ease: EASE_OUT }}
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg border px-3 py-2.5',
-                      i < 3
-                        ? 'border-foreground/30 bg-foreground/5'
-                        : 'border-border',
-                    )}
-                  >
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-muted-foreground tabular-nums">
-                      {i + 1}
-                    </span>
-                    <CategoryIcon cat={cat} className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                      {categoryLabel(cat)}
-                    </span>
-                    {i < 3 && (
-                      <span className="shrink-0 rounded-full bg-foreground/10 px-2 py-0.5 text-[10px] font-semibold text-foreground/70">
-                        In phone dock
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveDockPick(cat)}
-                      aria-label={`Remove ${categoryLabel(cat)} from dock`}
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </motion.div>
-                ))}
-                <div className="pt-1 text-[11px] text-muted-foreground">
-                  The first 3 picks show on your phone; all picks show on wider
-                  screens.
-                </div>
-              </div>
-            ) : (
-              <div className="mt-3 rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">
-                Using the default dock order — add a subtopic above to
-                customise.
-              </div>
-            )}
-
-            <div className="mt-4 flex items-center justify-between">
-              <div className="text-[11px] text-muted-foreground">
-                {dockPicks.length === 0
-                  ? 'No subtopics pinned yet.'
-                  : `${dockPicks.length} ${dockPicks.length === 1 ? 'subtopic' : 'subtopics'} pinned.`}
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleResetDockPicks}
-                disabled={dockPicks.length === 0}
-                className="gap-1.5 text-muted-foreground hover:text-foreground"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Reset dock
-              </Button>
-            </div>
-          </Card>
+          <FeatureFlagsCard />
         </motion.div>
 
         {/* ── Theme switcher ── */}
@@ -675,8 +522,11 @@ export function UserPage({ onClose }: UserPageProps) {
               <h2 className="text-sm font-bold">Theme</h2>
             </div>
             <p className="mb-4 text-xs text-muted-foreground">
-              Pick a color scheme. Switching uses a circular reveal from where
-              you tap.
+              Pick a color scheme and a light/dark mode. Auto mode follows
+              your device&apos;s setting — day brings the light version of
+              your theme, night the dark one. The header toggle switches
+              between the light and dark versions of the SAME theme.
+              Switching uses a circular reveal from where you tap.
             </p>
 
             {/* Solid themes */}
@@ -856,6 +706,10 @@ function GradientPreset({ id, label, gradient }: {
 
   const handleClick = () => {
     try {
+      // Gradients sit on a dark base: record neutral-family + dark mode
+      // so the mode toggle / auto system flips behave correctly.
+      setThemeFamilyStored('neutral')
+      setThemeModeStored('dark')
       // Set dark theme as the base (clears any solid theme via next-themes)
       setTheme('dark')
       // Apply the gradient
@@ -909,6 +763,9 @@ function CustomGradientMaker() {
 
   const handleApply = () => {
     try {
+      // Gradients sit on a dark base: record neutral-family + dark mode.
+      setThemeFamilyStored('neutral')
+      setThemeModeStored('dark')
       setTheme('dark')
       document.documentElement.classList.add('gradient-theme')
       document.documentElement.style.setProperty('--gradient-bg', gradient)

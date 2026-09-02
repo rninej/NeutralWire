@@ -102,8 +102,22 @@ export function archiveTopicsInBackground(
       body: JSON.stringify({ ...topic, countryCode: countryCode || '' }),
       keepalive: true,
     })
-      .then(() => {
-        markArchived(topic.topicId)
+      .then(async (res) => {
+        // CRITICAL: only mark as archived when the server actually
+        // archived it (or it was already archived). The OLD code marked
+        // it on ANY response — including 404s — so a topic the server
+        // couldn't find was never retried, and once the live cache
+        // rotated it away the shared link was dead forever (the exact
+        // "?topic=… shows no image card" bug).
+        if (res.ok) {
+          const data = await res.json().catch(() => null)
+          if (data?.ok || data?.alreadyArchived) {
+            markArchived(topic.topicId)
+          }
+        }
+        // Non-ok responses leave the topic UNmarked → retried on the
+        // next page load (the server-side finder now covers every
+        // cache key, so retries succeed).
       })
       .catch(() => {
         // silent — will retry on next page load

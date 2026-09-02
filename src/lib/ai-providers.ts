@@ -43,18 +43,31 @@ const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
 // only the models that actually exist there. When a provider retires or
 // renames a model, discovery automatically falls through to the next
 // preference — no more permanent 404s from hallucinated/retired IDs.
+//
+// UPDATED 2026-09 from free-tier research (Groq docs / deprecation page):
+//   - moonshotai/kimi-k2-instruct-0905: DEPRECATED (2026-04-15) → removed.
+//   - llama-3.3-70b-versatile: shut for free/developer tier (2026-08-16)
+//     → removed from preferences (dynamic fallback can still pick it if
+//     the key has access).
+//   - llama-3.1-8b-instant: deprecated in favour of gpt-oss-20b → demoted
+//     to last place (enterprise keys only).
+//   - qwen/qwen3.6-27b: Groq's recommended replacement tier-2 model.
+// Groq free tier: ~30 RPM / 14,400 RPD (org-level).
 const GEMINI_MODELS = [
   // Google's auto-updating stable aliases FIRST — these exist for every key
   // (new projects included) and always point at a usable flash model.
+  // In 2026 gemini-flash-latest resolves to the Gemini 3 Flash generation
+  // (10 RPM / 250K TPM / 1500 RPD free tier).
   'gemini-flash-latest',
   'gemini-flash-lite-latest',
-  // 2.0-flash next: universally available on free-tier keys. The 2.5
-  // models are "no longer available to new users" on Gemini's free tier —
-  // they appear in ListModels but generateContent 404s for newer keys
-  // (observed in production diagnostics).
+  // 2.0-flash next: available on free-tier keys but dropped to 5 RPM in
+  // 2026 — keep below the aliases so the higher-quota model wins.
   'gemini-2.0-flash',
   'gemini-2.0-flash-lite',
   'gemini-2.0-flash-001',
+  // 2.5 family: free tier available (1500 RPD shared Flash + Flash-Lite)
+  // but "not available to new users" via generateContent on some keys —
+  // discovery + the health system sort these out automatically.
   'gemini-2.5-flash-lite',
   'gemini-2.5-flash',
   'gemini-2.5-pro',
@@ -62,21 +75,219 @@ const GEMINI_MODELS = [
   'gemma-3-27b-it',
 ]
 
-// Groq: text models in preference order. Discovery filters to what the
-// key can actually access.
+// Groq: text models in preference order (see the 2026 deprecation notes
+// above). Discovery filters to what the key can actually access, and the
+// Firebase health system re-orders by real-world success rate.
 const GROQ_MODELS = [
   'openai/gpt-oss-120b',
   'openai/gpt-oss-20b',
-  'moonshotai/kimi-k2-instruct-0905',
+  'qwen/qwen3.6-27b',
   'meta-llama/llama-4-scout-17b-16e-instruct',
   'qwen/qwen3-32b',
-  'llama-3.3-70b-versatile',
   'llama-3.1-8b-instant',
 ]
 
 // Track rate-limited models to skip them in future calls (per-process)
 const rateLimitedModels = new Map<string, number>()
 const RATE_LIMIT_COOLDOWN_MS = 60 * 1000
+
+// ─────────────────────────────────────────────────────────────────────────
+// FIREBASE-PERSISTED MODEL HEALTH — the "learning" half of the fallback.
+//
+// Vercel serverless instances are short-lived and DON'T share memory, so
+// the old in-memory cooldowns/deprecations reset on every cold start —
+// every new instance walked into the same rate limits again. Now every
+// provider call outcome is recorded in Firebase:
+//
+//   aiModelHealth/<provider>/<urlencoded-model> = {
+//     ok, fail,          — lifetime success/failure counters (learning
+//                          "which ones to use": models are sorted by
+//                          success rate, preference order as tiebreak)
+//     last429,           — epoch ms of the last rate-limit hit (ALL
+//                          instances skip the model for 60s after this)
+//     last404,           — epoch ms of the last not-found/retirement hit
+//                          (soft-block shared across instances, 10 min)
+//     lastOk             — epoch ms of the last success
+//   }
+//
+// Reads: once per instance + 60s stale-while-revalidate (never blocks a
+//        call — a warm cache answers instantly, refresh runs in background)
+// Writes: fire-and-forget, throttled per model (≤1 write / 20s for
+//        counters; state events like 429/404 always write immediately).
+// Failure to reach Firebase is NON-FATAL — in-memory state still works,
+// we just don't share it across instances.
+// ─────────────────────────────────────────────────────────────────────────
+const HEALTH_DB_URL =
+  'https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app'
+const HEALTH_ROOT = 'aiModelHealth'
+
+type HealthEvent = 'ok' | 'fail' | '429' | '404'
+interface ModelHealth {
+  ok?: number
+  fail?: number
+  last429?: number
+  last404?: number
+  lastOk?: number
+}
+type HealthTable = Record<string, Record<string, ModelHealth>> // provider → model → health
+
+let healthCache: HealthTable | null = null
+let healthFetchInFlight: Promise<HealthTable | null> | null = null
+let healthLoadedAt = 0
+const HEALTH_TTL_MS = 60 * 1000
+const HEALTH_WRITE_THROTTLE_MS = 20 * 1000
+const lastHealthWrite = new Map<string, number>()
+
+function encodeModelId(model: string): string {
+  // Model ids contain '/' (openrouter, groq) and ':' (openrouter :free) —
+  // both are illegal in Firebase path segments. encodeURIComponent covers
+  // them reversibly.
+  return encodeURIComponent(model)
+}
+
+async function fetchHealth(): Promise<HealthTable | null> {
+  try {
+    const res = await fetch(`${HEALTH_DB_URL}/${HEALTH_ROOT}.json`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(4000),
+    })
+    if (!res.ok) return null
+    const text = await res.text()
+    if (!text || text === 'null') return {}
+    const raw = JSON.parse(text) as Record<
+      string,
+      Record<string, ModelHealth>
+    >
+    // Decode the urlencoded model keys back to real model ids.
+    const out: HealthTable = {}
+    for (const [provider, models] of Object.entries(raw)) {
+      out[provider] = {}
+      for (const [encModel, h] of Object.entries(models || {})) {
+        try {
+          out[provider][decodeURIComponent(encModel)] = h
+        } catch {
+          out[provider][encModel] = h
+        }
+      }
+    }
+    return out
+  } catch {
+    return null
+  }
+}
+
+/** Get the (possibly stale) health table; refresh in background when TTL
+ *  expired. NEVER blocks on the network when a warm cache exists. */
+async function getHealth(): Promise<HealthTable | null> {
+  const fresh = healthCache && Date.now() - healthLoadedAt < HEALTH_TTL_MS
+  if (fresh) return healthCache
+  if (!healthFetchInFlight) {
+    healthFetchInFlight = fetchHealth().then((h) => {
+      healthFetchInFlight = null
+      if (h) {
+        healthCache = h
+        healthLoadedAt = Date.now()
+      } else if (!healthCache) {
+        // First load failed — retry on the next call (short-circuit the
+        // TTL so we don't hammer Firebase every request either).
+        healthLoadedAt = Date.now() - HEALTH_TTL_MS + 10 * 1000
+      }
+      return healthCache
+    })
+    // Cold start: we MUST wait for the first load (nothing cached).
+    if (!healthCache) return healthFetchInFlight
+  }
+  return healthCache
+}
+
+/** Record a call outcome: update in-memory state NOW, persist to Firebase
+ *  (throttled) so every OTHER serverless instance learns it too. */
+function recordHealth(
+  provider: string,
+  model: string,
+  event: HealthEvent,
+): void {
+  // In-memory update (instant).
+  const h = ((healthCache ||= {})[provider] ||= {})[model] ||= {}
+  if (event === 'ok') {
+    h.ok = (h.ok || 0) + 1
+    h.lastOk = Date.now()
+  } else if (event === 'fail') {
+    h.fail = (h.fail || 0) + 1
+  } else if (event === '429') {
+    h.last429 = Date.now()
+  } else if (event === '404') {
+    h.last404 = Date.now()
+  }
+
+  // Mirror the rate-limit/deprecation state into the fast in-memory maps
+  // so the existing selection logic benefits immediately.
+  if (event === '429') rateLimitedModels.set(`${provider}-${model}`, Date.now())
+  if (event === '404') deprecatedModels.set(`${provider}-${model}`, Date.now())
+
+  // Persist (fire-and-forget, throttled).
+  const key = `${provider}/${model}/${event}`
+  const last = lastHealthWrite.get(key) || 0
+  const stateEvent = event === '429' || event === '404'
+  if (!stateEvent && Date.now() - last < HEALTH_WRITE_THROTTLE_MS) return
+  lastHealthWrite.set(key, Date.now())
+  void (async () => {
+    try {
+      const path = `${HEALTH_ROOT}/${provider}/${encodeModelId(model)}`
+      const res = await fetch(`${HEALTH_DB_URL}/${path}.json`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(h),
+        signal: AbortSignal.timeout(4000),
+      })
+      if (!res.ok) diag(`health write ${provider}/${model} failed: ${res.status}`)
+    } catch {
+      // Firebase unreachable — in-memory state still applies locally.
+    }
+  })()
+}
+
+/** Shared cross-instance cooldown: true when ANY instance recently saw a
+ *  429 (within RATE_LIMIT_COOLDOWN_MS) or 404 (within DEPRECATION_TTL_MS)
+ *  for this provider+model. */
+function sharedBlocked(provider: string, model: string): boolean {
+  const h = healthCache?.[provider]?.[model]
+  if (!h) return false
+  const now = Date.now()
+  if (h.last429 && now - h.last429 < RATE_LIMIT_COOLDOWN_MS) return true
+  if (h.last404 && now - h.last404 < DEPRECATION_TTL_MS) return true
+  return false
+}
+
+/** Learning score for ordering models: success rate first, recency of
+ *  success as tiebreak, caller's preference order as final tiebreak. */
+function healthScore(provider: string, model: string, prefIndex: number): number {
+  const h = healthCache?.[provider]?.[model]
+  if (!h) return 1000 - prefIndex // no data → keep preference order
+  const ok = h.ok || 0
+  const fail = h.fail || 0
+  const total = ok + fail
+  if (total === 0) return 1000 - prefIndex
+  // Success rate 0..1 mapped to a wide band, minus a small penalty for
+  // models that have never succeeded recently.
+  const rate = ok / total
+  let score = 500 + rate * 400
+  if (!h.lastOk || Date.now() - h.lastOk > 6 * 60 * 60 * 1000) score -= 50
+  return score - prefIndex
+}
+
+/** Re-order a provider's effective model list by LEARNED success rate
+ *  (Firebase health data), keeping the input (preference) order as the
+ *  tiebreak. Models with no data keep their preference position. */
+function healthOrdered(provider: string, models: string[]): string[] {
+  if (!healthCache) return models
+  const scored = models.map((m, i) => ({ m, s: healthScore(provider, m, i) }))
+  // Only re-order when we actually have health data for ≥2 models of this
+  // provider — otherwise the preference order stands.
+  const withData = scored.filter(({ m }) => healthCache?.[provider]?.[m])
+  if (withData.length < 2) return models
+  return scored.sort((a, b) => b.s - a.s).map((x) => x.m)
+}
 
 // ── LIVE MODEL DISCOVERY ──
 // One-time per server instance: fetch each provider's FULL model list and
@@ -264,6 +475,45 @@ async function getDiscoveredModels(): Promise<DiscoveredModels> {
     })
   }
   return discoveryInFlight
+}
+
+// ── Re-discovery on failure ──
+// "When something fails it re-reads the models available." A 404 /
+// deprecation means our cached model list is stale (the provider retired
+// or renamed something). Invalidate the memo and immediately re-fetch so
+// the very NEXT candidate in the same request picks from fresh data.
+// Guarded by a 30s min-interval so a burst of failures can't hammer the
+// /models endpoints.
+let lastRediscovery = 0
+const REDISCOVERY_MIN_INTERVAL_MS = 30 * 1000
+let rediscoveryInFlight: Promise<DiscoveredModels | null> | null = null
+
+function invalidateDiscovery(reason: string): Promise<DiscoveredModels | null> {
+  const now = Date.now()
+  if (now - lastRediscovery < REDISCOVERY_MIN_INTERVAL_MS) {
+    // Throttled — still drop the stale cache so the NEXT un-throttled
+    // call re-fetches (getDiscoveredModels re-runs when discovered=null).
+    discovered = null
+    discoveryInFlight = null
+    return Promise.resolve(null)
+  }
+  lastRediscovery = now
+  discovered = null
+  discoveryInFlight = null // a stale in-flight fetch must not repopulate
+  discoveryConfirmed = new Set()
+  if (rediscoveryInFlight) return rediscoveryInFlight
+  rediscoveryInFlight = discoverProviderModels()
+    .then((d) => {
+      discovered = d
+      rediscoveryInFlight = null
+      console.log(`[ai] re-discovery after failure (${reason}): gemini=${d.gemini?.length ?? 'n/a'} groq=${d.groq?.length ?? 'n/a'} or=${d.openrouter?.length ?? 'n/a'}`)
+      return d
+    })
+    .catch(() => {
+      rediscoveryInFlight = null
+      return null
+    })
+  return rediscoveryInFlight
 }
 
 /** Preferred ∩ live, in preference order. Empty when nothing overlaps. */
@@ -468,6 +718,17 @@ function checkDeprecation(key: string, status: number, errText: string): boolean
     lowerErr.includes('model_not_found')
   if (!isRetirement) return false
 
+  // Persist the 404 to Firebase (shared cooldown across ALL instances) and
+  // RE-READ the provider's live model list — the cached list just proved
+  // stale, so the next candidate should come from fresh data.
+  const dash = key.indexOf('-')
+  if (dash > 0) {
+    const provider = key.slice(0, dash)
+    const model = key.slice(dash + 1)
+    recordHealth(provider, model, '404')
+    void invalidateDiscovery(`${key} ${status}`)
+  }
+
   // Discovery-confirmed model: the model exists for the PROVIDER, but this
   // key may still not have access. Allow ONE transient 404; after 2
   // consecutive, soft-block it for the deprecation TTL (it's a key-level
@@ -511,17 +772,24 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   const candidates: Array<Promise<string | null>> = []
   lastDiagnostics = []
 
-  // Make sure model discovery has run (no-op after the first call).
+  // Make sure model discovery has run (no-op after the first call) and
+  // load the SHARED Firebase health table (cross-instance cooldowns +
+  // success-rate learning; stale-while-revalidate, never blocks warm).
   const disc = await getDiscoveredModels()
-  const geminiModels = effectiveModels(disc.gemini, GEMINI_MODELS, rankGeminiModels, 'gemini')
-  const groqModels = effectiveModels(disc.groq, GROQ_MODELS, rankGroqModels, 'groq')
+  await getHealth()
+  const geminiModels = healthOrdered('gemini', effectiveModels(disc.gemini, GEMINI_MODELS, rankGeminiModels, 'gemini'))
+  const groqModels = healthOrdered('groq', effectiveModels(disc.groq, GROQ_MODELS, rankGroqModels, 'groq'))
 
-  // Pick up to 2 available models per provider (skip deprecated + rate-limited)
+  // Pick up to 2 available models per provider (skip deprecated +
+  // rate-limited, including SHARED Firebase cooldowns).
   const available = (keys: Array<{ key: string; model: string }>) =>
-    keys.filter(({ key }) => {
+    keys.filter(({ key, model }) => {
       if (isDeprecated(key)) return false
       const limitedAt = rateLimitedModels.get(key)
-      return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
+      if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) return false
+      const dash = key.indexOf('-')
+      if (dash > 0 && sharedBlocked(key.slice(0, dash), model)) return false
+      return true
     })
 
   const geminiAvail = available(geminiModels.map((m) => ({ key: `gemini-${m}`, model: m }))).slice(0, 1)
@@ -602,8 +870,19 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     }
   }
 
-  // 5. Sequential retry: remaining models not yet tried
-  for (const model of geminiModels) {
+  // 5. Sequential retry: remaining models not yet tried. If everything
+  // failed so far, re-read the provider model lists ONCE before this pass
+  // (a mass failure usually means the cached list is stale).
+  const freshDisc = await invalidateDiscovery('callAI all-candidates-failed')
+  const geminiRetry = healthOrdered(
+    'gemini',
+    effectiveModels(freshDisc?.gemini ?? disc.gemini, GEMINI_MODELS, rankGeminiModels, 'gemini'),
+  )
+  const groqRetry = healthOrdered(
+    'groq',
+    effectiveModels(freshDisc?.groq ?? disc.groq, GROQ_MODELS, rankGroqModels, 'groq'),
+  )
+  for (const model of geminiRetry) {
     if (geminiAvail.some((a) => a.model === model)) continue
     const key = `gemini-${model}`
     if (isDeprecated(key)) continue
@@ -618,7 +897,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   }
 
   // 6. Try remaining Groq models
-  for (const model of groqModels) {
+  for (const model of groqRetry) {
     if (groqAvail.some((a) => a.model === model)) continue
     const key = `groq-${model}`
     if (isDeprecated(key)) continue
@@ -646,14 +925,19 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
   const candidates: Array<Promise<string | null>> = []
   lastDiagnostics = []
 
-  // Make sure model discovery has run (no-op after the first call).
+  // Make sure model discovery has run (no-op after the first call) and
+  // load shared health (cross-instance cooldowns + learning).
   const disc = await getDiscoveredModels()
-  const geminiModels = effectiveModels(disc.gemini, GEMINI_MODELS, rankGeminiModels, 'gemini')
+  await getHealth()
+  const geminiModels = healthOrdered('gemini', effectiveModels(disc.gemini, GEMINI_MODELS, rankGeminiModels, 'gemini'))
 
   const modelOk = (key: string) => {
     if (isDeprecated(key)) return false
     const limitedAt = rateLimitedModels.get(key)
-    return !limitedAt || now - limitedAt >= RATE_LIMIT_COOLDOWN_MS
+    if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) return false
+    const dash = key.indexOf('-')
+    if (dash > 0 && sharedBlocked(key.slice(0, dash), key.slice(dash + 1))) return false
+    return true
   }
 
   // 1. Fire off up to TWO Gemini models WITH Google Search in parallel
@@ -696,21 +980,29 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
   if (candidates.length > 0) {
     try {
       const answer = await Promise.any(candidates)
-      const cleaned = answer
-        .replace(/^\(?(\{\/compound\})\)?\s*/g, '')
-        .replace(/^\{\/compound\}\s*/g, '')
-        .trim()
-      if (answer && cleaned.length > 0) {
-        lastProvider = 'AI (web search, parallel)'
-        return answer
+      if (answer) {
+        const cleaned = answer
+          .replace(/^\(?(\{\/compound\})\)?\s*/g, '')
+          .replace(/^\{\/compound\}\s*/g, '')
+          .trim()
+        if (cleaned.length > 0) {
+          lastProvider = 'AI (web search, parallel)'
+          return answer
+        }
       }
     } catch {
       // All failed — fall through to sequential retry
     }
   }
 
-  // 5. Sequential retry on remaining Gemini models WITH search
-  for (const model of geminiModels) {
+  // 5. Sequential retry on remaining Gemini models WITH search. Re-read
+  //    the model lists first when the whole volley failed (stale list?).
+  const freshDisc = await invalidateDiscovery('callAICompound all-candidates-failed')
+  const geminiRetry = healthOrdered(
+    'gemini',
+    effectiveModels(freshDisc?.gemini ?? disc.gemini, GEMINI_MODELS, rankGeminiModels, 'gemini'),
+  )
+  for (const model of geminiRetry) {
     if (geminiSearchModels.includes(model)) continue
     const key = `gemini-${model}`
     if (isDeprecated(key)) continue
@@ -958,10 +1250,12 @@ async function callGroq(
 
       if (res.status === 429) {
         rateLimitedModels.set(key, Date.now())
+        recordHealth('groq', model, '429') // shared across ALL instances
         diag(`groq ${model}: 429 rate-limited`)
       } else {
         // Check for deprecation — auto-deprecate if detected
         checkDeprecation(key, res.status, errText)
+        if (res.status !== 404) recordHealth('groq', model, 'fail')
         diag(`groq ${model}: ${res.status} ${errText.slice(0, 120)}`)
       }
       return null
@@ -969,7 +1263,9 @@ async function callGroq(
 
     const data = await res.json()
     consecutive404s.delete(`groq-${model}`)
-    return stripThinking(data.choices?.[0]?.message?.content?.trim() || '') || null
+    const answer = stripThinking(data.choices?.[0]?.message?.content?.trim() || '') || null
+    if (answer) recordHealth('groq', model, 'ok')
+    return answer
   } catch {
     clearTimeout(timeout)
     diag(`groq ${model}: timeout/error after ${7000}ms`)
@@ -1021,9 +1317,11 @@ async function callGemini(
 
       if (res.status === 429) {
         rateLimitedModels.set(key, Date.now())
+        recordHealth('gemini', model, '429') // shared across ALL instances
         diag(`gemini ${model}: 429 rate-limited`)
       } else {
         checkDeprecation(key, res.status, errText)
+        if (res.status !== 404) recordHealth('gemini', model, 'fail')
         diag(`gemini ${model}: ${res.status} ${errText.slice(0, 120)}`)
       }
       return null
@@ -1037,7 +1335,11 @@ async function callGemini(
     // thought:true BEFORE the answer part — take the first NON-thought
     // text part (falling back to any text part for older models).
     const answerPart = parts.find((p) => p.text && !p.thought) || parts.find((p) => p.text)
-    if (answerPart?.text) return stripThinking(answerPart.text.trim())
+    if (answerPart?.text) {
+      const answer = stripThinking(answerPart.text.trim())
+      if (answer) recordHealth('gemini', model, 'ok')
+      return answer || null
+    }
     return null
   } catch {
     clearTimeout(timeout)
@@ -1109,13 +1411,25 @@ async function callOpenRouter(
         // free pool is capped for now — rotating just burns another
         // request, so stop after logging. Other errors (404 model gone,
         // 400 bad request) → rotate to the next candidate model.
-        if (res.status === 429) return null
+        if (res.status === 429) {
+          recordHealth('openrouter', model, '429')
+          return null
+        }
+        if (res.status === 404) {
+          recordHealth('openrouter', model, '404')
+          void invalidateDiscovery(`openrouter ${model} 404`)
+        } else {
+          recordHealth('openrouter', model, 'fail')
+        }
         continue
       }
 
       const data = await res.json()
       const answer = stripThinking(data.choices?.[0]?.message?.content?.trim() || '')
-      if (answer) return answer
+      if (answer) {
+        recordHealth('openrouter', model, 'ok')
+        return answer
+      }
 
       // `:online` suffix rejected for this model? Retry once with the
       // legacy plugins body before rotating.
@@ -1142,7 +1456,10 @@ async function callOpenRouter(
             const legacyAnswer = stripThinking(
               legacyData.choices?.[0]?.message?.content?.trim() || '',
             )
-            if (legacyAnswer) return legacyAnswer
+            if (legacyAnswer) {
+              recordHealth('openrouter', model, 'ok')
+              return legacyAnswer
+            }
           }
         } catch {
           // legacy retry failed — rotate to next model

@@ -9,23 +9,32 @@ import { useTheme } from 'next-themes'
  * Safari 18+); falls back to an instant theme switch on Firefox + older
  * browsers (still functional, just no animation).
  *
- * Usage:
+ * Usage (modern, family/mode controller):
  *   const setThemeWithReveal = useThemeReveal()
- *   <button onClick={(e) => setThemeWithReveal('midnight', e)}>...</button>
+ *   <button onClick={(e) => setThemeWithReveal(null, e, () => controller.toggleMode())}>
  *
- * The reveal expands outward from the click position (e.clientX / e.clientY),
- * so the new theme "wipes in" from where the user tapped. This gives a
- * Material-style circular reveal similar to Android's theme picker.
+ * Legacy usage (direct theme value) still works:
+ *   setThemeWithReveal('midnight', e)
  *
  * The click position is set as CSS custom properties on <html>
  * (--theme-reveal-x / --theme-reveal-y) so the ::view-transition-new(root)
  * rule in globals.css can use them in its clip-path animation.
+ *
+ * Gradient handling: when `run` is provided, gradient clearing is the
+ * controller's job (theme-families.ts clears the overlay whenever the
+ * effective mode is light). When a direct nextTheme value is passed, this
+ * wrapper keeps the legacy behaviour: clearing the gradient for any solid
+ * theme.
  */
 export function useThemeReveal() {
   const { setTheme } = useTheme()
 
   return React.useCallback(
-    (nextTheme: string, event?: { clientX: number; clientY: number }) => {
+    (
+      nextTheme: string | null,
+      event?: { clientX: number; clientY: number },
+      run?: () => void,
+    ) => {
       // Default to center of viewport if no event provided.
       const x = event?.clientX ?? window.innerWidth / 2
       const y = event?.clientY ?? window.innerHeight / 2
@@ -35,24 +44,30 @@ export function useThemeReveal() {
       root.style.setProperty('--theme-reveal-x', `${x}px`)
       root.style.setProperty('--theme-reveal-y', `${y}px`)
 
-      // ── Clear gradient when switching to a solid theme ──
-      // When the user picks a solid theme (light, dark, ocean, etc.),
-      // remove any active gradient overlay so they don't stack.
-      // The only exception is theme 'gradient' itself (used internally
-      // by the gradient presets, which manage the gradient separately).
-      if (nextTheme !== 'gradient') {
-        root.classList.remove('gradient-theme')
-        root.style.removeProperty('--gradient-bg')
-        try {
-          localStorage.removeItem('neutralwire:gradient')
-          // Notify gradient preset components to update their active state
-          window.dispatchEvent(new CustomEvent('neutralwire:gradient-changed'))
-        } catch {}
+      const mutate = () => {
+        if (run) {
+          run()
+          return
+        }
+        if (!nextTheme) return
+
+        // ── Legacy direct-value path ──
+        // Clear the gradient when switching to a solid theme (the
+        // 'gradient' theme id itself is managed by the gradient presets).
+        if (nextTheme !== 'gradient') {
+          root.classList.remove('gradient-theme')
+          root.style.removeProperty('--gradient-bg')
+          try {
+            localStorage.removeItem('neutralwire:gradient')
+            window.dispatchEvent(new CustomEvent('neutralwire:gradient-changed'))
+          } catch {}
+        }
+        setTheme(nextTheme)
       }
 
       // If the browser supports the View Transitions API, wrap the theme
       // change in a transition so the new theme "wipes in" from the click
-      // point. Otherwise, just set the theme directly (instant switch).
+      // point. Otherwise, just change the theme directly (instant switch).
       const startViewTransition = (
         document as Document & {
           startViewTransition?: (cb: () => void) => void
@@ -60,11 +75,9 @@ export function useThemeReveal() {
       ).startViewTransition
 
       if (typeof startViewTransition === 'function') {
-        startViewTransition.call(document, () => {
-          setTheme(nextTheme)
-        })
+        startViewTransition.call(document, mutate)
       } else {
-        setTheme(nextTheme)
+        mutate()
       }
     },
     [setTheme],
@@ -95,93 +108,27 @@ export function restoreGradient() {
   }
 }
 
-/**
- * Get the list of available themes with metadata for rendering a theme
- * picker UI. Used by both the header ThemeToggle and the user page
- * ThemeSwitcher.
- */
-export const THEME_OPTIONS = [
-  {
-    id: 'light',
-    label: 'Light',
-    description: 'Default bright white',
-    swatch: 'linear-gradient(135deg, #ffffff 50%, #e5e5e5 50%)',
-  },
-  {
-    id: 'dark',
-    label: 'Dark',
-    description: 'Classic dark grey',
-    swatch: 'linear-gradient(135deg, #1c1c1e 50%, #2c2c2e 50%)',
-  },
-  {
-    id: 'midnight',
-    label: 'Midnight',
-    description: 'Deep navy blue',
-    swatch: 'linear-gradient(135deg, #0a0f1e 50%, #1a2440 50%)',
-  },
-  {
-    id: 'sepia',
-    label: 'Sepia',
-    description: 'Warm beige, easy on eyes',
-    swatch: 'linear-gradient(135deg, #f1e7d4 50%, #d6c4a0 50%)',
-  },
-  {
-    id: 'high-contrast',
-    label: 'High Contrast',
-    description: 'Pure black on white',
-    swatch: 'linear-gradient(135deg, #ffffff 50%, #000000 50%)',
-  },
-  {
-    id: 'ocean',
-    label: 'Ocean',
-    description: 'Deep teal/cyan',
-    swatch: 'linear-gradient(135deg, #0d3b4f 50%, #1a6b8a 50%)',
-  },
-  {
-    id: 'forest',
-    label: 'Forest',
-    description: 'Deep green, nature',
-    swatch: 'linear-gradient(135deg, #1a3326 50%, #2d6b3f 50%)',
-  },
-  {
-    id: 'sunset',
-    label: 'Sunset',
-    description: 'Warm orange/pink',
-    swatch: 'linear-gradient(135deg, #4a2010 50%, #c8533a 50%)',
-  },
-  {
-    id: 'lavender',
-    label: 'Lavender',
-    description: 'Soft purple',
-    swatch: 'linear-gradient(135deg, #3a2a4f 50%, #7a5aa8 50%)',
-  },
-  {
-    id: 'rose',
-    label: 'Rose',
-    description: 'Soft pink/red',
-    swatch: 'linear-gradient(135deg, #3a1a1f 50%, #b8405a 50%)',
-  },
-  {
-    id: 'mono',
-    label: 'Mono',
-    description: 'Pure grayscale',
-    swatch: 'linear-gradient(135deg, #2a2a2a 50%, #6a6a6a 50%)',
-  },
-  {
-    id: 'cyber',
-    label: 'Cyber',
-    description: 'Neon green on dark',
-    swatch: 'linear-gradient(135deg, #0a1a0f 50%, #00ff7f 50%)',
-  },
-] as const
+/** Remove the gradient overlay (used when a light mode becomes active —
+ *  gradients are designed for dark surfaces only). Exported for
+ *  theme-families.ts. */
+export function clearGradientOverlay() {
+  if (typeof window === 'undefined') return
+  const root = document.documentElement
+  if (!root.classList.contains('gradient-theme')) return
+  root.classList.remove('gradient-theme')
+  root.style.removeProperty('--gradient-bg')
+  try {
+    localStorage.removeItem('neutralwire:gradient')
+    window.dispatchEvent(new CustomEvent('neutralwire:gradient-changed'))
+  } catch {}
+}
 
-/**
- * Gradient presets — pre-made gradient backgrounds that can be applied on
- * top of any dark theme. Each preset is a CSS gradient string.
- * When the user picks a gradient, we:
- *   1. Set the theme to 'dark' (as the base)
- *   2. Set --gradient-bg CSS variable on <html>
- *   3. Add 'gradient-theme' class to <html>
+/** Gradient presets — pre-made gradient backgrounds that can be applied on
+ *  top of the dark theme. Each preset is a CSS gradient string.
+ *  When the user picks a gradient, we:
+ *    1. Set the base theme to dark (neutral family, dark mode)
+ *    2. Set --gradient-bg CSS variable on <html>
+ *    3. Add 'gradient-theme' class to <html>
  */
 export const GRADIENT_PRESETS = [
   { id: 'aurora', label: 'Aurora', gradient: 'linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)' },

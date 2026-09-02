@@ -16,7 +16,8 @@
  *   'dock'       → SubtopicDock          (below) — floating bottom app dock
  *                  (mobile-style tab bar), "Topics" (folder preview +
  *                  count badge) opens the shared sheet; user-pinnable
- *                  from Account → "Subtopics dock"
+ *                  from the dock-topics localStorage (pins previously
+ *                  set in Account are still honoured)
  *   'maxipills'  → SubtopicMaxiPills     (below) — the classic pills at
  *                  the BIGGEST size that still fits in exactly two rows
  *                  (adaptive font), every row filled edge-to-edge
@@ -731,10 +732,10 @@ export function SubtopicHeaderDock({ category, onSelect, country }: SubtopicNavP
 //    holds all 11). Desktop (md+): ALL categories sit inline in the dock,
 //    no Topics button needed.
 //
-//    PERSONALISATION: the user can pin their favourite subtopics to the
-//    front of the dock from Account → "Subtopics dock" (stored on-device,
-//    applied live via the neutralwire:dock-topics-changed event). The
-//    first 3 slots on mobile are then THEIR picks.
+//    PERSONALISATION: users who pinned subtopics earlier (the old
+//    Account Subtopics-dock section) still get their picks — stored
+//    on-device, applied live via the neutralwire:dock-topics-changed
+//    event. The first 3 slots on mobile are then THEIR picks.
 //
 //    TOPICS BUTTON: iOS-folder-style — a tiny 2×2 grid of the icons it
 //    contains + a count badge — so you can SEE what's inside without the
@@ -766,7 +767,7 @@ export function SubtopicDock({
 }: SubtopicNavProps & { onSearch: () => void }) {
   const [moreOpen, setMoreOpen] = React.useState(false)
 
-  // ── User's pinned dock subtopics (Account → "Subtopics dock") ──
+  // ── User's pinned dock subtopics (legacy on-device pins) ──
   // null until mount so SSR + first client paint match (default order);
   // re-orders the instant picks load / change — no reload needed.
   const [picks, setPicks] = React.useState<Category[] | null>(null)

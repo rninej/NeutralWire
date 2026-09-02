@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
-import { firebaseRead } from '@/lib/firebase-server'
+import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { renderTextAsPaths, renderTextAsPathsSpaced } from './char-paths'
 
@@ -47,50 +47,14 @@ export async function GET(req: NextRequest) {
   const hasOverrides = overrideLeanLeft !== null && overrideLeanRight !== null
 
   try {
-    // ── 1. Fetch the topic from Firebase (skip if overrides provided) ──
+    // ── 1. Fetch the topic (skip if overrides provided) ──
+    // ONE shared lookup — archive first, then EVERY live newsCache key
+    // (dynamically listed). Fixes the bug where topics in country caches
+    // (relevant__CC etc.) produced a generic OG image with no article photo.
     let topic: (TopicArticle & { archivedAt?: number }) | null = null
 
     if (!hasOverrides) {
-      try {
-        topic = await firebaseRead<TopicArticle & { archivedAt?: number }>(`archive/${topicId}`)
-      } catch {
-        // silent
-      }
-
-      if (!topic) {
-      // Check ALL live news cache categories (not just a few) so every
-      // topic can be found for OG image generation.
-      const cacheCategories = [
-        'relevant', 'top', 'world', 'politics', 'business',
-        'technology', 'science', 'health', 'sports',
-      ]
-      for (const cat of cacheCategories) {
-        try {
-          const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/${cat}`)
-          if (payload?.topics) {
-            topic = payload.topics.find((t) => t.topicId === topicId) || null
-            if (topic) break
-          }
-        } catch {
-          // continue
-        }
-      }
-      // Check mycountry caches for common country codes
-      if (!topic) {
-        const myCountryCodes = ['GB', 'US', 'IN', 'HK', 'AU', 'CA', 'IE', 'NZ']
-        for (const cc of myCountryCodes) {
-          try {
-            const payload = await firebaseRead<{ topics?: TopicArticle[] }>(`newsCache/mycountry__${cc}`)
-            if (payload?.topics) {
-              topic = payload.topics.find((t) => t.topicId === topicId) || null
-              if (topic) break
-            }
-          } catch {
-            // continue
-          }
-        }
-      }
-    }
+      topic = await findTopicAnywhere(topicId)
     } // end if (!hasOverrides)
 
     // If overrides were provided, construct a minimal topic object
