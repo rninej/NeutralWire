@@ -108,11 +108,19 @@ export async function GET(req: NextRequest) {
   // Wait at most SYNC_WAIT_MS for quick refreshes. Whether or not they
   // all finish in that window, we respond — cron-job.org gets its 200 in
   // ≤ ~10s instead of 26-42s.
+  // flatMap (instead of .map(...).filter(Boolean)) keeps the element type
+  // concrete — filter(Boolean) is not a type guard, so the old expression
+  // widened the race type until `quickResults` collapsed to `never`.
+  type RefreshStatus = { category: string; topics: number; ms: number }
   const quickResults = await Promise.race([
     allDone.then((settled) =>
-      settled.map((s) => (s.status === 'fulfilled' ? s.value : null)).filter(Boolean),
+      settled.flatMap((s): RefreshStatus[] =>
+        s.status === 'fulfilled' ? [s.value] : [],
+      ),
     ),
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), SYNC_WAIT_MS)),
+    new Promise<RefreshStatus[] | null>((resolve) =>
+      setTimeout(() => resolve(null), SYNC_WAIT_MS),
+    ),
   ])
 
   // Belt-and-suspenders: registering the pending work with `after()` keeps
@@ -138,9 +146,13 @@ export async function GET(req: NextRequest) {
       ? 'Refresh complete'
       : `Responded after ${ms}ms; refreshes finishing in background via after() — cron-job.org never times out`,
     results: quickResults ?? [],
-    pending: completed
-      ? []
-      : refreshes.filter((r) => !quickResults?.some((q) => q.category === r.label)).map((r) => r.label),
+    // In the not-completed branch quickResults is null BY DEFINITION
+    // (completed === quickResults !== null), so the old
+    // `!quickResults?.some(...)` filter always kept every refresh — the
+    // `.some` was dead code (and a type error under TS 5.5's aliased-
+    // condition narrowing, which types the narrowed-away branch as never).
+    // Write the equivalent direct form: every refresh is still pending.
+    pending: completed ? [] : refreshes.map((r) => r.label),
     ms,
     ts: Date.now(),
   })

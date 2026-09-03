@@ -6,7 +6,13 @@ export const dynamic = 'force-dynamic'
 const API_KEY = process.env.PUSHIFY_API_KEY || ''
 
 export async function GET() {
-  const results = []
+  // Typed up-front: an untyped `[]` infers as never[] which rejects every push.
+  const results: Array<{
+    fields: string
+    status?: number
+    response?: string
+    error?: string
+  }> = []
 
   const tests = [
     // Maybe it needs 'action_url' instead of 'url'

@@ -228,7 +228,7 @@ function stripSources(answer: string): string {
   s = s.replace(/\[Source:[^\]]*\]/gi, '')
   s = s.replace(/\(Source:[^)]*\)/gi, '')
   s = s.replace(/\s*https?:\/\/\S+$/g, '')
-  s = s.replace(/\s*Sources?:.*$/is, '')
+  s = s.replace(/\s*Sources?:[\s\S]*$/i, '')
   s = s.replace(/^According to [^,]+,\s*/i, '')
   s = s.replace(/\s+/g, ' ').trim()
   return s

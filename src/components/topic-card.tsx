@@ -514,10 +514,9 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
           <img
             src={proxyImage(imageUrl!)}
             alt=""
-            loading={variant === 'featured' || isHero ? 'eager' : 'lazy'}
+            loading="eager"
             decoding="async"
-            // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
-            fetchPriority={variant === 'featured' || isHero ? 'high' : 'low'}
+            fetchPriority="high"
             className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
@@ -580,7 +579,6 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
             alt=""
             loading={variant === 'featured' ? 'eager' : 'lazy'}
             decoding="async"
-            // @ts-expect-error — fetchPriority is a valid HTML attr but not in TS DOM types yet
             fetchPriority={variant === 'featured' ? 'high' : 'low'}
             className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}

@@ -236,7 +236,9 @@ export async function GET(req: NextRequest) {
       .jpeg({ quality: 85, mozjpeg: true })
       .toBuffer()
 
-    return new NextResponse(outputBuffer, {
+    // sharp's Buffer isn't assignable to BodyInit under TS 5.9's stricter
+    // ArrayBuffer generics — the runtime handles it fine, so cast.
+    return new NextResponse(outputBuffer as unknown as BodyInit, {
       headers: {
         'Content-Type': 'image/jpeg',
         'Cache-Control': 'public, max-age=86400, s-maxage=604800',
@@ -269,7 +271,7 @@ async function generateFallbackImage(): Promise<NextResponse> {
     </svg>
   `)
   const buf = await sharp(svg).jpeg({ quality: 85 }).toBuffer()
-  return new NextResponse(buf, {
+  return new NextResponse(buf as unknown as BodyInit, {
     headers: {
       'Content-Type': 'image/jpeg',
       'Cache-Control': 'public, max-age=3600',

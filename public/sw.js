@@ -1,6 +1,16 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v23: LOAD-TIME HARDENING —
+//      1. Static-asset cache cap 20 → 200. Next.js emits 40-80 hashed
+//         chunks per load; the old 20-entry cap LRU-evicted live chunks,
+//         so cached HTML referenced chunks that were gone → network
+//         refetches (slow) and broken offline mode. Chunks are immutable
+//         (content-hashed) so caching them all is free wins.
+//      2. Navigation requests now race the network against a 2.5s
+//         timeout. A hanging/slow connection previously blocked the PWA
+//         launch indefinitely (network-first waits forever); now it falls
+//         back to the cached HTML and the page still boots.
 // v22: DARK OS LAUNCH — manifest.json background_color/theme_color →
 //      #0a0a0a + iOS apple-touch-startup-image set. The SW precaches
 //      /manifest.json, so bumping the shell cache forces installed PWAs
@@ -32,9 +42,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v22'
-const API_CACHE = 'neutralwire-api-v22'
-const IMG_CACHE = 'neutralwire-img-v22'
+const SHELL_CACHE = 'neutralwire-shell-v23'
+const API_CACHE = 'neutralwire-api-v23'
+const IMG_CACHE = 'neutralwire-img-v23'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
@@ -229,26 +239,51 @@ self.addEventListener('fetch', (event) => {
   const req = event.request
   if (req.method !== 'GET') return
 
-  // ── Navigation requests (HTML pages) → network-first, cache fallback ──
+  // ── Navigation requests (HTML pages) → network-first w/ TIMEOUT, cache fallback ──
   // Network-first ensures users get fresh HTML after a deploy (avoids
-  // hydration mismatches). Falls back to cached HTML when offline, then
-  // to the branded loading screen if there's no cache at all.
+  // hydration mismatches). NEW in v23: the network attempt is raced
+  // against a 2.5s abort — a slow/hanging connection can no longer stall
+  // the PWA launch forever; we fall back to the cached HTML (fresh enough
+  // for the chunk cache to boot it fully offline) and only show the
+  // branded offline page when there's no cache at all.
   if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
     event.respondWith(
       (async () => {
+        // Kick off the network fetch, raced against a hard timeout.
+        const NAV_TIMEOUT_MS = 2500
+        const networkPromise = fetch(req, { cache: 'no-store' })
+        let networkRes = null
         try {
-          const networkRes = await fetch(req, { cache: 'no-store' })
+          networkRes = await Promise.race([
+            networkPromise,
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('nav-timeout')), NAV_TIMEOUT_MS),
+            ),
+          ])
+        } catch {
+          networkRes = null
+        }
+        if (networkRes && networkRes.ok) {
           putWithEviction(SHELL_CACHE, req, networkRes.clone(), 5)
           return networkRes
-        } catch {
-          // Network failed (offline) — fall back to cached HTML
-          const cached = await caches.match(req)
-          if (cached) return cached
-          // No cache either — return the minimal offline page.
-          return new Response(OFFLINE_PAGE_HTML, {
-            headers: { 'Content-Type': 'text/html' },
-          })
         }
+        // Network failed, timed out, or errored → cached HTML.
+        const cached = await caches.match(req)
+        if (cached) {
+          // The timed-out ORIGINAL fetch may still land in the background —
+          // opportunistically refresh the cache with it (no duplicate
+          // request: we reuse the same promise).
+          networkPromise
+            .then((res) => {
+              if (res.ok) putWithEviction(SHELL_CACHE, req, res.clone(), 5)
+            })
+            .catch(() => {})
+          return cached
+        }
+        // No cache either — return the minimal offline page.
+        return new Response(OFFLINE_PAGE_HTML, {
+          headers: { 'Content-Type': 'text/html' },
+        })
       })(),
     )
     return
@@ -257,13 +292,19 @@ self.addEventListener('fetch', (event) => {
   // ── Static assets (JS, CSS, images, fonts) → cache-first ──
   // Cache-first = instant load on repeat visits. Falls back to network
   // and caches the response for next time.
+  // v23: cap raised 20 → 200 — Next.js loads 40-80 hashed chunks per
+  // visit; at 20 the cache LRU-evicted live chunks, so cached HTML
+  // referenced chunks that had been evicted → network refetch + broken
+  // offline mode. Chunks are content-hashed (immutable) — caching them
+  // all costs disk but never staleness. The SHELL_CACHE sweep still
+  // bounds it via MAX_AGE_MS (12h) on activate.
   if (req.url.includes('/_next/static/') || req.url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2)$/)) {
     event.respondWith(
       caches.match(req).then((cached) => {
         if (cached) return cached
         return fetch(req).then((res) => {
           if (res.ok) {
-            putWithEviction(SHELL_CACHE, req, res.clone(), 20)
+            putWithEviction(SHELL_CACHE, req, res.clone(), 200)
           }
           return res
         })

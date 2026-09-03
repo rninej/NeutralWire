@@ -63,7 +63,9 @@ export async function GET(req: NextRequest) {
   // Check in-process cache (warm instance)
   const cached = IMG_CACHE.get(url)
   if (cached && Date.now() - cached.ts < IMG_TTL_MS) {
-    return new NextResponse(cached.blob, {
+    // `Buffer<ArrayBufferLike>` is not assignable to BodyInit in TS 5.9's
+    // stricter ArrayBufferView generics — runtime accepts it fine, so cast.
+    return new NextResponse(cached.blob as unknown as BodyInit, {
       headers: {
         'Content-Type': cached.contentType,
         'Cache-Control': IMG_CDN_CACHE,

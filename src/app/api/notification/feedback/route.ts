@@ -93,6 +93,7 @@ async function firebaseReadStats(key: string): Promise<{
   dismisses?: number
   likes?: number
   dislikes?: number
+  lastDislike?: number
 }> {
   try {
     const data = await firebaseRead<{

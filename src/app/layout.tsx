@@ -314,17 +314,28 @@ html.nw-launch #nw-splash{display:flex;align-items:center;justify-content:center
             Passes updateViaCache: 'none' so the browser ALWAYS fetches the
             latest sw.js (never a stale cached copy). Also listens for a new
             SW taking over and reloads the page so the new notification
-            config (e.g. removed action buttons) takes effect immediately. */}
+            config (e.g. removed action buttons) takes effect immediately.
+            ── v23 LOAD-TIME CHANGES ──
+            1. Registration runs on requestIdleCallback (fallback: window
+               load). The old 'load' listener waited for EVERY subresource
+               (images, chunks) before the SW even began installing — now
+               the install + precache start seconds earlier and the
+               beforeinstallprompt machinery is available sooner, without
+               ever competing with first paint.
+            2. controllerchange no longer reloads on the FIRST takeover
+               (the initial SW install claim) — that fired a pointless full
+               page reload on every brand-new visitor, an entire extra
+               load cycle right when we want the fastest first impression.
+               Only SUBSEQUENT takeovers (real updates) reload. */}
         <script
           dangerouslySetInnerHTML={{
             __html: `
               if ('serviceWorker' in navigator) {
-                window.addEventListener('load', function() {
+                var register = function() {
                   navigator.serviceWorker.register('/sw.js', {
                     updateViaCache: 'none'  // always fetch fresh sw.js
                   }).then(
                     function(registration) {
-                      console.log('[SW] registered:', registration.scope);
                       // If a new SW is waiting to activate, tell it to skip
                       // waiting immediately (it already calls skipWaiting on
                       // install, but this covers the case where it's already
@@ -337,17 +348,29 @@ html.nw-launch #nw-splash{display:flex;align-items:center;justify-content:center
                       console.warn('[SW] registration failed:', err);
                     }
                   );
+                };
+                if (window.requestIdleCallback) {
+                  window.requestIdleCallback(register, { timeout: 2000 });
+                } else {
+                  window.addEventListener('load', register);
+                }
 
-                  // When a new SW takes over (controllerchange), reload the
-                  // page ONCE so the new notification config applies. We use
-                  // a flag to avoid reload loops.
-                  var refreshing = false;
-                  navigator.serviceWorker.addEventListener('controllerchange', function() {
-                    if (refreshing) return;
-                    refreshing = true;
-                    console.log('[SW] new controller took over — reloading');
-                    window.location.reload();
-                  });
+                // Reload when a new SW takes over — but NEVER on the first
+                // takeover (initial install): that reload was pure waste for
+                // new visitors. After the first takeover, any subsequent
+                // controllerchange is a real update → reload once.
+                var hadController = !!navigator.serviceWorker.controller;
+                var refreshing = false;
+                navigator.serviceWorker.addEventListener('controllerchange', function() {
+                  if (refreshing) return;
+                  if (!hadController) {
+                    hadController = true; // first takeover: just note it
+                    console.log('[SW] first takeover — no reload needed');
+                    return;
+                  }
+                  refreshing = true;
+                  console.log('[SW] new controller took over — reloading');
+                  window.location.reload();
                 });
               }
             `,

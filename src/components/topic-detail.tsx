@@ -708,20 +708,29 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
             right={topic.leanRight}
             showLabels
           />
-          {/* Bias legend */}
+          {/* Bias legend — each dot pops in with a tiny stagger so the
+              legend feels alive when the article opens. */}
           <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-blue-500" />
-              Left ({topic.leanLeft})
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-zinc-500" />
-              Center ({topic.leanCenter})
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-red-500" />
-              Right ({topic.leanRight})
-            </span>
+            {[
+              { cls: 'bg-blue-500', label: `Left (${topic.leanLeft})` },
+              { cls: 'bg-zinc-500', label: `Center (${topic.leanCenter})` },
+              { cls: 'bg-red-500', label: `Right (${topic.leanRight})` },
+            ].map((dot, i) => (
+              <motion.span
+                key={dot.label}
+                initial={{ opacity: 0, scale: 0.7 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{
+                  duration: 0.25,
+                  delay: 0.15 + i * 0.07,
+                  ease: [0.34, 1.56, 0.64, 1],
+                }}
+                className="flex items-center gap-1.5"
+              >
+                <span className={`h-2 w-2 rounded-full ${dot.cls}`} />
+                {dot.label}
+              </motion.span>
+            ))}
           </div>
         </div>
 
@@ -730,8 +739,8 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
             descriptions below." — now we just hide the card so the user
             sees the article descriptions directly without an error message. */}
         {summaryLoading ? (
-          <Card className="mb-6 p-5 md:p-6">
-            <div className="mb-4 flex items-center gap-2">
+          <Card className="mb-6 gap-0 p-5 md:p-6">
+            <div className="mb-3 flex items-center gap-2">
               <TrendingUp className="h-5 w-5 text-muted-foreground" />
               <h2 className="text-base font-bold">Neutral Summary</h2>
               <button
@@ -748,8 +757,8 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
             <SummarySkeleton />
           </Card>
         ) : summary && !summaryError ? (
-          <Card className="mb-6 p-5 md:p-6">
-            <div className="mb-4 flex items-center gap-2">
+          <Card className="mb-6 gap-0 p-5 md:p-6">
+            <div className="mb-3 flex items-center gap-2">
               <TrendingUp className="h-5 w-5 text-muted-foreground" />
               <h2 className="text-base font-bold">Neutral Summary</h2>
               <button
@@ -764,10 +773,18 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
               </button>
             </div>
             <motion.div
+              // [&>*:first-child]:!mt-0 — the sub-headings (h3) carry mt-5
+              // for spacing BETWEEN sections of the summary; on the FIRST
+              // element that stacked with the header's mb-3 into a ~36px
+              // void between "Neutral Summary" and its text (the gap the
+              // users reported). Zero out the first child's top margin.
               className="space-y-4 text-base leading-relaxed text-foreground/90 md:text-[17px] md:leading-[1.7]"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
+              initial="hidden"
+              animate="show"
+              variants={{
+                hidden: {},
+                show: { transition: { staggerChildren: 0.07, delayChildren: 0.04 } },
+              }}
             >
               {(() => {
                 // The LLM may use \n\n or \n between heading and paragraph.
@@ -788,15 +805,29 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
 
                 const chunks = summary?.split('\n\n') || []
                 const elements: React.ReactNode[] = []
+                // Shared stagger item — every heading + paragraph rises in
+                // one after another instead of the whole block appearing at once.
+                const summaryItem = {
+                  hidden: { opacity: 0, y: 6 },
+                  show: {
+                    opacity: 1,
+                    y: 0,
+                    transition: { duration: 0.28, ease: 'easeOut' as const },
+                  },
+                }
 
                 chunks.forEach((chunk, i) => {
                   // Check for **bold** heading on its own line.
                   const boldMatch = chunk.match(/^\*\*(.+)\*\*$/)
                   if (boldMatch) {
+                    // The FIRST element gets no top margin — mt-5 exists
+                    // to separate summary sections; stacked on the header
+                    // it produced the oversized gap users reported.
+                    const isFirst = elements.length === 0
                     elements.push(
-                      <h3 key={`h-${i}`} className="text-lg font-bold text-foreground mt-5 mb-1">
+                      <motion.h3 key={`h-${i}`} variants={summaryItem} className={cn('text-lg font-bold text-foreground mb-1', !isFirst && 'mt-5')}>
                         {boldMatch[1]}
-                      </h3>,
+                      </motion.h3>,
                     )
                     return
                   }
@@ -807,13 +838,14 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
                   if (headingMatch) {
                     const heading = headingMatch[1]
                     const rest = chunk.slice(headingMatch[0].length)
+                    const isFirst = elements.length === 0
                     elements.push(
-                      <h3 key={`h-${i}`} className="text-lg font-bold text-foreground mt-5 mb-1">
+                      <motion.h3 key={`h-${i}`} variants={summaryItem} className={cn('text-lg font-bold text-foreground mb-1', !isFirst && 'mt-5')}>
                         {heading}
-                      </h3>,
+                      </motion.h3>,
                     )
                     if (rest.trim()) {
-                      elements.push(<p key={`p-${i}`}>{rest.trim()}</p>)
+                      elements.push(<motion.p key={`p-${i}`} variants={summaryItem}>{rest.trim()}</motion.p>)
                     }
                     return
                   }
@@ -822,7 +854,7 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
                   const parts = chunk.split(/(\*\*[^*]+\*\*)/g)
                   if (parts.length > 1) {
                     elements.push(
-                      <p key={`p-${i}`}>
+                      <motion.p key={`p-${i}`} variants={summaryItem}>
                         {parts.map((part, j) => {
                           const inlineBold = part.match(/^\*\*(.+)\*\*$/)
                           if (inlineBold) {
@@ -830,12 +862,12 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
                           }
                           return <span key={j}>{part}</span>
                         })}
-                      </p>,
+                      </motion.p>,
                     )
                     return
                   }
 
-                  elements.push(<p key={`p-${i}`}>{chunk}</p>)
+                  elements.push(<motion.p key={`p-${i}`} variants={summaryItem}>{chunk}</motion.p>)
                 })
 
                 return elements
@@ -1041,9 +1073,16 @@ function AskAiPanel({
                   { label: 'Explain to a beginner', icon: '🎓', question: 'Explain this story to a beginner in simple terms. What happened and why does it matter?' },
                   { label: 'Key arguments', icon: '⚖️', question: 'What are the key arguments from different sides about this story?' },
                   { label: 'Fact-check sources', icon: '🔍', question: 'Fact-check the claims in this story. Are the sources reliable? What might be missing?' },
-                ].map((chip) => (
-                  <button
+                ].map((chip, chipIdx) => (
+                  <motion.button
                     key={chip.label}
+                    initial={{ opacity: 0, scale: 0.85, y: 6 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    transition={{
+                      duration: 0.25,
+                      delay: 0.08 + chipIdx * 0.06,
+                      ease: [0.34, 1.56, 0.64, 1],
+                    }}
                     onClick={() => {
                       setInput(chip.question)
                       // Send immediately
@@ -1124,13 +1163,22 @@ function AskAiPanel({
                   >
                     <span className="text-sm">{chip.icon}</span>
                     {chip.label}
-                  </button>
+                  </motion.button>
                 ))}
               </div>
             </>
           )}
           {messages.map((msg, i) => (
-            <div key={i}>
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, y: 10, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{
+                duration: 0.25,
+                delay: Math.min(i * 0.02, 0.1),
+                ease: [0.16, 1, 0.3, 1],
+              }}
+            >
               <div
                 className={cn(
                   'rounded-lg p-3 text-sm',
@@ -1146,7 +1194,7 @@ function AskAiPanel({
                   Model: {msg.model}
                 </div>
               )}
-            </div>
+            </motion.div>
           ))}
           {loading && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">

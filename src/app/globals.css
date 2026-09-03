@@ -1436,6 +1436,24 @@ img {
   animation: nw-breathe 1.5s ease-in-out infinite;
 }
 
+/* ── Donate heart — heartbeat pulse on hover ──
+   Two quick squeezes per cycle (~72bpm at 0.84s) read instantly as a
+   living heart. Only animates the ICON (svg), never the button, so it
+   never fights the universal button:active press scale. */
+@keyframes nw-heartbeat {
+  0%, 100% { transform: scale(1); }
+  22% { transform: scale(1.22); }
+  36% { transform: scale(1); }
+  52% { transform: scale(1.15); }
+  68% { transform: scale(1); }
+}
+.nw-heart-btn .nw-heart-icon {
+  transition: transform 0.2s ease-out;
+}
+.nw-heart-btn:hover .nw-heart-icon {
+  animation: nw-heartbeat 0.84s ease-in-out infinite;
+}
+
 /* ── Expand-collapse (for accordions, search bar) ── */
 @keyframes nw-expand {
   from { max-height: 0; opacity: 0; }

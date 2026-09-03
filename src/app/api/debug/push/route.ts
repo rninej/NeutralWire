@@ -17,6 +17,7 @@ interface DeviceRecord {
   notificationFrequency?: 'daily3' | 'all'
   lastNotificationDay?: string
   lastAllNewsTitle?: string
+  firstSeen?: number
 }
 
 /**

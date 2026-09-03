@@ -371,7 +371,7 @@ async function handleBlindspots(
     if (sections[sectionKey].length >= MAX_PER_SECTION) continue
     sections[sectionKey].push({
       ...entry.topic,
-      blindspotSide: entry.side,
+      blindspotSide: entry.side ?? undefined,
       blindspotPct: entry.pct,
       articles: slim ? [] : entry.topic.articles,
     })
@@ -382,7 +382,7 @@ async function handleBlindspots(
     .slice(offset, offset + limit)
     .map((entry) => ({
       ...entry.topic,
-      blindspotSide: entry.side,
+      blindspotSide: entry.side ?? undefined,
       blindspotPct: entry.pct,
       articles: slim ? [] : entry.topic.articles,
     }))

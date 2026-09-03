@@ -2,15 +2,12 @@
 
 import * as React from 'react'
 import { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   RefreshCw,
   Search,
   AlertCircle,
-  Loader2,
-  TrendingUp,
-  Filter,
-  Info,
   X,
   UserCircle,
   Heart,
@@ -21,11 +18,6 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-} from '@/components/ui/tabs'
-import {
   CATEGORY_LABELS,
   PRIMARY_CATEGORIES,
   SECONDARY_CATEGORIES,
@@ -33,18 +25,9 @@ import {
 } from '@/lib/news-sources'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { TopicCard } from '@/components/topic-card'
-import { TopicDetail } from '@/components/topic-detail'
 import { PwaInstallPrompt } from '@/components/pwa-install-prompt'
-import { PwaInstallPromptLegacy } from '@/components/pwa-install-prompt-legacy'
-import { DonatePopupLegacy } from '@/components/donate-popup-legacy'
-import { IosNotificationPrompt } from '@/components/ios-notification-prompt'
-import { PwaOnboarding } from '@/components/pwa-onboarding'
-import { MilestoneCelebration } from '@/components/milestone-celebration'
 import { CookieConsent } from '@/components/cookie-consent'
 import { DEFAULT_POPUP_MODE, type PopupMode } from '@/lib/popup-mode'
-import { UserPage } from '@/components/user-page'
-import { BiasColumns } from '@/components/bias-columns'
-import { SourceList } from '@/components/source-list'
 import { CountryPicker } from '@/components/country-picker'
 import { CategoryNav } from '@/components/category-nav'
 import {
@@ -55,7 +38,6 @@ import {
   SubtopicMaxiPills,
   SubtopicHeaderDock,
 } from '@/components/subtopic-navs'
-import { SearchResults } from '@/components/search-results'
 import { cn, safeImageUrl } from '@/lib/utils'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import type { CountryInfo } from '@/lib/country-detect'
@@ -81,6 +63,58 @@ import {
 import { ScrollToTop } from '@/components/scroll-to-top'
 // NOTE: ScrollToTop is no longer mounted — user requested the floating
 // scroll-up button be removed. The component file is kept for reference.
+// (The import above is what keeps the chunk alive in dev tooling — it is
+// tree-shaken from the production bundle since nothing renders it.)
+
+// ── Code splitting — heavy, interaction-gated UI ─────────────────────────
+// These components total ~5,000 lines (~150KB+ gzipped). Loading them
+// lazily takes them off the initial bundle so the PWA paints faster and
+// cold-start JS parse time drops hard on mobile. The idle-preload effect
+// in Home() warms the two hottest chunks (topic-detail + user-page)
+// right after first paint, so the first tap still feels instant — and
+// the service worker keeps every chunk cached for offline use.
+// PwaInstallPrompt stays EAGER: it's the default-mode component and its
+// research-timed engine needs to observe the session from t=0.
+const TopicDetail = dynamic(
+  () => import('@/components/topic-detail').then((m) => m.TopicDetail),
+  { ssr: false, loading: () => <div className="fixed inset-0 z-50 bg-background" aria-hidden /> },
+)
+const UserPage = dynamic(
+  () => import('@/components/user-page').then((m) => m.UserPage),
+  { ssr: false, loading: () => <div className="fixed inset-0 z-50 bg-background/40 backdrop-blur-sm" aria-hidden /> },
+)
+const BiasColumns = dynamic(
+  () => import('@/components/bias-columns').then((m) => m.BiasColumns),
+  { ssr: false },
+)
+const SourceList = dynamic(
+  () => import('@/components/source-list').then((m) => m.SourceList),
+  { ssr: false },
+)
+const SearchResults = dynamic(
+  () => import('@/components/search-results').then((m) => m.SearchResults),
+  { ssr: false },
+)
+const PwaInstallPromptLegacy = dynamic(
+  () => import('@/components/pwa-install-prompt-legacy').then((m) => m.PwaInstallPromptLegacy),
+  { ssr: false },
+)
+const DonatePopupLegacy = dynamic(
+  () => import('@/components/donate-popup-legacy').then((m) => m.DonatePopupLegacy),
+  { ssr: false },
+)
+const IosNotificationPrompt = dynamic(
+  () => import('@/components/ios-notification-prompt').then((m) => m.IosNotificationPrompt),
+  { ssr: false },
+)
+const PwaOnboarding = dynamic(
+  () => import('@/components/pwa-onboarding').then((m) => m.PwaOnboarding),
+  { ssr: false },
+)
+const MilestoneCelebration = dynamic(
+  () => import('@/components/milestone-celebration').then((m) => m.MilestoneCelebration),
+  { ssr: false },
+)
 
 /**
  * Subscribe to push notifications via the Push API.
@@ -149,7 +183,7 @@ async function subscribeToPush(deviceId: string): Promise<void> {
 /**
  * Convert a base64 URL string to a Uint8Array (needed for the Push API).
  */
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
+function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
   const rawData = atob(base64)
@@ -222,6 +256,26 @@ export default function Home({
   // gradient overlay needs manual restoration.
   useEffect(() => {
     restoreGradient()
+  }, [])
+
+  // ── Idle-preload the lazy chunks ──
+  // The heavy overlays (topic detail, user page) are code-split above.
+  // Right after the first paint, while the browser is idle, pull those
+  // two chunks down so the first article tap / account tap renders with
+  // ZERO chunk-load delay. Never runs before paint, so it can't compete
+  // with the critical path; on slow connections it's simply later/never,
+  // and the dynamic import itself is the fallback.
+  useEffect(() => {
+    const preload = () => {
+      import('@/components/topic-detail')
+      import('@/components/user-page')
+    }
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(preload, { timeout: 3000 })
+      return () => window.cancelIdleCallback(id)
+    }
+    const t = window.setTimeout(preload, 1500)
+    return () => window.clearTimeout(t)
   }, [])
 
   // --- Country detection ---
@@ -1719,10 +1773,19 @@ export default function Home({
         )}
       </AnimatePresence>
       {/* Header */}
+      {/* Entrance: the whole header slides down + fades in over 0.35s.
+          Framer clears the transform to `none` once the animation lands
+          (identity values), so sticky positioning + any fixed-position
+          children behave exactly as before afterwards. */}
       {/* The .glass class activates the platform-specific backdrop blur + bg
           opacity (frosted on Android, liquid on Apple, fallback to the
           inline bg-background/95 backdrop-blur on other platforms). */}
-      <header className="glass sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <motion.header
+        className="glass sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
+        initial={{ y: -16, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+      >
         <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4">
           <a href="/" className="flex items-center gap-2 font-bold">
             {/* Logo entrance: fade in + scale from 0.9 → 1 over 0.4s.
@@ -1757,16 +1820,18 @@ export default function Home({
 
           <div className="ml-auto flex items-center gap-1.5">
             {/* Donate button — opens Ko-fi in a new tab.
-                Always red (rose-500) so it stands out. */}
+                Always red (rose-500) so it stands out. The heart icon gets a
+                gentle "heartbeat" pulse on hover (see .nw-heart in
+                globals.css) — a subtle emotional nudge without being pushy. */}
             <Button
               variant="ghost"
               size="icon"
               onClick={() => window.open('https://ko-fi.com/neutralwire', '_blank')}
-              className="transition-transform duration-150 active:scale-95 text-rose-500 hover:text-rose-600"
+              className="nw-heart-btn transition-transform duration-150 active:scale-95 text-rose-500 hover:text-rose-600"
               aria-label="Support NeutralWire on Ko-fi"
               title="Support NeutralWire"
             >
-              <Heart className="h-5 w-5" fill="currentColor" />
+              <Heart className="nw-heart-icon h-5 w-5" fill="currentColor" />
             </Button>
 
             {/* Combined Account + Country button group — looks like one
@@ -1949,7 +2014,7 @@ export default function Home({
             </div>
           )}
         </div>
-      </header>
+      </motion.header>
 
       {/* Main */}
       {/* Page-load animation: the entire main content area fades in + slides
@@ -2042,29 +2107,64 @@ export default function Home({
             >
             {/* Content */}
             {error ? (
+              <motion.div
+                initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              >
               <Card className="flex flex-col items-center gap-3 p-12 text-center">
-                <AlertCircle className="h-8 w-8 text-destructive" />
+                <motion.div
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ duration: 0.3, delay: 0.06, ease: [0.34, 1.56, 0.64, 1] }}
+                >
+                  <AlertCircle className="h-8 w-8 text-destructive" />
+                </motion.div>
                 <div>
                   <div className="font-semibold">Could not load news</div>
                   <div className="mt-1 text-sm text-muted-foreground">{error}</div>
                 </div>
-                <Button onClick={handleRefreshClick} variant="outline" size="sm">
+                <Button
+                  onClick={() => {
+                    // BUGFIX: this handler previously called an undefined
+                    // handleRefreshClick — tapping "Try again" crashed with a
+                    // ReferenceError and the feed could never recover. Re-run
+                    // the real fetch for the current category instead.
+                    setError(null)
+                    fetchData(category, minCoverage, country)
+                  }}
+                  variant="outline"
+                  size="sm"
+                >
                   <RefreshCw className="h-4 w-4" /> Try again
                 </Button>
               </Card>
+              </motion.div>
             ) : view === 'sources' ? (
               <SourceList />
             ) : loading ? (
               <LoadingState />
             ) : filteredTopics.length === 0 ? (
+              <motion.div
+                initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              >
               <Card className="flex flex-col items-center gap-2 p-12 text-center text-muted-foreground">
-                <AlertCircle className="h-6 w-6" />
+                <motion.div
+                  initial={{ scale: 0.7, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ duration: 0.3, delay: 0.08, ease: [0.34, 1.56, 0.64, 1] }}
+                >
+                  <AlertCircle className="h-6 w-6" />
+                </motion.div>
                 <div>
                   {debouncedSearch
                     ? `No topics match "${debouncedSearch}" — searching full catalog…`
                     : 'No topics found. Try a different category or lower the minimum coverage filter.'}
                 </div>
               </Card>
+              </motion.div>
             ) : view === 'columns' ? (
               <BiasColumns topics={filteredTopics} />
             ) : (
@@ -2147,14 +2247,26 @@ export default function Home({
                   {loadingMore && (
                     <div className="grid w-full max-w-[1440px] grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                       {Array.from({ length: 4 }).map((_, i) => (
-                        <div key={i} className="h-64 shimmer rounded-lg" />
+                        <motion.div
+                          key={i}
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.28, delay: i * 0.04, ease: 'easeOut' }}
+                          className="h-64 shimmer rounded-lg bg-muted"
+                        />
                       ))}
                     </div>
                   )}
                   {!loadingMore && !hasMore && (
-                    <div className="text-sm text-muted-foreground">
+                    <motion.div
+                      initial={{ opacity: 0, y: 6 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true, margin: '-20px' }}
+                      transition={{ duration: 0.4, ease: 'easeOut' }}
+                      className="text-sm text-muted-foreground"
+                    >
                       You've reached the end of the news.
-                    </div>
+                    </motion.div>
                   )}
                 </div>
               </>
@@ -2165,11 +2277,16 @@ export default function Home({
       </motion.main>
 
       {/* Footer */}
-      <footer className="border-t bg-muted/30 py-4 mt-auto">
+      <motion.footer
+        className="border-t bg-muted/30 py-4 mt-auto"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.5, delay: 0.15, ease: 'easeOut' }}
+      >
         <div className="mx-auto max-w-[1440px] px-4 text-center text-xs text-muted-foreground">
           NeutralWire
         </div>
-      </footer>
+      </motion.footer>
 
       {/* ── 'dock' nav variant — floating bottom app dock ──
           Rendered here (NOT in the sticky header) so it floats above the
@@ -2375,16 +2492,64 @@ function CategoryTab({
   )
 }
 
+/**
+ * LoadingState — skeleton feed that MIRRORS the real layout it stands in
+ * for: a hero card (image block + meta row + title + bias bar) followed
+ * by a grid of mini cards. Each skeleton pops in with a small stagger so
+ * the loading state itself feels designed rather than a gray rectangle
+ * farm — the shimmer sweep (globals.css) runs across every block.
+ * Skeletons use solid bg-card (not card-glass) on purpose: in the PWA
+ * every .card-glass gets backdrop-blur, and 7 blurred placeholder
+ * surfaces during load is expensive GPU work for something that vanishes.
+ */
 function LoadingState() {
   return (
-    <div className="space-y-4">
-      {/* Skeleton cards use the shimmer class (gradient sweep) instead of
-          plain animate-pulse — looks more polished and matches the glass
-          aesthetic of the rest of the app. */}
-      <Card className="h-72 shimmer rounded-lg" />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="space-y-6" role="status" aria-label="Loading news">
+      {/* Hero skeleton */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+        className="overflow-hidden rounded-lg border bg-card"
+      >
+        <div className="aspect-[16/10] w-full shimmer" />
+        <div className="space-y-3 p-4 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="h-4 w-16 rounded-full shimmer bg-muted" />
+            <div className="h-3 w-24 rounded-full shimmer bg-muted" />
+          </div>
+          <div className="h-6 w-11/12 rounded-md shimmer bg-muted" />
+          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div className="flex h-full">
+              <div className="w-[38%] bg-blue-500/25" />
+              <div className="w-[24%] bg-zinc-500/25" />
+              <div className="w-[38%] bg-red-500/25" />
+            </div>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Mini card grid skeleton */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 6 }).map((_, i) => (
-          <Card key={i} className="h-64 shimmer rounded-lg" />
+          <motion.div
+            key={i}
+            initial={{ opacity: 0, y: 10, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{
+              duration: 0.3,
+              delay: 0.06 + i * 0.045,
+              ease: [0.16, 1, 0.3, 1],
+            }}
+            className="flex gap-2.5 overflow-hidden rounded-lg border bg-card p-2.5"
+          >
+            <div className="h-20 w-20 shrink-0 rounded-md shimmer bg-muted" />
+            <div className="flex flex-1 flex-col gap-2 py-0.5">
+              <div className="h-3.5 w-4/5 rounded shimmer bg-muted" />
+              <div className="h-3 w-3/5 rounded shimmer bg-muted" />
+              <div className="mt-auto h-2 w-full rounded-full shimmer bg-muted" />
+            </div>
+          </motion.div>
         ))}
       </div>
     </div>
@@ -2600,9 +2765,11 @@ function SectionedFeed({
           if (cancelled) return
           const fetched: Record<string, TopicArticle[]> = {}
           const cacheTs = Date.now()
-          for (let i = 0; i < results.length; i++) {
-            if (results[i].status === 'fulfilled') {
-              const { cat, topics: t } = results[i].value
+          // Extract each element to a local first — indexing results[i]
+          // twice does NOT narrow PromiseRejectedResult away in TS.
+          for (const result of results) {
+            if (result.status === 'fulfilled') {
+              const { cat, topics: t } = result.value
               fetched[cat] = t
               sectionTopicsCache.set(cat, { ts: cacheTs, topics: t })
             }

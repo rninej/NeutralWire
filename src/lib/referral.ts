@@ -118,6 +118,10 @@ export interface DeviceRecord {
   bestStreak: number
   lastNotificationDay?: string
   notificationsEnabled?: boolean
+  /** IANA timezone (e.g. "Europe/London") — written by /api/session for
+   *  timezone-aware notification scheduling. Optional because older
+   *  device records were created before this field existed. */
+  timezone?: string
 }
 
 export interface ReferralRecord {
