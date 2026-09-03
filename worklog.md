@@ -2183,3 +2183,24 @@ Stage Summary:
 - /debug now answers "how many PWA downloads / daily active users" with unique-IP math — no double counting, honest privacy (hashed IPs, consent-aware DAU, install counts visible to the owner only; public aggregate powers the sheet's social proof).
 - The website now asks for the install only at research-backed peak-momency moments (finished story, first vote, 2-3 stories, engagement time), never interrupts a first exploration, respects every dismissal, and visualizes ownership (app icon springing onto the phone's home screen).
 - The PWA's donation popup is gone; in its place a milestone celebration that ends sessions on pride instead of guilt — plus a real community heart counter and a referral share that drives new installs.
+
+---
+Task ID: session11
+Agent: main (Super Z)
+Task: Make the NeutralWire launch splash ADAPTIVE — a cold-started PWA used to show the NW splash (~0.5s), then the Relevant tab's shadow/skeleton loader for ~1s before content. Make the splash hold until the page is actually loaded, so it fades out into a fully loaded feed.
+
+Work Log:
+- Environment was fresh: re-cloned the repo (HEAD 890c333), bun install, dev server + scripts/test-proxy.js (standalone emulation on :3100).
+- layout.tsx — launch gate script now exposes window.__NW_LAUNCH.playing; splash CSS rewritten: the fixed `nw-splash-out .16s @ .32s` retirement is REMOVED; new rules: html.nw-release #nw-splash fades out (.18s, fill-forwards retires it forever); .nw-sp-bar gets position:relative + a ::after specular light sweep (nw-sp-sweep, 1.1s infinite, delayed to start after the segments converge) so the hold reads as "loading", not "frozen"; reduced-motion disables the sweep.
+- layout.tsx — NEW inline adaptive controller (head, after the splash CSS): only arms when playing; exposes __NW_LAUNCH.ready(); releases (adds html.nw-release, sets released/reason for debugging) when BOTH the 560ms minimum brand beat elapsed AND ready() was called; 2.6s hard cap releases on slow networks (falls back to the skeleton); release runs inside double requestAnimationFrame so the freshly-rendered feed is PAINTED before the splash starts fading; everything in try/catch.
+- page-client.tsx — splash handoff effect: fires __NW_LAUNCH.ready() once the first feed fetch settles (loading flips false in the same commit that renders real content; error counts too — better than a skeleton); 5s safety-net effect force-adds nw-release if the inline controller ever died; root div now id="nw-app-root".
+- globals.css — html.nw-release #nw-app-root: nw-app-reveal animation (fade + 8px rise, site out-curve, fill both → transform:none at end so fixed children keep their positioning); reduced-motion skips it; never matches in browser tabs.
+- src/types/nw-launch.d.ts — Window.__NW_LAUNCH contract typing.
+- SILENT REFETCH fix in fetchData (root cause of a residual skeleton flash): same-category refetch with content on screen (country detection landing right after the cold-start fetch) no longer calls setLoading(true) — the near-identical payload swaps in silently; on silent failure the visible feed is kept (stale-heal refresh recovers in background). Category switches / manual country change / first load still show the skeleton as before.
+- Fixed a transient parse break while editing (two comment lines missing //).
+- VERIFIED (scripts/test-session11.sh, 18/18): SSR ships gate/controller/release-CSS/sweep/#nw-app-root; :3100 cold start releases with reason 'ready', skeleton never visible at handoff, splash retired (visibility hidden, opacity 0) with real feed text behind it; controller replayed verbatim without ready() holds at 1.3s and cap-fires at 2.6s (reason 'timeout'); reload and browser tabs never see the splash; tsc 0 errors; eslint clean. VLM on screenshots: release moment shows a fully loaded feed (header + Top Headlines + cards, zero shimmer), 1.5s later sections streamed in with no glitches.
+- Pushed 864891b → Vercel.
+
+Stage Summary:
+- Cold start is now: OS launch screen → NW splash entrance (~380ms) → adaptive HOLD (bar sweep) while the app hydrates and the feed fetches → cross-fade (splash out / app in) into a FULLY LOADED Relevant tab. The shadow loader only ever appears on genuinely slow connections (2.6s cap) — never between splash and content on a normal launch.
+- Hydration-safety preserved: only class additions on <html> (server-rendered root layout, suppressHydrationWarning), zero JS touching the splash element; three independent release paths (app signal, 2.6s controller cap, 5s app-side net).

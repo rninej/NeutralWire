@@ -9,11 +9,14 @@
 # System under test (src/app/layout.tsx + src/app/page-client.tsx +
 # src/app/globals.css):
 #   gate script   html.nw-launch   — standalone + fresh navigate only
-#   controller    __NW_LAUNCH.ready() — MIN 560ms brand beat, MAX 2600ms cap
+#   controller    __NW_LAUNCH.ready() — MIN 1100ms brand beat (full looping
+#                 entrance always visible), MAX 2600ms cap; adds nw-settled
+#                 800ms after release (clears the filled reveal animation
+#                 that otherwise breaks touch scroll in fixed overlays)
 #   handoff       page-client calls ready() when !loading || error
 #   release       html.nw-release  — splash fades out, app fades in
 #                 (globals.css: html.nw-release #nw-app-root → nw-app-reveal)
-#   safety net    page-client force-adds nw-release after 5s
+#   safety net    page-client force-adds nw-release after 5s (+ settled)
 #
 # Verified here:
 #   1. SSR HTML ships the gate (with `playing`), the controller, the
@@ -81,7 +84,7 @@ echo "$R2" | ug | grep -q '"op":"0"'                 && ok "splash fully faded" 
 echo "$R2" | ug | grep -qv '"text":""'               && ok "feed has real content" || bad "feed empty"
 
 echo "── 4. Cap path: controller replays verbatim, ready() never called ──"
-agent-browser eval "document.documentElement.classList.remove('nw-release'); window.__NW_LAUNCH={playing:true,standalone:true,navType:'navigate'}; (function(){try{var L=window.__NW_LAUNCH;if(!L||!L.playing)return;var MIN=560,MAX=2600,t0=performance.now(),released=false,ready=false;function release(){if(released)return;released=true;try{L.released=true;L.reason=ready?'ready':'timeout';document.documentElement.classList.add('nw-release')}catch(e){}}function afterPaint(fn){try{requestAnimationFrame(function(){requestAnimationFrame(fn)})}catch(e){fn()}}function schedule(){if(released)return;var w=MIN-(performance.now()-t0);if(w>0)setTimeout(function(){afterPaint(release)},w);else afterPaint(release)}L.ready=function(){if(ready||released)return;ready=true;schedule()};setTimeout(function(){if(!released)release()},MAX)}catch(e){}})(); 'armed'"
+agent-browser eval "document.documentElement.classList.remove('nw-release','nw-settled'); window.__NW_LAUNCH={playing:true,standalone:true,navType:'navigate'}; (function(){try{var L=window.__NW_LAUNCH;if(!L||!L.playing)return;var MIN=1100,MAX=2600,t0=performance.now(),released=false,ready=false;function release(){if(released)return;released=true;try{L.released=true;L.reason=ready?'ready':'timeout';document.documentElement.classList.add('nw-release');setTimeout(function(){try{document.documentElement.classList.add('nw-settled')}catch(e){}},800)}catch(e){}}function afterPaint(fn){try{requestAnimationFrame(function(){requestAnimationFrame(fn)})}catch(e){fn()}}function schedule(){if(released)return;var w=MIN-(performance.now()-t0);if(w>0)setTimeout(function(){afterPaint(release)},w);else afterPaint(release)}L.ready=function(){if(ready||released)return;ready=true;schedule()};setTimeout(function(){if(!released)release()},MAX)}catch(e){}})(); 'armed'"
 sleep 1.3
 H=$(agent-browser eval "JSON.stringify({r: !!window.__NW_LAUNCH.released, c: document.documentElement.classList.contains('nw-release')})")
 echo "  $H"

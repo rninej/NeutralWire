@@ -215,17 +215,30 @@ export default function RootLayout({
                 from the right, and the grey center expands — they snap
                 together into the balanced bias bar that is the brand.
 
-            ADAPTIVE HOLD (v24): the entrance animations are fixed (~380ms)
-            but the splash NO LONGER retires itself on a timer. Instead it
-            HOLDS its finished frame — with a soft specular light sweeping
-            across the bias bar (nw-sp-sweep, infinite) so the wait reads
-            as "loading" rather than "frozen" — until the inline controller
-            below adds `nw-release` to <html>. That happens when the app
-            calls window.__NW_LAUNCH.ready() (page-client fires it the
-            moment the first feed content is rendered) — after a 560ms
-            minimum brand beat — or at a 2.6s hard cap so a slow connection
-            can never trap the user. Result: the splash fades straight
-            into a fully loaded feed — no skeleton flash in between.
+            ADAPTIVE + LOOPING (v25): the entrance is no longer a one-shot
+            that finishes and freezes into a static frame (the "it is just
+            an image" report — the whole sequence could finish while the OS
+            launch image still covered the webview, leaving a frozen frame
+            for the rest of the load). The full brand sequence now LOOPS
+            every 2.8s: orbs + wordmark + tri-color bar converge (~0.4s),
+            hold with the specular light sweeping the bar + a soft orb
+            breathe (~1.8s), gentle dissolve + rewind (~0.5s), replay.
+            Whatever the OS launch screen does, when it lifts there is
+            ALWAYS motion on screen, and the sweep reads as "loading"
+            rather than "frozen". The minimum brand beat is 1100ms so even
+            a fully-cached instant load still shows the complete entrance.
+            The splash still retires only when the inline controller below
+            adds `nw-release` to <html> — the app calls
+            window.__NW_LAUNCH.ready() (page-client fires it the moment the
+            first feed content is rendered) — or at a 2.6s hard cap so a
+            slow connection can never trap the user. Result: the splash
+            fades straight into a fully loaded feed — no skeleton flash.
+            After the reveal's cross-fade completes, the controller also
+            adds `nw-settled` (800ms later) which clears the
+            nw-app-reveal animation — a FILLED transform animation on
+            #nw-app-root otherwise leaves an identity matrix on it that
+            breaks touch scrolling inside fixed-position overlays (the
+            "can't swipe down in an article" bug).
 
             ALWAYS DARK (no light variant): the launch sequence is one
             continuous dark branded moment — the OS launch screen (manifest
@@ -250,27 +263,27 @@ export default function RootLayout({
 #nw-splash{position:fixed;inset:0;z-index:9999;display:none;overflow:hidden;background:#0a0a0a;color:#ececec;pointer-events:none}
 html.nw-launch #nw-splash{display:flex;align-items:center;justify-content:center}
 html.nw-release #nw-splash{animation:nw-splash-out .18s ease .05s forwards}
-#nw-splash .nw-sp-orb{position:absolute;width:62vmax;height:62vmax;border-radius:50%;filter:blur(52px);opacity:0;animation:nw-sp-orb .34s ease-out .02s forwards}
+#nw-splash .nw-sp-orb{position:absolute;width:62vmax;height:62vmax;border-radius:50%;filter:blur(52px);opacity:0;animation:nw-sp-orb 2.8s ease-in-out infinite}
 #nw-splash .nw-sp-orb-b{top:-18vmax;left:-16vmax;background:radial-gradient(circle at 35% 35%,rgba(59,130,246,.38),rgba(59,130,246,0) 68%)}
 #nw-splash .nw-sp-orb-r{bottom:-18vmax;right:-16vmax;background:radial-gradient(circle at 65% 65%,rgba(239,68,68,.34),rgba(239,68,68,0) 68%)}
 #nw-splash .nw-sp-wrap{position:relative;display:flex;flex-direction:column;align-items:center;gap:16px;transform:translateZ(0)}
-#nw-splash .nw-sp-word{font-family:var(--font-geist-sans),system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:26px;font-weight:800;letter-spacing:.01em;animation:nw-sp-word .28s cubic-bezier(.16,1,.3,1) both .03s}
+#nw-splash .nw-sp-word{font-family:var(--font-geist-sans),system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:26px;font-weight:800;letter-spacing:.01em;animation:nw-sp-word 2.8s cubic-bezier(.16,1,.3,1) infinite}
 #nw-splash .nw-sp-bar{position:relative;display:flex;width:min(62vw,300px);height:12px;border-radius:99px;overflow:hidden;background:rgba(127,127,127,.16)}
-#nw-splash .nw-sp-bar::after{content:'';position:absolute;inset:0;background:linear-gradient(100deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.24) 50%,rgba(255,255,255,0) 70%);transform:translateX(-130%);animation:nw-sp-sweep 1.1s cubic-bezier(.4,0,.2,1) .5s infinite}
+#nw-splash .nw-sp-bar::after{content:'';position:absolute;inset:0;background:linear-gradient(100deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.24) 50%,rgba(255,255,255,0) 70%);transform:translateX(-130%);animation:nw-sp-sweep 1.15s cubic-bezier(.4,0,.2,1) .45s infinite}
 #nw-splash .nw-seg{display:block;height:100%;transform:translateZ(0)}
-#nw-splash .nw-seg-b{width:37%;background:#3b82f6;border-radius:99px 0 0 99px;animation:nw-seg-left .34s cubic-bezier(.18,.89,.32,1.08) both}
-#nw-splash .nw-seg-g{width:26%;background:#a1a1a1;transform-origin:50% 50%;animation:nw-seg-grow .3s cubic-bezier(.16,1,.3,1) both .05s}
-#nw-splash .nw-seg-r{width:37%;background:#ef4444;border-radius:0 99px 99px 0;animation:nw-seg-right .34s cubic-bezier(.18,.89,.32,1.08) both}
-#nw-splash .nw-sp-tag{font-family:var(--font-geist-sans),system-ui,sans-serif;font-size:11px;font-weight:600;letter-spacing:.24em;text-transform:uppercase;opacity:0;color:#9a9a9a;animation:nw-sp-tag .24s ease both .12s}
+#nw-splash .nw-seg-b{width:37%;background:#3b82f6;border-radius:99px 0 0 99px;animation:nw-seg-left 2.8s cubic-bezier(.18,.89,.32,1.08) infinite}
+#nw-splash .nw-seg-g{width:26%;background:#a1a1a1;transform-origin:50% 50%;animation:nw-seg-grow 2.8s cubic-bezier(.16,1,.3,1) infinite}
+#nw-splash .nw-seg-r{width:37%;background:#ef4444;border-radius:0 99px 99px 0;animation:nw-seg-right 2.8s cubic-bezier(.18,.89,.32,1.08) infinite}
+#nw-splash .nw-sp-tag{font-family:var(--font-geist-sans),system-ui,sans-serif;font-size:11px;font-weight:600;letter-spacing:.24em;text-transform:uppercase;opacity:0;color:#9a9a9a;animation:nw-sp-tag 2.8s ease infinite}
 @keyframes nw-splash-out{to{opacity:0;visibility:hidden}}
 @keyframes nw-sp-sweep{to{transform:translateX(130%)}}
-@keyframes nw-sp-orb{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
-@keyframes nw-sp-word{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-@keyframes nw-seg-left{from{transform:translateX(-180%)}to{transform:translateX(0)}}
-@keyframes nw-seg-right{from{transform:translateX(180%)}to{transform:translateX(0)}}
-@keyframes nw-seg-grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
-@keyframes nw-sp-tag{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){#nw-splash .nw-sp-orb,#nw-splash .nw-sp-word,#nw-splash .nw-seg,#nw-splash .nw-sp-tag{animation:none}#nw-splash .nw-sp-orb{opacity:.5}#nw-splash .nw-seg-g{transform:none}#nw-splash .nw-sp-bar::after{display:none}}
+@keyframes nw-sp-orb{0%{opacity:0;transform:scale(.85)}6%{opacity:1;transform:scale(1)}42%{transform:scale(1.035)}78%{opacity:1;transform:scale(1)}88%{opacity:0;transform:scale(1.05)}100%{opacity:0;transform:scale(.85)}}
+@keyframes nw-sp-word{0%{opacity:0;transform:translateY(10px)}9%{opacity:1;transform:none}78%{opacity:1;transform:none}88%{opacity:0;transform:translateY(8px)}100%{opacity:0;transform:translateY(10px)}}
+@keyframes nw-seg-left{0%{transform:translateX(-180%)}15%{transform:translateX(0)}80%{transform:translateX(0)}93%{transform:translateX(-180%)}100%{transform:translateX(-180%)}}
+@keyframes nw-seg-right{0%{transform:translateX(180%)}15%{transform:translateX(0)}80%{transform:translateX(0)}93%{transform:translateX(180%)}100%{transform:translateX(180%)}}
+@keyframes nw-seg-grow{0%{transform:scaleX(0)}15%{transform:scaleX(1)}80%{transform:scaleX(1)}93%{transform:scaleX(0)}100%{transform:scaleX(0)}}
+@keyframes nw-sp-tag{0%{opacity:0;transform:translateY(4px)}12%{opacity:1;transform:none}78%{opacity:1;transform:none}87%{opacity:0;transform:translateY(4px)}100%{opacity:0;transform:translateY(4px)}}
+@media (prefers-reduced-motion:reduce){#nw-splash .nw-sp-orb,#nw-splash .nw-sp-word,#nw-splash .nw-seg,#nw-splash .nw-sp-tag{animation:none}#nw-splash .nw-sp-orb{opacity:.5}#nw-splash .nw-sp-word,#nw-splash .nw-sp-tag{opacity:1}#nw-splash .nw-seg-g{transform:none}#nw-splash .nw-sp-bar::after{display:none}}
             `,
           }}
         />
@@ -280,9 +293,10 @@ html.nw-release #nw-splash{animation:nw-splash-out .18s ease .05s forwards}
             played the splash (window.__NW_LAUNCH.playing). Exposes
             window.__NW_LAUNCH.ready() — page-client calls it once the first
             feed content has rendered — and releases the splash when BOTH
-            the minimum brand beat (560ms) has elapsed AND the app is ready,
-            with a 2.6s hard cap for slow networks (then the feed's own
-            skeleton loader takes over, as before).
+            the minimum brand beat (1100ms — long enough for the full
+            looping entrance to be perceived) has elapsed AND the app is
+            ready, with a 2.6s hard cap for slow networks (then the feed's
+            own skeleton loader takes over, as before).
             Release = add the `nw-release` class to <html> (the CSS above
             fades the layer out and retires it). The release runs inside a
             double requestAnimationFrame so the freshly-rendered feed has
@@ -293,7 +307,7 @@ html.nw-release #nw-splash{animation:nw-splash-out .18s ease .05s forwards}
             never take the page down. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var L=window.__NW_LAUNCH;if(!L||!L.playing)return;var MIN=560,MAX=2600,t0=performance.now(),released=false,ready=false;function release(){if(released)return;released=true;try{L.released=true;L.reason=ready?'ready':'timeout';document.documentElement.classList.add('nw-release')}catch(e){}}function afterPaint(fn){try{requestAnimationFrame(function(){requestAnimationFrame(fn)})}catch(e){fn()}}function schedule(){if(released)return;var w=MIN-(performance.now()-t0);if(w>0)setTimeout(function(){afterPaint(release)},w);else afterPaint(release)}L.ready=function(){if(ready||released)return;ready=true;schedule()};setTimeout(function(){if(!released)release()},MAX)}catch(e){}})();`,
+            __html: `(function(){try{var L=window.__NW_LAUNCH;if(!L||!L.playing)return;var MIN=1100,MAX=2600,t0=performance.now(),released=false,ready=false;function release(){if(released)return;released=true;try{L.released=true;L.reason=ready?'ready':'timeout';document.documentElement.classList.add('nw-release');setTimeout(function(){try{document.documentElement.classList.add('nw-settled')}catch(e){}},800)}catch(e){}}function afterPaint(fn){try{requestAnimationFrame(function(){requestAnimationFrame(fn)})}catch(e){fn()}}function schedule(){if(released)return;var w=MIN-(performance.now()-t0);if(w>0)setTimeout(function(){afterPaint(release)},w);else afterPaint(release)}L.ready=function(){if(ready||released)return;ready=true;schedule()};setTimeout(function(){if(!released)release()},MAX)}catch(e){}})();`,
           }}
         />
       </head>
@@ -384,8 +398,10 @@ html.nw-release #nw-splash{animation:nw-splash-out .18s ease .05s forwards}
                       // If a new SW is waiting to activate, tell it to skip
                       // waiting immediately (it already calls skipWaiting on
                       // install, but this covers the case where it's already
-                      // installed but waiting).
-                      if (registration.waiting) {
+                      // installed but waiting). (registration can be
+                      // undefined in rare contexts, e.g. browsers with
+                      // service workers disabled — guard it.)
+                      if (registration && registration.waiting) {
                         registration.waiting.postMessage({ type: 'SKIP_WAITING' });
                       }
                     },

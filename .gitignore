@@ -64,3 +64,4 @@ download/*.png
 !public/icon-*.png
 !public/apple-touch-icon.png
 !public/favicon-*.png
+agent-ctx/

@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export const dynamic = 'force-static'
 
-const LAST_UPDATED = '3 September 2026'
+const LAST_UPDATED = '4 September 2026'
 
 /**
  * /privacy — the NeutralWire privacy policy.
@@ -117,8 +117,8 @@ export default function PrivacyPage() {
             v="Theme, light/dark mode, header style, interests, language, and notification frequency — so the app looks and behaves the way you left it."
           />
           <Row
-            k="Country & timezone"
-            v="Your country is looked up from your IP address once per session (country level only — never your city, street, or GPS position), and your timezone is read from your device clock so briefings arrive at the right local time."
+            k="Country, city & timezone"
+            v="Your country — and, when the lookup provides it, your city and region — are looked up from your IP address once per session (approximate, IP-derived — never GPS, Wi-Fi positioning, or your exact address). This powers the My Country and Relevant tabs and surfaces stories about your area. Your timezone is read from your device clock so briefings arrive at the right local time."
           />
           <Row
             k="Anonymous usage stats"
@@ -221,8 +221,10 @@ export default function PrivacyPage() {
           per-device records described above (servers in Europe).
         </Li>
         <Li>
-          <b>ipwho.is</b> — converts your IP into a country name once per
-          session. Your IP itself is not stored in our database.
+          <b>ipwho.is / ip-api.com</b> — convert your IP into a country,
+          region, and city name once per session (approximate
+          IP-based geolocation). The result is cached on your device; your
+          IP itself is not stored in our database.
         </Li>
         <Li>
           <b>News providers</b> — GDELT, Guardian, and other public news
@@ -243,7 +245,9 @@ export default function PrivacyPage() {
         <Li>No accounts, emails, or phone numbers are ever collected.</Li>
         <Li>No advertising, no ad networks, no cross-site tracking pixels.</Li>
         <Li>
-          No precise location — country-level detection only, from your IP.
+          No precise location — only an approximate country and city,
+          derived from your IP. Never GPS, Wi-Fi positioning, or your
+          exact street address.
         </Li>
         <Li>
           No selling, renting, or sharing of your data with anyone for
@@ -272,10 +276,10 @@ export default function PrivacyPage() {
           keyed only by your old random device ID with no way to contact
           or identify you, but if you want them explicitly wiped, email{' '}
           <a
-            href="mailto:privacy@neutralwire.org"
+            href="mailto:moneyisbroken@gmail.com"
             className="font-semibold underline underline-offset-2"
           >
-            privacy@neutralwire.org
+            moneyisbroken@gmail.com
           </a>{' '}
           from the device (include the ID shown in Account → Profile) and
           we will delete the record.
@@ -289,10 +293,10 @@ export default function PrivacyPage() {
           top and, where relevant, show the cookie banner again. Questions
           or concerns? Email{' '}
           <a
-            href="mailto:privacy@neutralwire.org"
+            href="mailto:moneyisbroken@gmail.com"
             className="font-semibold underline underline-offset-2"
           >
-            privacy@neutralwire.org
+            moneyisbroken@gmail.com
           </a>
           . NeutralWire is a small, independent project — your trust is
           the whole product.

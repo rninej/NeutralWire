@@ -1668,16 +1668,19 @@ export default function Home({
 
   // ── Adaptive splash handoff (PWA cold start only) ──
   // The inline controller in layout.tsx holds the launch splash on screen
-  // (entrance ~380ms, then a soft light sweeping the bias bar) until it
-  // gets this signal. `loading` flips false in the same commit that
-  // renders the first real feed content (success, empty feed, or error —
-  // all better than a skeleton), so ready() fires exactly when there is
-  // something worth revealing. The controller then waits out the 560ms
-  // minimum brand beat, double-rAFs (content actually painted), and adds
-  // html.nw-release → splash fades out while globals.css fades the app in.
-  // Result: a cold-started PWA goes NW splash → fully loaded Relevant tab;
-  // the shadow-loader skeleton only ever appears on genuinely slow
-  // connections (the controller's 2.6s cap falls back to it).
+  // (the full brand sequence LOOPS — converge, sweeping hold, dissolve —
+  // so there is always motion) until it gets this signal. `loading` flips
+  // false in the same commit that renders the first real feed content
+  // (success, empty feed, or error — all better than a skeleton), so
+  // ready() fires exactly when there is something worth revealing. The
+  // controller then waits out the 1100ms minimum brand beat (the full
+  // entrance, always visible), double-rAFs (content actually painted),
+  // and adds html.nw-release → splash fades out while globals.css fades
+  // the app in; 800ms later it adds nw-settled so touch scrolling in
+  // fixed overlays works. Result: a cold-started PWA goes NW splash →
+  // fully loaded Relevant tab; the shadow-loader skeleton only ever
+  // appears on genuinely slow connections (the controller's 2.6s cap
+  // falls back to it).
   // In a browser tab window.__NW_LAUNCH.ready is undefined → no-op.
   const splashHandoffRef = React.useRef(false)
   useEffect(() => {
@@ -1695,14 +1698,19 @@ export default function Home({
   // ── Splash safety net ──
   // If the inline controller ever failed to run (script error, blocked),
   // the splash would hold forever with no one to release it. The feed is
-  // definitely rendered 5s in — force the release ourselves. In a browser
-  // tab (no nw-launch class) this is a no-op.
+  // definitely rendered 5s in — force the release ourselves, then settle
+  // 800ms later (clears the filled nw-app-reveal animation whose identity
+  // matrix breaks touch scrolling in fixed overlays — see globals.css).
+  // In a browser tab (no nw-launch class) this is a no-op.
   useEffect(() => {
     const t = setTimeout(() => {
       try {
         const el = document.documentElement
         if (el.classList.contains('nw-launch') && !el.classList.contains('nw-release')) {
           el.classList.add('nw-release')
+          setTimeout(() => {
+            try { el.classList.add('nw-settled') } catch { /* no-op */ }
+          }, 800)
         }
       } catch {
         // no-op

@@ -1577,9 +1577,8 @@ img {
    is painted — the splash starts fading out (180ms) and this rule fades
    the app in OVER THE SAME BEAT (rise 8px + fade, the site's standard
    out-curve): a cross-fade from brand moment to fully loaded feed, with
-   no skeleton ever flashing in between. `both` fill holds the final state
-   (transform:none → no lingering containing-block for fixed children).
-   In a browser tab nw-release never exists, so the rule never matches.
+   no skeleton ever flashing in between. In a browser tab nw-release never
+   exists, so the rule never matches.
    ───────────────────────────────────────────────────────────────────────── */
 html.nw-release #nw-app-root {
   animation: nw-app-reveal 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -1587,6 +1586,20 @@ html.nw-release #nw-app-root {
 @keyframes nw-app-reveal {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: none; }
+}
+/* nw-settled — CRITICAL, added by the head controller 800ms after release
+   (and by page-client's 5s safety net). A FILLED animation of `transform`
+   computes to an identity MATRIX (not `none`), which keeps #nw-app-root as
+   the containing block for its fixed-position children AND, in Chromium,
+   silently breaks touch scrolling inside those fixed overlays (mouse wheel
+   still works — the "can't swipe down in an article" PWA bug). Once the
+   0.5s reveal has certainly finished, clear the animation entirely: the
+   element returns to transform:none with no active/filled animation, and
+   every fixed overlay (topic detail, user page, popups) scrolls normally
+   again under touch. Same end state visually — zero transition, because
+   the reveal's final keyframe already matches the natural styles. */
+html.nw-settled #nw-app-root {
+  animation: none;
 }
 @media (prefers-reduced-motion: reduce) {
   html.nw-release #nw-app-root { animation: none; }

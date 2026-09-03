@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useDragControls, type PanInfo } from 'framer-motion'
 import {
   X,
   Clock,
@@ -82,6 +82,28 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
   // not after the entire summary card has passed.
   const [askAiSticky, setAskAiSticky] = React.useState(false)
   const askAiButtonRef = React.useRef<HTMLButtonElement | null>(null)
+
+  // ── Swipe-down-to-close (mobile sheet gesture) ──
+  // The article opens as a full-screen sheet; the universal mobile
+  // expectation is "drag down from the top to dismiss it". The gesture
+  // STARTS ONLY on the sticky top bar (dragListener=false +
+  // useDragControls started from the bar's pointerdown) so dragging can
+  // never fight the article's own touch scrolling below the bar — you
+  // scroll the content with your thumb anywhere, and close the sheet by
+  // pulling the top bar (or the grabber handle) down. Releasing past the
+  // distance/velocity threshold calls onClose; otherwise the sheet
+  // rubber-bands back (dragConstraints + elastic bottom). `dragClosing`
+  // switches the exit animation to a downward sink so a drag-close glides
+  // out in the SAME direction the user was pulling instead of jumping up.
+  const dragControls = useDragControls()
+  const [dragClosing, setDragClosing] = React.useState(false)
+  const handleDragEnd = (_: unknown, info: PanInfo) => {
+    // Pull distance past ~100px, or a decisive flick (>550px/s downward).
+    if (info.offset.y > 100 || info.velocity.y > 550) {
+      setDragClosing(true)
+      onClose()
+    }
+  }
 
   // ── Like/dislike persistence ──
   // Load saved vote from localStorage on mount (instant, no Firebase read needed).
@@ -505,14 +527,46 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
       // enough to feel responsive but slow enough to read as "polished".
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 16 }}
+      exit={dragClosing ? { opacity: 0, y: 420 } : { opacity: 0, y: 16 }}
       transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+      // Swipe-down-to-close: vertical drag is armed but ONLY starts from
+      // the top bar (dragListener=false; the bar calls
+      // dragControls.start on its own pointerdown). Constraints pin the
+      // sheet to the viewport with a soft bottom elastic — pulling down
+      // rubber-bands, and crossing the threshold in onDragEnd closes it.
+      drag="y"
+      dragListener={false}
+      dragControls={dragControls}
+      dragConstraints={{ top: 0, bottom: 0 }}
+      dragElastic={{ top: 0, bottom: 0.6 }}
+      dragMomentum={false}
+      onDragEnd={handleDragEnd}
     >
       {/* Sticky top bar: Close (left) | right group (ml-auto) → like/dislike + Share + Ask AI(sticky)
           The .glass class activates the platform-specific backdrop blur + bg
           opacity (frosted on Android, liquid on Apple, fallback to the
-          inline bg-background/95 backdrop-blur on other platforms). */}
-      <div className="glass sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
+          inline bg-background/95 backdrop-blur on other platforms).
+
+          SWIPE-DOWN HANDLE: pointerdown anywhere on the bar (except its
+          buttons/links) starts the sheet drag — pull down to dismiss the
+          article. touch-action:none stops the touch scroll from claiming
+          the gesture before the drag can begin; taps on buttons still
+          click normally (they never enter the drag). The little grabber
+          pill at the top centre is the visual affordance. */}
+      <motion.div
+        className="glass sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur"
+        style={{ touchAction: 'none', cursor: 'grab' }}
+        onPointerDown={(e) => {
+          // Don't hijack presses on the bar's own controls.
+          if ((e.target as HTMLElement).closest('button, a, input, textarea')) return
+          dragControls.start(e)
+        }}
+      >
+        {/* Grabber handle — the "pull me down" affordance */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute left-1/2 top-1.5 h-1 w-9 -translate-x-1/2 rounded-full bg-foreground/20"
+        />
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5 flex-shrink-0">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
@@ -620,7 +674,7 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
             </span>
           </button>
         </div>
-      </div>
+      </motion.div>
 
       <div className="mx-auto max-w-3xl px-4 py-6">
         {/* Header */}

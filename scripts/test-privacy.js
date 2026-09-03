@@ -1,0 +1,16 @@
+import { chromium, devices } from 'playwright'
+(async () => {
+  const browser = await chromium.launch({ headless: true })
+  const page = await (await browser.newContext({ ...devices['iPhone 14'] })).newPage()
+  await page.goto('http://localhost:3000/privacy', { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {})
+  await page.waitForTimeout(1200)
+  const txt = await page.evaluate(() => document.body.innerText)
+  console.log('mentions city row:', /Country, city & timezone/.test(txt))
+  console.log('mentions approximate city:', /city and region/.test(txt))
+  console.log('email updated:', txt.includes('moneyisbroken@gmail.com'))
+  console.log('old email gone:', !txt.includes('privacy@neutralwire.org'))
+  console.log('never-do updated:', /approximate country and city/.test(txt))
+  console.log('date updated:', txt.includes('4 September 2026'))
+  await page.screenshot({ path: 'agent-ctx/privacy-page.png', fullPage: false })
+  await browser.close()
+})()
