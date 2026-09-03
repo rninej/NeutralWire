@@ -190,7 +190,7 @@ export default function RootLayout({
             debugging/testing. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var standalone=false;try{standalone=window.matchMedia('(display-mode: standalone)').matches||window.matchMedia('(display-mode: minimal-ui)').matches}catch(e){}var navType='navigate';try{var navs=performance.getEntriesByType('navigation');if(navs&&navs.length&&navs[0].type)navType=navs[0].type}catch(e){}window.__NW_LAUNCH={standalone:standalone,navType:navType};if(standalone&&navType==='navigate'){document.documentElement.classList.add('nw-launch')}}catch(e){}})();`,
+            __html: `(function(){try{var standalone=false;try{standalone=window.matchMedia('(display-mode: standalone)').matches||window.matchMedia('(display-mode: minimal-ui)').matches}catch(e){}var navType='navigate';try{var navs=performance.getEntriesByType('navigation');if(navs&&navs.length&&navs[0].type)navType=navs[0].type}catch(e){}var playing=standalone&&navType==='navigate';window.__NW_LAUNCH={standalone:standalone,navType:navType,playing:playing};if(playing){document.documentElement.classList.add('nw-launch')}}catch(e){}})();`,
           }}
         />
         {/* ── PWA launch splash — full-screen tri-color animation ──
@@ -214,6 +214,19 @@ export default function RootLayout({
                 the blue segment slides in from the left, the red segment
                 from the right, and the grey center expands — they snap
                 together into the balanced bias bar that is the brand.
+
+            ADAPTIVE HOLD (v24): the entrance animations are fixed (~380ms)
+            but the splash NO LONGER retires itself on a timer. Instead it
+            HOLDS its finished frame — with a soft specular light sweeping
+            across the bias bar (nw-sp-sweep, infinite) so the wait reads
+            as "loading" rather than "frozen" — until the inline controller
+            below adds `nw-release` to <html>. That happens when the app
+            calls window.__NW_LAUNCH.ready() (page-client fires it the
+            moment the first feed content is rendered) — after a 560ms
+            minimum brand beat — or at a 2.6s hard cap so a slow connection
+            can never trap the user. Result: the splash fades straight
+            into a fully loaded feed — no skeleton flash in between.
+
             ALWAYS DARK (no light variant): the launch sequence is one
             continuous dark branded moment — the OS launch screen (manifest
             background_color #0a0a0a on Android, apple-touch-startup-image
@@ -222,38 +235,65 @@ export default function RootLayout({
             reintroduce a white flash between the dark OS launch screen and
             the app for dark users, so the splash is dark in BOTH color
             schemes now.
-            HYDRATION-SAFE BY DESIGN: 100% CSS — the out-animation
-            (0.32s hold + 0.16s fade, animation-fill-mode: forwards)
-            retires the layer at a fixed ~480ms with ZERO JavaScript DOM
-            mutation of the splash element, so React never sees an
-            attribute mismatch during hydration and nothing can ever
-            re-show it. The whole animation therefore never lasts more
-            than half a second, on ANY connection speed. */}
+            HYDRATION-SAFE BY DESIGN: the splash element itself is 100% CSS
+            and React never mutates it. The only DOM writes are two CLASS
+            additions on <html> (nw-launch pre-hydration by the gate script,
+            nw-release post-hydration by the controller) — <html> carries
+            suppressHydrationWarning AND is rendered by the server-only root
+            layout, so React never re-renders it. The out-animation keeps
+            animation-fill-mode: forwards, so once faded the layer stays
+            retired (opacity 0, visibility hidden) and nothing can re-show
+            it. */}
         <style
           dangerouslySetInnerHTML={{
             __html: `
 #nw-splash{position:fixed;inset:0;z-index:9999;display:none;overflow:hidden;background:#0a0a0a;color:#ececec;pointer-events:none}
-html.nw-launch #nw-splash{display:flex;align-items:center;justify-content:center;animation:nw-splash-out .16s ease .32s forwards}
+html.nw-launch #nw-splash{display:flex;align-items:center;justify-content:center}
+html.nw-release #nw-splash{animation:nw-splash-out .18s ease .05s forwards}
 #nw-splash .nw-sp-orb{position:absolute;width:62vmax;height:62vmax;border-radius:50%;filter:blur(52px);opacity:0;animation:nw-sp-orb .34s ease-out .02s forwards}
 #nw-splash .nw-sp-orb-b{top:-18vmax;left:-16vmax;background:radial-gradient(circle at 35% 35%,rgba(59,130,246,.38),rgba(59,130,246,0) 68%)}
 #nw-splash .nw-sp-orb-r{bottom:-18vmax;right:-16vmax;background:radial-gradient(circle at 65% 65%,rgba(239,68,68,.34),rgba(239,68,68,0) 68%)}
 #nw-splash .nw-sp-wrap{position:relative;display:flex;flex-direction:column;align-items:center;gap:16px;transform:translateZ(0)}
 #nw-splash .nw-sp-word{font-family:var(--font-geist-sans),system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:26px;font-weight:800;letter-spacing:.01em;animation:nw-sp-word .28s cubic-bezier(.16,1,.3,1) both .03s}
-#nw-splash .nw-sp-bar{display:flex;width:min(62vw,300px);height:12px;border-radius:99px;overflow:hidden;background:rgba(127,127,127,.16)}
+#nw-splash .nw-sp-bar{position:relative;display:flex;width:min(62vw,300px);height:12px;border-radius:99px;overflow:hidden;background:rgba(127,127,127,.16)}
+#nw-splash .nw-sp-bar::after{content:'';position:absolute;inset:0;background:linear-gradient(100deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.24) 50%,rgba(255,255,255,0) 70%);transform:translateX(-130%);animation:nw-sp-sweep 1.1s cubic-bezier(.4,0,.2,1) .5s infinite}
 #nw-splash .nw-seg{display:block;height:100%;transform:translateZ(0)}
 #nw-splash .nw-seg-b{width:37%;background:#3b82f6;border-radius:99px 0 0 99px;animation:nw-seg-left .34s cubic-bezier(.18,.89,.32,1.08) both}
 #nw-splash .nw-seg-g{width:26%;background:#a1a1a1;transform-origin:50% 50%;animation:nw-seg-grow .3s cubic-bezier(.16,1,.3,1) both .05s}
 #nw-splash .nw-seg-r{width:37%;background:#ef4444;border-radius:0 99px 99px 0;animation:nw-seg-right .34s cubic-bezier(.18,.89,.32,1.08) both}
 #nw-splash .nw-sp-tag{font-family:var(--font-geist-sans),system-ui,sans-serif;font-size:11px;font-weight:600;letter-spacing:.24em;text-transform:uppercase;opacity:0;color:#9a9a9a;animation:nw-sp-tag .24s ease both .12s}
 @keyframes nw-splash-out{to{opacity:0;visibility:hidden}}
+@keyframes nw-sp-sweep{to{transform:translateX(130%)}}
 @keyframes nw-sp-orb{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
 @keyframes nw-sp-word{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 @keyframes nw-seg-left{from{transform:translateX(-180%)}to{transform:translateX(0)}}
 @keyframes nw-seg-right{from{transform:translateX(180%)}to{transform:translateX(0)}}
 @keyframes nw-seg-grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 @keyframes nw-sp-tag{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){#nw-splash .nw-sp-orb,#nw-splash .nw-sp-word,#nw-splash .nw-seg,#nw-splash .nw-sp-tag{animation:none}#nw-splash .nw-sp-orb{opacity:.5}#nw-splash .nw-seg-g{transform:none}}
+@media (prefers-reduced-motion:reduce){#nw-splash .nw-sp-orb,#nw-splash .nw-sp-word,#nw-splash .nw-seg,#nw-splash .nw-sp-tag{animation:none}#nw-splash .nw-sp-orb{opacity:.5}#nw-splash .nw-seg-g{transform:none}#nw-splash .nw-sp-bar::after{display:none}}
             `,
+          }}
+        />
+        {/* ── Adaptive splash controller ──
+            Tiny inline script that owns the splash LIFECYCLE (see the CSS
+            comment above). It only runs when the launch gate actually
+            played the splash (window.__NW_LAUNCH.playing). Exposes
+            window.__NW_LAUNCH.ready() — page-client calls it once the first
+            feed content has rendered — and releases the splash when BOTH
+            the minimum brand beat (560ms) has elapsed AND the app is ready,
+            with a 2.6s hard cap for slow networks (then the feed's own
+            skeleton loader takes over, as before).
+            Release = add the `nw-release` class to <html> (the CSS above
+            fades the layer out and retires it). The release runs inside a
+            double requestAnimationFrame so the freshly-rendered feed has
+            actually been PAINTED before the splash starts fading — the
+            user never glimpses an unpainted frame.
+            Belt-and-braces: page-client also force-releases after 5s in
+            case this script ever fails. All wrapped in try/catch so it can
+            never take the page down. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var L=window.__NW_LAUNCH;if(!L||!L.playing)return;var MIN=560,MAX=2600,t0=performance.now(),released=false,ready=false;function release(){if(released)return;released=true;try{L.released=true;L.reason=ready?'ready':'timeout';document.documentElement.classList.add('nw-release')}catch(e){}}function afterPaint(fn){try{requestAnimationFrame(function(){requestAnimationFrame(fn)})}catch(e){fn()}}function schedule(){if(released)return;var w=MIN-(performance.now()-t0);if(w>0)setTimeout(function(){afterPaint(release)},w);else afterPaint(release)}L.ready=function(){if(ready||released)return;ready=true;schedule()};setTimeout(function(){if(!released)release()},MAX)}catch(e){}})();`,
           }}
         />
       </head>
@@ -270,14 +310,19 @@ html.nw-launch #nw-splash{display:flex;align-items:center;justify-content:center
             animation instead of a white screen: blue slides in from the
             left, red from the right, grey expands from the center — the
             three converge into the NeutralWire bias bar over large tinted
-            screen orbs. The inlined CSS above fades the whole layer out
-            and retires it (opacity 0, visibility hidden,
-            animation-fill-mode: forwards) at a FIXED ~480ms — 320ms play
-            + 160ms fade — so it never lasts more than half a second no
-            matter how slow the connection is.
-            NO JavaScript touches this element: React renders it once, the
-            CSS animation handles its whole lifecycle, and nothing can
-            re-show it or fight hydration. */}
+            screen orbs.
+            ADAPTIVE (v24): the entrance plays in ~380ms, then the layer
+            HOLDS (a soft light sweeps across the bar — see the head CSS)
+            until the head controller adds html.nw-release: page-client
+            calls window.__NW_LAUNCH.ready() when the first feed content
+            has rendered, so the splash fades (180ms, fill-mode forwards
+            → opacity 0 / visibility hidden, retired forever) straight
+            into a fully loaded page. 560ms minimum brand beat, 2.6s hard
+            cap, 5s app-side safety net — a slow network falls back to the
+            feed skeleton, a normal one never shows it.
+            No JS touches this element: React renders it once, the CSS
+            animation handles its whole lifecycle, and nothing can re-show
+            it or fight hydration. */}
         <div id="nw-splash" aria-hidden="true">
           {/* Full-screen tinted orbs — blue (left) + red (right). */}
           <div className="nw-sp-orb nw-sp-orb-b" />

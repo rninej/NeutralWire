@@ -1511,6 +1511,17 @@ export default function Home({
   }, [localSearchAttempted, debouncedSearch])
 
   // --- Fetch news (cache-first from Firebase) ---
+  // SILENT REFETCH (v24): when re-fetching the SAME category while the
+  // feed already has content, we do NOT blank it to the skeleton — the
+  // near-identical payload swaps in when it arrives. This matters most
+  // on a PWA cold start: the first fetch lands (splash releases into a
+  // loaded feed), then country detection completes and triggers a refine
+  // fetch — previously that flipped `loading` back on and flashed the
+  // shadow-loader skeleton over the already-visible feed. Now the
+  // refetch is invisible. Category switches, manual country changes and
+  // the first load still show the skeleton (different category / topics
+  // were just cleared / nothing to keep).
+  const lastFetchCatRef = React.useRef<Category | null>(null)
   const fetchData = React.useCallback(
     async (cat: Category, mc: number, country?: CountryInfo | null) => {
       // For virtual categories, include the country param ONLY when we
@@ -1523,7 +1534,9 @@ export default function Home({
       const isVirtual = cat === 'relevant' || cat === 'mycountry'
 
       const reqId = ++reqIdRef.current
-      setLoading(true)
+      const silent = lastFetchCatRef.current === cat && topicsRef.current.length > 0
+      lastFetchCatRef.current = cat
+      if (!silent) setLoading(true)
       setError(null)
       try {
         const params = new URLSearchParams({
@@ -1635,8 +1648,13 @@ export default function Home({
         }
       } catch (e) {
         if (reqId !== reqIdRef.current) return
-        setError(e instanceof Error ? e.message : 'Failed to load news')
-        setTopics([])
+        if (!silent) {
+          setError(e instanceof Error ? e.message : 'Failed to load news')
+          setTopics([])
+        }
+        // Silent-refetch failure: the visible feed is already good content
+        // — keep it on screen (no error card, no blanking). The stale-feed
+        // heal effect refreshes it in the background.
       } finally {
         if (reqId === reqIdRef.current) setLoading(false)
       }
@@ -1647,6 +1665,51 @@ export default function Home({
   useEffect(() => {
     fetchData(category, minCoverage, country)
   }, [category, minCoverage, country, fetchData])
+
+  // ── Adaptive splash handoff (PWA cold start only) ──
+  // The inline controller in layout.tsx holds the launch splash on screen
+  // (entrance ~380ms, then a soft light sweeping the bias bar) until it
+  // gets this signal. `loading` flips false in the same commit that
+  // renders the first real feed content (success, empty feed, or error —
+  // all better than a skeleton), so ready() fires exactly when there is
+  // something worth revealing. The controller then waits out the 560ms
+  // minimum brand beat, double-rAFs (content actually painted), and adds
+  // html.nw-release → splash fades out while globals.css fades the app in.
+  // Result: a cold-started PWA goes NW splash → fully loaded Relevant tab;
+  // the shadow-loader skeleton only ever appears on genuinely slow
+  // connections (the controller's 2.6s cap falls back to it).
+  // In a browser tab window.__NW_LAUNCH.ready is undefined → no-op.
+  const splashHandoffRef = React.useRef(false)
+  useEffect(() => {
+    if (splashHandoffRef.current) return
+    if (!loading || error) {
+      splashHandoffRef.current = true
+      try {
+        window.__NW_LAUNCH?.ready?.()
+      } catch {
+        // controller absent (browser tab / gate didn't play) — nothing to do
+      }
+    }
+  }, [loading, error])
+
+  // ── Splash safety net ──
+  // If the inline controller ever failed to run (script error, blocked),
+  // the splash would hold forever with no one to release it. The feed is
+  // definitely rendered 5s in — force the release ourselves. In a browser
+  // tab (no nw-launch class) this is a no-op.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const el = document.documentElement
+        if (el.classList.contains('nw-launch') && !el.classList.contains('nw-release')) {
+          el.classList.add('nw-release')
+        }
+      } catch {
+        // no-op
+      }
+    }, 5000)
+    return () => clearTimeout(t)
+  }, [])
 
   // --- Background refresh when stale ---
   const bgRefresh = React.useCallback(
@@ -1747,7 +1810,11 @@ export default function Home({
   const showApiSearch = localSearchAttempted && debouncedSearch
 
   return (
-    <div className="flex min-h-screen flex-col">
+    // #nw-app-root — the adaptive-splash reveal target (globals.css:
+    // html.nw-release #nw-app-root fades/rises the whole app in the same
+    // beat the PWA launch splash fades out, so a cold start goes
+    // splash → fully loaded feed with no skeleton flash in between).
+    <div id="nw-app-root" className="flex min-h-screen flex-col">
       {/* ── Offline mode banner ──
           Big, prominent banner shown when the browser is offline. The SW
           serves cached /api/news, /api/summary, and /api/topic responses

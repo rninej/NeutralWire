@@ -1567,3 +1567,27 @@ img {
   background: linear-gradient(90deg, transparent, currentColor, transparent);
   animation: nw-progress-sweep 1.2s ease-in-out infinite;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   ADAPTIVE SPLASH REVEAL — the handoff from the PWA launch splash into the
+   app (see layout.tsx for the full system). #nw-app-root is page-client's
+   outermost div. While the launch splash holds, the feed renders to
+   completion BEHIND it (the splash is opaque, z-9999). The instant the
+   head controller adds html.nw-release — the moment the first feed content
+   is painted — the splash starts fading out (180ms) and this rule fades
+   the app in OVER THE SAME BEAT (rise 8px + fade, the site's standard
+   out-curve): a cross-fade from brand moment to fully loaded feed, with
+   no skeleton ever flashing in between. `both` fill holds the final state
+   (transform:none → no lingering containing-block for fixed children).
+   In a browser tab nw-release never exists, so the rule never matches.
+   ───────────────────────────────────────────────────────────────────────── */
+html.nw-release #nw-app-root {
+  animation: nw-app-reveal 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes nw-app-reveal {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html.nw-release #nw-app-root { animation: none; }
+}
