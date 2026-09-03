@@ -34,10 +34,15 @@ import {
   Bell,
   Zap,
   Radio,
+  Sparkles,
+  History,
+  Layers,
+  Eraser,
 } from 'lucide-react'
 import { getDeviceId } from '@/lib/referral'
 import { COUNTRY_COORDS, latLngToXY } from '@/lib/country-coords'
 import { cn } from '@/lib/utils'
+import { DEFAULT_POPUP_MODE, type PopupMode } from '@/lib/popup-mode'
 import { LayoutGrid, List, Underline, LayoutDashboard, PanelBottomOpen, AppWindow, Pill, PanelTop, MoveHorizontal, ChevronsRight } from 'lucide-react'
 
 // ── Types ──
@@ -291,17 +296,8 @@ export default function DebugPage() {
   const [navFlipping, setNavFlipping] = React.useState(false)
   const [navFlipResult, setNavFlipResult] = React.useState<string | null>(null)
 
-  React.useEffect(() => {
-    fetch('/api/flags')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        const v = d?.subtopicNav
-        setNavMode(
-          ['cards', 'classic', 'tabs', 'tiles', 'sheet', 'dock', 'maxipills', 'headerdock', 'tabsarrow', 'cardsarrow'].includes(v) ? v : 'cards',
-        )
-      })
-      .catch(() => setNavMode('cards'))
-  }, [])
+  // NOTE: navMode + popupMode are both loaded by the single /api/flags
+  // fetch in the popup-system section below.
 
   const setSubtopicNav = async (mode: NavMode) => {
     if (navFlipping || mode === navMode || !passwordRef.current) return
@@ -326,6 +322,112 @@ export default function DebugPage() {
     } finally {
       setNavFlipping(false)
     }
+  }
+
+  // ── Popup system — original popups vs the behavioral engine ──
+  // Three selectable systems, stored like the nav flag (Firebase
+  // featureFlags/popupSystem) and applied to ALL users on the next page
+  // load (read server-side in page.tsx — no wrong-popup flash).
+  const POPUP_OPTIONS: Array<{
+    id: PopupMode
+    name: string
+    desc: string
+    icon: React.ReactNode
+  }> = [
+    {
+      id: 'smart',
+      name: 'Smart system',
+      desc: 'The behavioral engine (live default): install sheet asks only at peak moments — finished story, voted, 2–3 stories opened — with the phone mock + real social proof. Inside the PWA: milestone celebrations, never a donate popup.',
+      icon: <Sparkles className="h-4 w-4" />,
+    },
+    {
+      id: 'original',
+      name: 'Original popups',
+      desc: 'The classic system from before: install banner appears early (3s nudge on Samsung/iOS, first story, 400px scroll) with a 1-hour re-ask, and the installed PWA shows the Ko-fi donation popup every 10 stories.',
+      icon: <History className="h-4 w-4" />,
+    },
+    {
+      id: 'smart-firstvisit',
+      name: 'Smart + first-visit popup',
+      desc: 'The smart system exactly — but a brand-new visitor\'s very first visit shows the classic install popup (high visibility, early). The smart engine takes over from visit two; one ask per visit, always.',
+      icon: <Layers className="h-4 w-4" />,
+    },
+  ]
+  const [popupMode, setPopupMode] = React.useState<PopupMode | null>(null)
+  const [popupFlipping, setPopupFlipping] = React.useState(false)
+  const [popupFlipResult, setPopupFlipResult] = React.useState<string | null>(null)
+  const [popupMemoryCleared, setPopupMemoryCleared] = React.useState(false)
+
+  React.useEffect(() => {
+    fetch('/api/flags')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const v = d?.subtopicNav
+        setNavMode(
+          ['cards', 'classic', 'tabs', 'tiles', 'sheet', 'dock', 'maxipills', 'headerdock', 'tabsarrow', 'cardsarrow'].includes(v) ? v : 'cards',
+        )
+        setPopupMode(
+          ['original', 'smart', 'smart-firstvisit'].includes(d?.popupSystem)
+            ? d.popupSystem
+            : DEFAULT_POPUP_MODE,
+        )
+      })
+      .catch(() => {
+        setNavMode('cards')
+        setPopupMode(DEFAULT_POPUP_MODE)
+      })
+  }, [])
+
+  const setPopupSystem = async (mode: PopupMode) => {
+    if (popupFlipping || mode === popupMode || !passwordRef.current) return
+    setPopupFlipping(true)
+    setPopupFlipResult(null)
+    try {
+      const res = await fetch('/api/flags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordRef.current, popupSystem: mode }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (res.ok) {
+        setPopupMode(mode)
+        const opt = POPUP_OPTIONS.find((o) => o.id === mode)
+        setPopupFlipResult(`✓ Live for all users: ${opt?.name ?? mode}`)
+      } else {
+        setPopupFlipResult(d.error || 'Failed to update')
+      }
+    } catch {
+      setPopupFlipResult('Network error')
+    } finally {
+      setPopupFlipping(false)
+    }
+  }
+
+  // Wipe THIS browser's popup memory (dismissals, snoozes, first-visit
+  // marker, story counts, milestones, donate thresholds) so each system
+  // can be tested from a genuinely clean slate.
+  const clearPopupMemory = () => {
+    const keys = [
+      'neutralwire:pwa-install-dismissed',
+      'neutralwire:pwa-install-fv-dismissed',
+      'neutralwire:pwa-installed-flag',
+      'neutralwire:pwa-install-never',
+      'neutralwire:pwa-install-dismiss-count',
+      'neutralwire:pwa-install-last-shown',
+      'neutralwire:first-seen',
+      'neutralwire:articles-opened',
+      'neutralwire:milestone-celebrated',
+      'neutralwire:love-sent',
+      'neutralwire:donate-shown-at',
+      'neutralwire:donate-next-threshold',
+      'neutralwire:donate-pressed',
+    ]
+    for (const k of keys) {
+      try { localStorage.removeItem(k) } catch {}
+    }
+    try { sessionStorage.removeItem('neutralwire:first-visit-live') } catch {}
+    setPopupMemoryCleared(true)
+    setTimeout(() => setPopupMemoryCleared(false), 2500)
   }
 
   const runCheck = async (id: string, action: 'check' | 'send') => {
@@ -681,6 +783,89 @@ export default function DebugPage() {
               {navFlipResult}
             </p>
           )}
+        </Card>
+
+        {/* ── Popup System ──
+            Switch the WHOLE site between the original popup system
+            (early install banner + PWA donate popup), the research-timed
+            behavioral engine, and the hybrid (smart + first-visit popup). */}
+        <Card className="mb-6 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <AppWindow className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-bold">Popup System</h2>
+            <span className="ml-auto text-xs text-muted-foreground">
+              Applies to all users · A/B the popup rewrite
+            </span>
+          </div>
+          <p className="mb-3 text-sm text-muted-foreground">
+            Which popup system the whole site runs — the install prompt on the
+            mobile website AND the donate/celebration moment inside the PWA,
+            switched together. Stored like the header-style flag (Firebase),
+            rendered server-side; <strong>refresh the homepage after
+            switching</strong> to see it. Use the reset button below to wipe
+            this browser's popup memory first — a first-visit popup only
+            fires for a genuinely fresh visitor.
+          </p>
+          <div className="grid max-w-5xl grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {POPUP_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setPopupSystem(opt.id)}
+                disabled={popupFlipping || popupMode === null}
+                className={cn(
+                  'flex flex-col items-start gap-1.5 rounded-xl border-2 p-3.5 text-left transition-colors disabled:opacity-60',
+                  popupMode === opt.id
+                    ? 'border-foreground bg-muted'
+                    : 'border-border hover:bg-muted/50',
+                )}
+              >
+                <span className="flex items-center gap-2 text-sm font-bold">
+                  {opt.icon}
+                  {opt.name}
+                  {popupMode === opt.id && (
+                    <span className="rounded-full bg-foreground px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-background">
+                      Live
+                    </span>
+                  )}
+                </span>
+                <span className="text-xs text-muted-foreground">{opt.desc}</span>
+              </button>
+            ))}
+          </div>
+          {popupFlipping && (
+            <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating for all users…
+            </p>
+          )}
+          {popupFlipResult && (
+            <p className="mt-3 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              {popupFlipResult}
+            </p>
+          )}
+          {/* Local test-slate reset — device-local only, never touches
+              the site-wide flag or other users. */}
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t pt-3">
+            <Button
+              onClick={clearPopupMemory}
+              variant="outline"
+              size="sm"
+              className="gap-2"
+            >
+              <Eraser className="h-3.5 w-3.5" />
+              Reset this device's popup memory
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Clears dismissals, snoozes, first-visit marker, story counts and
+              milestone/donate history on THIS browser — so you experience the
+              selected system as a brand-new visitor would.
+            </span>
+            {popupMemoryCleared && (
+              <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                ✓ Cleared — refresh the homepage now
+              </span>
+            )}
+          </div>
         </Card>
 
         {error && (

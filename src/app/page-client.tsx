@@ -35,10 +35,13 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { TopicCard } from '@/components/topic-card'
 import { TopicDetail } from '@/components/topic-detail'
 import { PwaInstallPrompt } from '@/components/pwa-install-prompt'
+import { PwaInstallPromptLegacy } from '@/components/pwa-install-prompt-legacy'
+import { DonatePopupLegacy } from '@/components/donate-popup-legacy'
 import { IosNotificationPrompt } from '@/components/ios-notification-prompt'
 import { PwaOnboarding } from '@/components/pwa-onboarding'
 import { MilestoneCelebration } from '@/components/milestone-celebration'
 import { CookieConsent } from '@/components/cookie-consent'
+import { DEFAULT_POPUP_MODE, type PopupMode } from '@/lib/popup-mode'
 import { UserPage } from '@/components/user-page'
 import { BiasColumns } from '@/components/bias-columns'
 import { SourceList } from '@/components/source-list'
@@ -198,7 +201,13 @@ type NavVariant =
   | 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
   | 'maxipills' | 'headerdock' | 'tabsarrow' | 'cardsarrow'
 
-export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavVariant }) {
+export default function Home({
+  initialSubtopicNav,
+  popupSystem = DEFAULT_POPUP_MODE,
+}: {
+  initialSubtopicNav?: NavVariant
+  popupSystem?: PopupMode
+}) {
   // --- Platform detection (Android / Apple / Other) ---
   // Sets body.platform-{android|apple|other} so the CSS glass rules in
   // globals.css apply the right backdrop-blur + bg opacity to sticky
@@ -2182,16 +2191,42 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
           install prompt + onboarding below are gated on this decision). */}
       <CookieConsent />
 
-      {/* PWA install prompt (mobile only, dismissible) — waits for the
-          cookie banner to be answered before it ever appears. */}
-      <PwaInstallPrompt />
+      {/* ── Popup system (switchable for ALL users from /debug) ──
+
+          'original'          → the classic install banner (early triggers,
+                                1-hour re-ask) + the Ko-fi donate popup
+                                inside the PWA. No smart sheet, no milestone
+                                celebrations.
+
+          'smart'             → the research-timed install sheet + milestone
+                                celebrations (no donate popup) — the default.
+
+          'smart-firstvisit'  → the smart system, but a brand-new visitor's
+                                very first visit shows the classic install
+                                popup instead (the smart engine stands down
+                                for that session — one ask per visit). */}
+      {popupSystem === 'original' ? (
+        <PwaInstallPromptLegacy variant="original" />
+      ) : (
+        <>
+          <PwaInstallPrompt popupSystem={popupSystem} />
+          {popupSystem === 'smart-firstvisit' && (
+            <PwaInstallPromptLegacy variant="first-visit" />
+          )}
+        </>
+      )}
       <IosNotificationPrompt />
       <PwaOnboarding />
 
-      {/* Milestone celebration (installed PWA only) — the love moment
-          that replaced the old donation popup. Pure delight + optional
-          community heart + referral share; never asks for money. */}
-      <MilestoneCelebration />
+      {/* In the PWA: the ORIGINAL mode brings back the classic Ko-fi
+          donation popup; the smart modes celebrate milestones instead
+          (never an ask). The two are mutually exclusive by design — both
+          count stories opened on this surface. */}
+      {popupSystem === 'original' ? (
+        <DonatePopupLegacy />
+      ) : (
+        <MilestoneCelebration />
+      )}
 
       {/* User page (account / referral / personalization / themes / support)
           — wrapped in AnimatePresence so the entrance + exit animations

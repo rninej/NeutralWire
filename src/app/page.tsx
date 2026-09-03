@@ -2,6 +2,10 @@ import type { Metadata } from 'next'
 import { cookies } from 'next/headers'
 import { firebaseRead } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
+import {
+  normalizePopupMode,
+  type PopupMode,
+} from '@/lib/popup-mode'
 import PageClient from './page-client'
 
 // Force dynamic rendering so metadata is generated per-request (needed for
@@ -51,6 +55,30 @@ async function getSubtopicNav(): Promise<SubtopicNavMode> {
     return value
   } catch {
     return 'cards'
+  }
+}
+
+// ── Server-rendered popup-system flag ──────────────────────────────
+// Which popup system runs site-wide: the ORIGINAL popups, the smart
+// behavioral system, or smart + a first-visit classic install popup.
+// Switched for ALL users from /debug (Firebase featureFlags/popupSystem).
+// Same SSR logic as the nav flag: read HERE so the first paint already
+// mounts the right popup components — no wrong-popup flash. 5s memo.
+// An absent flag → 'smart' (the live behavioral system).
+let popupFlagMemo: { value: PopupMode; ts: number } | null = null
+const POPUP_FLAG_TTL_MS = 5 * 1000
+
+async function getPopupSystem(): Promise<PopupMode> {
+  if (popupFlagMemo && Date.now() - popupFlagMemo.ts < POPUP_FLAG_TTL_MS) {
+    return popupFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<string>('featureFlags/popupSystem')
+    const value = normalizePopupMode(stored)
+    popupFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return 'smart'
   }
 }
 
@@ -133,6 +161,9 @@ export default async function Page() {
   // renders the selected header design (no default-then-swap flash).
   let initialSubtopicNav = await getSubtopicNav()
 
+  // Popup system flag — same server-side read, same zero-flash guarantee.
+  const popupSystem = await getPopupSystem()
+
   // Personal override (Account → Feature Flags → "Your header style"):
   // a cookie, so the server sees it during SSR — the visitor's own pick
   // renders in the very first paint, no flash. Invalid values fall back
@@ -147,5 +178,5 @@ export default async function Page() {
     // loaded, so just fall back to it.
   }
 
-  return <PageClient initialSubtopicNav={initialSubtopicNav} />
+  return <PageClient initialSubtopicNav={initialSubtopicNav} popupSystem={popupSystem} />
 }

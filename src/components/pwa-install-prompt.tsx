@@ -15,6 +15,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import { hasCookieChoice } from '@/lib/cookie-consent'
 import { fetchInstallCount } from '@/lib/pwa-metrics'
+import {
+  ensureFirstSeen,
+  isFirstVisitSession,
+  type PopupMode,
+} from '@/lib/popup-mode'
 
 // ── localStorage keys ──
 const DISMISS_KEY = 'neutralwire:pwa-install-dismissed'
@@ -22,8 +27,14 @@ const INSTALLED_KEY = 'neutralwire:pwa-installed-flag'
 const NEVER_KEY = 'neutralwire:pwa-install-never'
 const DISMISS_COUNT_KEY = 'neutralwire:pwa-install-dismiss-count'
 const LAST_SHOWN_KEY = 'neutralwire:pwa-install-last-shown'
-const FIRST_SEEN_KEY = 'neutralwire:first-seen'
 const ARTICLES_OPENED_KEY = 'neutralwire:articles-opened'
+
+// ── Popup-system switch (from /debug, via Firebase + SSR) ──
+// 'smart'            → this engine fully owns install prompting.
+// 'smart-firstvisit'  → the legacy first-visit popup owns the visitor's
+//                       very FIRST visit; this engine stands down for that
+//                       session and owns everything from visit two on.
+// ('original' never mounts this component at all — see page-client.)
 
 // ── Behavioral tuning (see design notes at the bottom of this file) ──
 const SNOOZE_MS = 3 * 24 * 60 * 60 * 1000 // "Not now" → 3-day snooze
@@ -111,7 +122,11 @@ const TRIGGER_COPY: Record<TriggerKind, { title: string; sub: string }> = {
   },
 }
 
-export function PwaInstallPrompt() {
+export function PwaInstallPrompt({
+  popupSystem = 'smart',
+}: {
+  popupSystem?: PopupMode
+} = {}) {
   const [deferredPrompt, setDeferredPrompt] =
     React.useState<BeforeInstallPromptEvent | null>(null)
   const [showSheet, setShowSheet] = React.useState(false)
@@ -121,12 +136,26 @@ export function PwaInstallPrompt() {
   const [installCount, setInstallCount] = React.useState<number | null>(null)
   const [showSteps, setShowSteps] = React.useState(false)
 
+  // Captured in a ref so the mount-only effect can read the mode without
+  // re-subscribing (the SSR prop is constant for a page load anyway).
+  const popupSystemRef = React.useRef(popupSystem)
+
   const deferredPromptRef = React.useRef<BeforeInstallPromptEvent | null>(null)
   const modeRef = React.useRef<InstallMode>('none')
   const installedRef = React.useRef(false)
   const shownRef = React.useRef(false)
 
   React.useEffect(() => {
+    // ── Hybrid-mode courtesy ──
+    // In 'smart-firstvisit' the classic popup owns the visitor's very
+    // first visit (high visibility, early trigger). Standing down here
+    // guarantees ONE ask per visit — this engine re-arms automatically
+    // on the next visit, when the first-visit session marker is gone.
+    ensureFirstSeen()
+    if (popupSystemRef.current === 'smart-firstvisit' && isFirstVisitSession()) {
+      return
+    }
+
     const ua = window.navigator.userAgent
 
     // ── Browser detection (same rules as before) ──
@@ -161,11 +190,7 @@ export function PwaInstallPrompt() {
     modeRef.current = installMode
 
     // ── Returning-visitor detection ──
-    let firstSeen = parseInt(localStorage.getItem(FIRST_SEEN_KEY) || '0', 10)
-    if (!firstSeen) {
-      localStorage.setItem(FIRST_SEEN_KEY, String(Date.now()))
-      firstSeen = Date.now()
-    }
+    const firstSeen = ensureFirstSeen()
     const articlesOpened = parseInt(
       localStorage.getItem(ARTICLES_OPENED_KEY) || '0',
       10,
