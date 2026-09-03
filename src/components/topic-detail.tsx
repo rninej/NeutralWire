@@ -163,6 +163,41 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
     }
   }, [topic.topicId, onClose])
 
+  // ── "Article read" signal (peak–end moment for the install prompt) ──
+  // Fires ONCE per topic open when the reader either scrolls past ~65%
+  // of this dialog's content or spends 45s+ with it open. This is the
+  // moment research says motivation peaks (they just consumed something
+  // they valued) → the best instant to offer the home-screen install.
+  React.useEffect(() => {
+    let fired = false
+    const fire = () => {
+      if (fired) return
+      fired = true
+      window.dispatchEvent(new CustomEvent('neutralwire:article-read'))
+    }
+    const container = document.querySelector(
+      '[role="dialog"]',
+    ) as HTMLElement | null
+    if (container) {
+      const onScroll = () => {
+        if (fired) {
+          container.removeEventListener('scroll', onScroll)
+          return
+        }
+        const { scrollTop, clientHeight, scrollHeight } = container
+        if (scrollHeight > 0 && (scrollTop + clientHeight) / scrollHeight >= 0.65) {
+          fire()
+        }
+      }
+      container.addEventListener('scroll', onScroll, { passive: true })
+    }
+    const timer = setTimeout(fire, 45 * 1000)
+    return () => {
+      clearTimeout(timer)
+      fired = true // unmounted → never fire late
+    }
+  }, [topic.topicId])
+
   // Close on Escape.
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {

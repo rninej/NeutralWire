@@ -57,6 +57,20 @@ interface AnalyticsData {
   ts: number
 }
 
+// ── PWA growth metrics (unique-IP counting) ──
+interface PwaStats {
+  installsTotal: number
+  installsToday: number
+  installsByDay: Record<string, number>
+  dauToday: number
+  dauByDay: Record<string, number>
+  appDauToday: number
+  appDauByDay: Record<string, number>
+  installRate7d: number
+  days: number
+  ts: number
+}
+
 interface CheckResult {
   step: string
   status: 'ok' | 'fail' | 'warn'
@@ -151,11 +165,38 @@ export default function DebugPage() {
     }
   }, [range])
 
+  // ── PWA growth metrics — unique-IP installs / DAU / app-opens ──
+  const [pwaStats, setPwaStats] = React.useState<PwaStats | null>(null)
+  const [pwaLoading, setPwaLoading] = React.useState(false)
+  const [pwaError, setPwaError] = React.useState('')
+
+  const fetchPwaStats = React.useCallback(async () => {
+    if (!passwordRef.current) return
+    setPwaLoading(true)
+    setPwaError('')
+    try {
+      const res = await fetch('/api/analytics/pwa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordRef.current, days: 14 }),
+      })
+      if (!res.ok) {
+        throw new Error(res.status === 401 ? 'Unauthorized' : 'Query failed')
+      }
+      setPwaStats(await res.json())
+    } catch (err) {
+      setPwaError(err instanceof Error ? err.message : 'Failed to load')
+    } finally {
+      setPwaLoading(false)
+    }
+  }, [])
+
   React.useEffect(() => {
     if (authed && passwordRef.current) {
       fetchAnalytics()
+      fetchPwaStats()
     }
-  }, [authed, range, fetchAnalytics])
+  }, [authed, range, fetchAnalytics, fetchPwaStats])
 
   // ── Push diagnostics (existing debug page content) ──
   const [deviceId, setDeviceId] = React.useState('')
@@ -400,7 +441,15 @@ export default function DebugPage() {
                 <SelectItem value="90d">Last 90 days</SelectItem>
               </SelectContent>
             </Select>
-            <Button onClick={fetchAnalytics} disabled={loading} variant="outline" size="icon">
+            <Button
+              onClick={() => {
+                fetchAnalytics()
+                fetchPwaStats()
+              }}
+              disabled={loading}
+              variant="outline"
+              size="icon"
+            >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
             <Button
@@ -423,6 +472,160 @@ export default function DebugPage() {
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         )}
+
+        {/* ── PWA Growth ──
+            Unique-IP install + daily active user metrics. Every number on
+            this card counts DISTINCT IP addresses — one person on two
+            devices behind the same IP still counts once. */}
+        <Card className="mb-6 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Download className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-bold">PWA Growth</h2>
+            <span className="text-xs text-muted-foreground">
+              unique IP addresses only
+            </span>
+            {pwaLoading && (
+              <Loader2 className="ml-auto h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+            {!pwaLoading && pwaStats && (
+              <span className="ml-auto text-xs text-muted-foreground">
+                updated {new Date(pwaStats.ts).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+
+          {pwaError ? (
+            <p className="text-sm text-red-500">{pwaError}</p>
+          ) : !pwaStats ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <>
+              {/* Stat tiles */}
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <div className="rounded-xl border bg-muted/40 p-3.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Download className="h-3.5 w-3.5" /> App installs
+                  </div>
+                  <div className="mt-1.5 text-2xl font-bold tabular-nums">
+                    {pwaStats.installsTotal.toLocaleString()}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-muted-foreground">
+                    all-time, distinct IPs
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-muted/40 p-3.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Download className="h-3.5 w-3.5" /> Installs today
+                  </div>
+                  <div className="mt-1.5 text-2xl font-bold tabular-nums">
+                    {pwaStats.installsToday.toLocaleString()}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-muted-foreground">UTC day</div>
+                </div>
+                <div className="rounded-xl border bg-muted/40 p-3.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Users className="h-3.5 w-3.5" /> Daily active
+                  </div>
+                  <div className="mt-1.5 text-2xl font-bold tabular-nums">
+                    {pwaStats.dauToday.toLocaleString()}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-muted-foreground">
+                    site + app, distinct IPs
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-muted/40 p-3.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Smartphone className="h-3.5 w-3.5" /> In the app
+                  </div>
+                  <div className="mt-1.5 text-2xl font-bold tabular-nums">
+                    {pwaStats.appDauToday.toLocaleString()}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-muted-foreground">
+                    opened installed PWA today
+                  </div>
+                </div>
+              </div>
+
+              {/* 7-day install rate */}
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <TrendingUp className="h-3.5 w-3.5 text-emerald-500" />
+                <span>
+                  <strong className="text-foreground">
+                    {(pwaStats.installRate7d * 100).toFixed(1)}%
+                  </strong>{' '}
+                  of engaged visitors installed in the last 7 days
+                  (installs ÷ daily actives, unique IPs)
+                </span>
+              </div>
+
+              {/* 14-day bar chart: DAU vs installs */}
+              {(() => {
+                const days = Object.keys(pwaStats.dauByDay).sort()
+                const max = Math.max(
+                  1,
+                  ...days.map(
+                    (d) =>
+                      Math.max(
+                        pwaStats.dauByDay[d] || 0,
+                        pwaStats.installsByDay[d] || 0,
+                      ),
+                  ),
+                )
+                return (
+                  <div className="mt-4">
+                    <div className="mb-2 flex items-center gap-3 text-[11px] text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-sm bg-foreground/70" />
+                        daily active (unique IPs)
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-sm bg-emerald-500" />
+                        installs
+                      </span>
+                    </div>
+                    <div className="flex h-24 items-end gap-1.5">
+                      {days.map((d) => {
+                        const dau = pwaStats.dauByDay[d] || 0
+                        const inst = pwaStats.installsByDay[d] || 0
+                        return (
+                          <div
+                            key={d}
+                            className="flex h-full flex-1 flex-col justify-end gap-[2px]"
+                            title={`${d} — ${dau} active, ${inst} installs`}
+                          >
+                            <div
+                              className="w-full rounded-t-sm bg-emerald-500"
+                              style={{
+                                height: `${(inst / max) * 100}%`,
+                                minHeight: inst > 0 ? '2px' : '0',
+                              }}
+                            />
+                            <div
+                              className="w-full rounded-b-sm bg-foreground/70"
+                              style={{
+                                height: `${(dau / max) * 100}%`,
+                                minHeight: dau > 0 ? '2px' : '0',
+                              }}
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="mt-1 flex gap-1.5 text-[10px] text-muted-foreground">
+                      {days.map((d, i) => (
+                        <span key={d} className="flex-1 text-center">
+                          {i % 2 === 0 ? d.slice(5) : ''}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+            </>
+          )}
+        </Card>
 
         {/* ── Feature Flags ──
             One-click switches that apply to ALL users instantly. */}

@@ -37,6 +37,7 @@ import { TopicDetail } from '@/components/topic-detail'
 import { PwaInstallPrompt } from '@/components/pwa-install-prompt'
 import { IosNotificationPrompt } from '@/components/ios-notification-prompt'
 import { PwaOnboarding } from '@/components/pwa-onboarding'
+import { MilestoneCelebration } from '@/components/milestone-celebration'
 import { CookieConsent } from '@/components/cookie-consent'
 import { UserPage } from '@/components/user-page'
 import { BiasColumns } from '@/components/bias-columns'
@@ -58,6 +59,7 @@ import type { CountryInfo } from '@/lib/country-detect'
 import { detectCountryClient, detectCountryClientFresh, DEFAULT_COUNTRY } from '@/lib/country-detect'
 import { getDeviceId } from '@/lib/referral'
 import { trackPageView } from '@/lib/analytics-tracker'
+import { reportInstallMetric, reportActiveMetric, reportAppOpenMetric } from '@/lib/pwa-metrics'
 import { usePlatform } from '@/lib/use-platform'
 import { NAV_STYLE_EVENT, readNavOverride, type NavMode } from '@/lib/nav-override'
 import { restoreGradient } from '@/lib/use-theme-reveal'
@@ -942,6 +944,10 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
+    // ── PWA growth metrics (unique-IP install / DAU / app-open) ──
+    // 'active' = this IP used NeutralWire today (consent-gated).
+    reportActiveMetric()
+
     // Detect PWA install and report it.
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
@@ -954,6 +960,10 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceId, referralCode: refCode }),
       }).catch(() => {})
+      // First launch in the installed app = the install moment; also
+      // counts today's app-open (consent-gated, 1/day).
+      reportInstallMetric()
+      reportAppOpenMetric()
     }
 
     // Also listen for the appinstalled event.
@@ -963,6 +973,7 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceId, referralCode: refCode }),
       }).catch(() => {})
+      reportInstallMetric()
 
       // Auto-open the PWA as soon as it's installed.
       // The browser already installed it; we just need to navigate to it
@@ -2176,6 +2187,11 @@ export default function Home({ initialSubtopicNav }: { initialSubtopicNav?: NavV
       <PwaInstallPrompt />
       <IosNotificationPrompt />
       <PwaOnboarding />
+
+      {/* Milestone celebration (installed PWA only) — the love moment
+          that replaced the old donation popup. Pure delight + optional
+          community heart + referral share; never asks for money. */}
+      <MilestoneCelebration />
 
       {/* User page (account / referral / personalization / themes / support)
           — wrapped in AnimatePresence so the entrance + exit animations

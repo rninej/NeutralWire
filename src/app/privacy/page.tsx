@@ -125,6 +125,14 @@ export default function PrivacyPage() {
             v="If you accept analytics: pages viewed, session counts, referrer, approximate browser/device/OS, screen size, and how you engage with topics. Aggregated, and used only to improve the product. Rejecting non-necessary cookies disables this entirely."
           />
           <Row
+            k="App installs & daily use"
+            v="We count installs and daily active users by a one-way salted hash of your IP address (never the IP itself — the hash cannot be reversed to it). Each day is one anonymous tally mark used to see how the app grows. Install events are counted even if you rejected analytics (the app was demonstrably installed); daily-use tallies follow your analytics choice."
+          />
+          <Row
+            k="Community hearts"
+            v="If you tap “Love NeutralWire”: one tally mark is added to a public counter, keyed by your device ID so one device can only ever add one heart. No message, no name, nothing else."
+          />
+          <Row
             k="Notification subscription"
             v="Only if you enable notifications: a push token from your browser, so we can deliver the news briefings you asked for."
           />

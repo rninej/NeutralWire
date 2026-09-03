@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { X, Heart, Check, ThumbsDown, Globe, Building2, FlaskConical, Stethoscope, Trophy, Cpu, Landmark, Newspaper, Languages, ChevronDown } from 'lucide-react'
+import { X, Check, ThumbsDown, Globe, Building2, FlaskConical, Stethoscope, Trophy, Cpu, Landmark, Newspaper, Languages, ChevronDown } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,10 +20,6 @@ const ONBOARDING_DISMISS_DURATION = 1 * 60 * 60 * 1000 // 1 hour
 const LANGUAGE_SELECTED_KEY = 'neutralwire:language-selected'
 const SELECTED_LANGUAGE_KEY = 'neutralwire:language'
 const ARTICLES_OPENED_KEY = 'neutralwire:articles-opened'
-const DONATE_SHOWN_KEY = 'neutralwire:donate-shown-at'
-const DONATE_NEXT_KEY = 'neutralwire:donate-next-threshold'
-const DONATE_PRESSED_KEY = 'neutralwire:donate-pressed'
-const INITIAL_THRESHOLD = 10
 
 // ── Subtopic definitions ──
 // All subtopics shown in the quiz (except 'relevant' which is customized
@@ -47,7 +43,7 @@ const SUBTOPICS: SubtopicDef[] = [
 ]
 
 /**
- * PWA Onboarding + Donation Trigger.
+ * PWA Onboarding + personalization quiz.
  *
  * Subtopic-based personalization quiz shown on first launch in the
  * installed PWA (standalone mode only):
@@ -60,13 +56,16 @@ const SUBTOPICS: SubtopicDef[] = [
  *  On completion: interests saved to localStorage + Firebase,
  *    ONBOARDED_KEY set to 'true', and 'neutralwire:interests-changed'
  *    event dispatched.
+ *
+ *  (The old mid-session donation popup was REMOVED — interrupting happy
+ *  readers with an ask violates the peak–end rule. Milestone celebrations
+ *  now live in milestone-celebration.tsx.)
  */
 export function PwaOnboarding() {
   const [showOnboarding, setShowOnboarding] = React.useState(false)
   const [showLanguageSelect, setShowLanguageSelect] = React.useState(false)
   const [countryLanguage, setCountryLanguage] = React.useState<LanguageInfo | null>(null)
   const [selectedLanguage, setSelectedLanguage] = React.useState<string>('en')
-  const [showDonate, setShowDonate] = React.useState(false)
   const [step, setStep] = React.useState<'likes' | 'dislikes'>('likes')
   const [likedIds, setLikedIds] = React.useState<Set<string>>(new Set())
   const [dislikedIds, setDislikedIds] = React.useState<Set<string>>(new Set())
@@ -135,36 +134,6 @@ export function PwaOnboarding() {
       const saved = localStorage.getItem('neutralwire:interests')
       if (saved) setLikedIds(new Set(JSON.parse(saved)))
     } catch { /* ignore */ }
-
-    // Donation popup logic
-    const checkDonationPopup = (articlesOpened: number) => {
-      const pressed = localStorage.getItem(DONATE_PRESSED_KEY) === 'true'
-      const shownAt = parseInt(localStorage.getItem(DONATE_SHOWN_KEY) || '0', 10)
-      let nextThreshold = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
-      if (pressed) {
-        const threeMonths = 90 * 24 * 60 * 60 * 1000
-        if (Date.now() - shownAt > threeMonths) {
-          localStorage.setItem(DONATE_PRESSED_KEY, 'false')
-          localStorage.setItem(DONATE_NEXT_KEY, '0')
-          setShowDonate(true)
-        }
-        return
-      }
-      if (nextThreshold === 0) nextThreshold = INITIAL_THRESHOLD
-      if (articlesOpened >= nextThreshold) {
-        setShowDonate(true)
-      }
-    }
-
-    const handleTopicOpened = () => {
-      let count = parseInt(localStorage.getItem(ARTICLES_OPENED_KEY) || '0', 10)
-      count += 1
-      localStorage.setItem(ARTICLES_OPENED_KEY, String(count))
-      checkDonationPopup(count)
-    }
-
-    window.addEventListener('neutralwire:topic-opened', handleTopicOpened)
-    return () => window.removeEventListener('neutralwire:topic-opened', handleTopicOpened)
   }, [])
 
   const handleComplete = async () => {
@@ -205,14 +174,6 @@ export function PwaOnboarding() {
     })
   }
 
-  const handleDonatePress = () => {
-    localStorage.setItem(DONATE_PRESSED_KEY, 'true')
-    localStorage.setItem(DONATE_SHOWN_KEY, String(Date.now()))
-    localStorage.setItem(DONATE_NEXT_KEY, '0')
-    setShowDonate(false)
-    window.open('https://ko-fi.com/neutralwire', '_blank')
-  }
-
   // ── Language selection handler ──
   // Called when the user picks a language from the popup.
   // Saves the choice and proceeds to the personalization quiz.
@@ -222,14 +183,6 @@ export function PwaOnboarding() {
     setShowLanguageSelect(false)
     // Now show the personalization quiz
     setTimeout(() => setShowOnboarding(true), 300)
-  }
-
-  const handleDonateDismiss = () => {
-    const currentThreshold = parseInt(localStorage.getItem(DONATE_NEXT_KEY) || '0', 10)
-    const newThreshold = currentThreshold === 0 ? INITIAL_THRESHOLD * 2 : currentThreshold * 2
-    localStorage.setItem(DONATE_NEXT_KEY, String(newThreshold))
-    localStorage.setItem(DONATE_SHOWN_KEY, String(Date.now()))
-    setShowDonate(false)
   }
 
   // ── Language selection popup (PWA only, non-English countries) ──
@@ -466,38 +419,6 @@ export function PwaOnboarding() {
                 ? `${likedIds.size} topic${likedIds.size === 1 ? '' : 's'} selected`
                 : `${dislikedIds.size} topic${dislikedIds.size === 1 ? '' : 's'} selected`}
             </div>
-          </div>
-        </motion.div>
-      </div>
-    )
-  }
-
-  // ── Donation popup ──
-  if (showDonate) {
-    return (
-      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="w-full max-w-sm rounded-2xl bg-background p-6 shadow-2xl text-center"
-        >
-          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-r from-pink-500 to-red-500">
-            <Heart className="h-7 w-7 fill-white text-white" />
-          </div>
-          <h2 className="mb-2 text-lg font-bold">Support NeutralWire</h2>
-          <p className="mb-4 text-sm text-muted-foreground">
-            NeutralWire is built by a 15-year-old working alone, for free. If it's been useful, consider buying him a coffee. Every bit helps keep the servers running.
-          </p>
-          <div className="flex flex-col gap-2">
-            <Button
-              onClick={handleDonatePress}
-              className="w-full bg-gradient-to-r from-pink-500 to-red-500 text-white hover:opacity-90"
-            >
-              <Heart className="mr-2 h-4 w-4 fill-white" /> Donate on Ko-fi
-            </Button>
-            <Button onClick={handleDonateDismiss} variant="ghost" className="w-full text-xs text-muted-foreground">
-              Maybe later
-            </Button>
           </div>
         </motion.div>
       </div>
