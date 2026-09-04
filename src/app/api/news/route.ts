@@ -12,6 +12,7 @@ import {
   isVirtualCategory,
   CACHE_CONSTANTS,
 } from '@/lib/news-cache'
+import { firebaseRead } from '@/lib/firebase-server'
 import {
   detectCountryServer,
   sourcesForCountry,
@@ -25,6 +26,70 @@ export const revalidate = 0
 // 5-15s, and the background `after()` refresh on a stale cache needs the
 // same. 30s covers both the cold path and the post-response refresh.
 export const maxDuration = 30
+
+// ── Global topic boost (notification Like button) ──────────────────
+// When someone taps Like on a push notification, /api/notification/feedback
+// writes topicBoost/<topicId> = { score, updatedAt }. Here we promote those
+// stories a few positions in EVERY visitor's feed — the "push the article
+// higher for everyone else a bit" half of the feature. The per-user half
+// happens client-side (auto-pressed like → engagement boost).
+//
+// Mechanics: score 6 per like (max 24, 7-day expiry). A boosted topic's
+// target index is (originalIndex - boost) — a STABLE, order-preserving
+// demotion/promotion, so untouched topics keep the aggregator's careful
+// ordering (local-boost, freshness, coverage). One read of the topicBoost
+// node per request, memoized 60s per warm instance + served through the
+// route's existing 5-min CDN cache — the boost propagates to all users
+// within ~5 minutes of the like.
+const TOPIC_BOOST_TTL_MS = 7 * 24 * 60 * 60 * 1000
+let topicBoostMemo: { map: Record<string, number>; ts: number } | null = null
+const TOPIC_BOOST_MEMO_MS = 60 * 1000
+
+async function readTopicBoostMap(): Promise<Record<string, number>> {
+  if (topicBoostMemo && Date.now() - topicBoostMemo.ts < TOPIC_BOOST_MEMO_MS) {
+    return topicBoostMemo.map
+  }
+  const map: Record<string, number> = {}
+  try {
+    const raw = await firebaseRead<Record<string, { score?: number; updatedAt?: number }>>(
+      'topicBoost',
+    )
+    const now = Date.now()
+    if (raw) {
+      for (const [topicId, entry] of Object.entries(raw)) {
+        const score = typeof entry?.score === 'number' ? entry.score : 0
+        const updatedAt = typeof entry?.updatedAt === 'number' ? entry.updatedAt : 0
+        // Expired boosts (no new like in 7 days) silently drop out of the
+        // ranking. The Firebase node is pruned by the like flow itself
+        // (score resets on the next like after expiry) — no extra writes here.
+        if (score > 0 && updatedAt && now - updatedAt < TOPIC_BOOST_TTL_MS) {
+          map[topicId] = Math.min(24, score)
+        }
+      }
+    }
+  } catch {
+    // Firebase unreachable — serve the unboosted feed (never block news).
+  }
+  topicBoostMemo = { map, ts: Date.now() }
+  return map
+}
+
+/**
+ * Promote notification-liked topics a few positions (stable) and tag them
+ * with boostScore so the client's personalization sort can include the
+ * same signal. Zero cost when no boosts exist (common case).
+ */
+function boostTopics(topics: TopicArticle[], boostMap: Record<string, number>): TopicArticle[] {
+  if (!boostMap || Object.keys(boostMap).length === 0) return topics
+  const scored = topics.map((t, i) => {
+    const boost = boostMap[t.topicId] || 0
+    return { topic: t, boost, target: i - boost }
+  })
+  if (!scored.some((s) => s.boost > 0)) return topics
+  // Stable: Array.prototype.sort is stable in modern V8; ties keep order.
+  scored.sort((a, b) => a.target - b.target)
+  return scored.map((s) => (s.boost > 0 ? { ...s.topic, boostScore: s.boost } : s.topic))
+}
 
 /**
  * Cache-first news endpoint.
@@ -134,11 +199,14 @@ export async function GET(req: NextRequest) {
         topics: agg.topics,
       }
       void refreshCategory(category, country, async () => Promise.resolve(agg))
+      // Apply the global topic boost (notification likes) to the fresh list.
+      const boostMap = await readTopicBoostMap()
+      const boostedTopics = boostTopics(payload.topics, boostMap)
       const freshResponse = NextResponse.json({
         category,
         country,
         countryName,
-        topics: applyFilters(payload.topics, limit, minCoverage, offset, slim),
+        topics: applyFilters(boostedTopics, limit, minCoverage, offset, slim),
         cached: false,
         fresh: true,
         sourceCount: payload.sourceCount,
@@ -162,7 +230,12 @@ export async function GET(req: NextRequest) {
   }
 
   // 3. Cache exists.
-  const truncated = applyFilters(cached.topics, limit, minCoverage, offset, slim)
+  // Apply the global topic boost (notification likes) — attach boostScore
+  // + promote a few positions BEFORE offset/limit slicing so deep pages
+  // see the same promoted ordering as page one.
+  const boostMap = await readTopicBoostMap()
+  const boostedCached = boostTopics(cached.topics, boostMap)
+  const truncated = applyFilters(boostedCached, limit, minCoverage, offset, slim)
 
   // 4. Refresh if stale — IN THE BACKGROUND, never blocking the response.
   //

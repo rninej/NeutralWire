@@ -16,9 +16,10 @@ export const maxDuration = 15
 /**
  * Server-side feature flags (stored in Firebase under featureFlags/<name>).
  *
- * GET  /api/flags   → { subtopicNav, popupSystem }   (public)
+ * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, videoWatch }   (public)
  * POST /api/flags   → set flag(s) for ALL users (password-protected)
- *       body: { password, subtopicNav?, popupSystem? }  — send one or both.
+ *       body: { password, subtopicNav?, popupSystem?, notifLike?, videoWatch? }
+ *       — send one or more.
  *
  * Managed flags:
  *   - subtopicNav: which category-header design every visitor sees.
@@ -43,6 +44,21 @@ export const maxDuration = 15
  *                            still see the classic install popup on
  *                            their very first visit
  *
+ *   - notifLike (boolean, default TRUE): the Like action button on push
+ *       notifications. When on, every news notification carries a
+ *       [Like | Not Interested] pair — tapping Like opens the article,
+ *       auto-presses its like button and nudges the story up the
+ *       rankings for that user (strong) and everyone else (a bit).
+ *       Flipped off in /debug → new notifications ship without the
+ *       button (the SW reads the flag from the payload at push time).
+ *
+ *   - videoWatch (boolean, default TRUE): the experimental Watch button
+ *       on article images (cards + article view). Tapping it resolves a
+ *       video for the story (the source's own video via RSS enclosures,
+ *       else a YouTube search match) and plays it in an overlay. Flipped
+ *       off in /debug → the buttons vanish on the next page load AND the
+ *       /api/video endpoint refuses to resolve (no CPU spent).
+ *
  * Flags are flipped from /debug in one click; every client receives the
  * values server-side on load (page.tsx SSR) so a flip propagates on the
  * next page load with no wrong-design flash.
@@ -64,11 +80,15 @@ const VALID_MODES: SubtopicNavMode[] = [
 ]
 const NAV_FLAG_PATH = 'featureFlags/subtopicNav'
 const POPUP_FLAG_PATH = 'featureFlags/popupSystem'
+const NOTIF_LIKE_FLAG_PATH = 'featureFlags/notifLike'
+const VIDEO_FLAG_PATH = 'featureFlags/videoWatch'
 
 // Per-instance memos (10s) — bound Firebase reads when many clients hit
 // this endpoint simultaneously on a warm serverless instance.
 let navMemo: { value: SubtopicNavMode; ts: number } | null = null
 let popupMemo: { value: PopupMode; ts: number } | null = null
+let notifLikeMemo: { value: boolean; ts: number } | null = null
+let videoMemo: { value: boolean; ts: number } | null = null
 const MEMO_TTL_MS = 10 * 1000
 
 function sha256(s: string): string {
@@ -91,10 +111,21 @@ function normalizeMode(v: unknown): SubtopicNavMode {
   return VALID_MODES.includes(v as SubtopicNavMode) ? (v as SubtopicNavMode) : 'cards'
 }
 
+function normalizeBooleanFlag(v: unknown, fallback: boolean): boolean {
+  // Firebase RTDB stores booleans natively; treat null/undefined (never
+  // set) as the DEFAULT so a fresh install behaves like the intended live
+  // experience, and legacy strings ('true'/'false') as their booleans.
+  if (v === null || v === undefined || v === '') return fallback
+  if (typeof v === 'boolean') return v
+  if (v === 'true') return true
+  if (v === 'false') return false
+  return fallback
+}
+
 export async function GET() {
-  // Both flags are fetched in parallel — one cold instance pays two RTDB
-  // reads at most, then both answers are memoized together.
-  const [navResult, popupResult] = await Promise.allSettled([
+  // All four flags are fetched in parallel — one cold instance pays four
+  // RTDB reads at most, then all answers are memoized together.
+  const [navResult, popupResult, notifLikeResult, videoResult] = await Promise.allSettled([
     (async () => {
       if (navMemo && Date.now() - navMemo.ts < MEMO_TTL_MS) return navMemo.value
       const stored = await firebaseRead<string>(NAV_FLAG_PATH)
@@ -109,6 +140,20 @@ export async function GET() {
       // a bad flag must never resurrect the old popups.
       const value = normalizePopupMode(stored)
       popupMemo = { value, ts: Date.now() }
+      return value
+    })(),
+    (async () => {
+      if (notifLikeMemo && Date.now() - notifLikeMemo.ts < MEMO_TTL_MS) return notifLikeMemo.value
+      const stored = await firebaseRead<boolean>(NOTIF_LIKE_FLAG_PATH)
+      const value = normalizeBooleanFlag(stored, true)
+      notifLikeMemo = { value, ts: Date.now() }
+      return value
+    })(),
+    (async () => {
+      if (videoMemo && Date.now() - videoMemo.ts < MEMO_TTL_MS) return videoMemo.value
+      const stored = await firebaseRead<boolean>(VIDEO_FLAG_PATH)
+      const value = normalizeBooleanFlag(stored, true)
+      videoMemo = { value, ts: Date.now() }
       return value
     })(),
   ])
@@ -129,6 +174,9 @@ export async function GET() {
       subtopicNav: navResult.status === 'fulfilled' ? navResult.value : 'cards',
       popupSystem:
         popupResult.status === 'fulfilled' ? popupResult.value : DEFAULT_POPUP_MODE,
+      notifLike:
+        notifLikeResult.status === 'fulfilled' ? notifLikeResult.value : true,
+      videoWatch: videoResult.status === 'fulfilled' ? videoResult.value : true,
     },
     {
       headers: {
@@ -139,7 +187,13 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { password?: string; subtopicNav?: string; popupSystem?: string }
+  let body: {
+    password?: string
+    subtopicNav?: string
+    popupSystem?: string
+    notifLike?: boolean | string
+    videoWatch?: boolean | string
+  }
   try {
     body = await req.json()
   } catch {
@@ -152,9 +206,14 @@ export async function POST(req: NextRequest) {
 
   const wantsNav = body.subtopicNav !== undefined
   const wantsPopup = body.popupSystem !== undefined
-  if (!wantsNav && !wantsPopup) {
+  const wantsNotifLike = body.notifLike !== undefined
+  const wantsVideo = body.videoWatch !== undefined
+  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsVideo) {
     return NextResponse.json(
-      { error: 'Provide subtopicNav and/or popupSystem to set' },
+      {
+        error:
+          'Provide subtopicNav, popupSystem, notifLike and/or videoWatch to set',
+      },
       { status: 400 },
     )
   }
@@ -191,9 +250,31 @@ export async function POST(req: NextRequest) {
     console.log(`[flags] popupSystem set to '${body.popupSystem}' (applies to ALL users)`)
   }
 
+  if (wantsNotifLike) {
+    const notifLike = normalizeBooleanFlag(body.notifLike, true)
+    const ok = await firebaseWrite(NOTIF_LIKE_FLAG_PATH, notifLike)
+    if (!ok) {
+      return NextResponse.json({ error: 'Firebase write failed (notifLike)' }, { status: 500 })
+    }
+    notifLikeMemo = { value: notifLike, ts: Date.now() }
+    console.log(`[flags] notifLike set to '${notifLike}' (applies to ALL users)`)
+  }
+
+  if (wantsVideo) {
+    const videoWatch = normalizeBooleanFlag(body.videoWatch, true)
+    const ok = await firebaseWrite(VIDEO_FLAG_PATH, videoWatch)
+    if (!ok) {
+      return NextResponse.json({ error: 'Firebase write failed (videoWatch)' }, { status: 500 })
+    }
+    videoMemo = { value: videoWatch, ts: Date.now() }
+    console.log(`[flags] videoWatch set to '${videoWatch}' (applies to ALL users)`)
+  }
+
   return NextResponse.json({
     ok: true,
     ...(wantsNav ? { subtopicNav: body.subtopicNav } : {}),
     ...(wantsPopup ? { popupSystem: body.popupSystem } : {}),
+    ...(wantsNotifLike ? { notifLike: normalizeBooleanFlag(body.notifLike, true) } : {}),
+    ...(wantsVideo ? { videoWatch: normalizeBooleanFlag(body.videoWatch, true) } : {}),
   })
 }

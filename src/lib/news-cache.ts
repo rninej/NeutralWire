@@ -57,7 +57,12 @@ const FRESHNESS_WINDOW_MS = 48 * 60 * 60 * 1000 // keep topics younger than 48h 
 //       vision-checked against their headline; og:image scraping is
 //       redirect-guarded. Bumped so every cached topic re-picks its image
 //       through the new verified pipeline on the first refresh post-deploy.
-const CACHE_VERSION = 6
+//   7 — title cleaner strips WATCH prefixes ("WATCH:", "WATCH LIVE:") and
+//       trailing "- WATCH" fragments, and articles now carry a videoUrl
+//       (RSS media:content/enclosure video + YouTube-channel-source links)
+//       for the experimental Watch button. Bumped so every cached topic's
+//       title is re-cleaned and video data backfills on the first refresh.
+const CACHE_VERSION = 7
 
 // ---------- In-process refresh bookkeeping ----------
 const REFRESH_IN_FLIGHT = new Map<string, Promise<CategoryCachePayload | null>>()

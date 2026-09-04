@@ -26,10 +26,18 @@ import type { TopicArticle } from '@/lib/news-aggregator'
 import { getDeviceId } from '@/lib/referral'
 import { bumpEngagementForTopic } from '@/lib/user-interests'
 import { getRating } from '@/lib/source-ratings'
+import { useVideoWatch } from '@/lib/video-watch'
+import { VideoPlayer, WatchPill } from '@/components/video-player'
 
 interface TopicDetailProps {
   topic: TopicArticle
   onClose: () => void
+  /** TRUE when opened via the notification's Like button (the /?topic=x&like=1
+   *  URL or the SW's open-topic message): the article auto-presses its own
+   *  like button shortly after opening — the user SEES the thumbs-up pop
+   *  green, and the personal ranking boost lands exactly as if they had
+   *  tapped it themselves. One-shot (a later manual open never re-likes). */
+  autoLike?: boolean
   /** Called when the topic is broken (no sources + no summary after all
    *  fetches fail). The parent should remove it from the feed so it
    *  doesn't bother other users. */
@@ -58,7 +66,7 @@ function formatTime(ms: number): string {
   return `${day} ${date} ${month}, ${hh}:${mm}`
 }
 
-export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps) {
+export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }: TopicDetailProps) {
   const [summary, setSummary] = React.useState<string | null>(null)
   const [summaryLoading, setSummaryLoading] = React.useState(true)
   const [summaryError, setSummaryError] = React.useState<string | null>(null)
@@ -67,6 +75,12 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
   const [askAiOpen, setAskAiOpen] = React.useState(false)
   // Like/dislike state: null = no vote, 'liked' = thumbs up, 'disliked' = thumbs down
   const [likeState, setLikeState] = React.useState<'liked' | 'disliked' | null>(null)
+  // Brief banner shown when the like button was auto-pressed for the user
+  // (notification Like tap) — confirms the action landed.
+  const [autoLikedToast, setAutoLikedToast] = React.useState(false)
+  // ── Experimental Watch button (video feature) ──
+  const videoWatchOn = useVideoWatch()
+  const [videoOpen, setVideoOpen] = React.useState(false)
   // Full topic fetched from /api/topic/[id] — used when the slim feed
   // response (slim=1) strips the articles array. This guarantees the
   // "All Sources" section always has articles to show.
@@ -474,6 +488,31 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
     }
   }
 
+  // ── AUTO-PRESS the like button (notification Like tap) ──
+  // Runs ONCE when the overlay mounts with autoLike=true. Skips when a
+  // vote already exists (idempotent — a second tap of a notification can
+  // never double-count). The 650ms delay lets the article render first so
+  // the user actually SEES the thumbs-up pop green in the top bar, then
+  // the banner confirms what happened.
+  React.useEffect(() => {
+    if (!autoLike) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      const saved = localStorage.getItem(`neutralwire:vote:${topic.topicId}`)
+      if (saved === 'liked' || saved === 'disliked') return
+    } catch {
+      // localStorage unavailable — still auto-press (vote won't persist)
+    }
+    timer = setTimeout(() => {
+      handleLike()
+      setAutoLikedToast(true)
+      setTimeout(() => setAutoLikedToast(false), 3200)
+    }, 650)
+    return () => {
+      if (timer) clearTimeout(timer)
+    }
+  }, [autoLike, topic.topicId])
+
   const total = topic.leanLeft + topic.leanCenter + topic.leanRight
   // Safe image URL — malformed cache entries (non-string) degrade to null
   // instead of breaking the img src / encodeURIComponent below.
@@ -677,6 +716,31 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
       </motion.div>
 
       <div className="mx-auto max-w-3xl px-4 py-6">
+        {/* ── Auto-like confirmation banner (notification Like tap) ──
+            Appears when the like button was pressed FOR the user — confirms
+            what happened and that similar stories will rank higher. */}
+        <AnimatePresence>
+          {autoLikedToast && (
+            <motion.div
+              initial={{ opacity: 0, y: -12, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: 'auto' }}
+              exit={{ opacity: 0, y: -12, height: 0 }}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              className="mb-4 overflow-hidden"
+            >
+              <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white">
+                  <ThumbsUp className="h-3.5 w-3.5" />
+                </span>
+                <span className="text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                  Liked — you'll see more stories like this, and it ranks a bit
+                  higher for everyone.
+                </span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Header */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Badge variant="secondary" className="text-[10px]">
@@ -736,14 +800,18 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
               transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               onError={() => setImgError(true)}
             />
-            {/* NW brand mark — same watermark as the news cards and the
-                generated share/notification images (dark chip + NW logo +
-                wordmark), for consistent brand recognition. */}
-            <div className="pointer-events-none absolute bottom-2 right-2 z-[1] flex items-center gap-1.5 rounded-lg bg-black/55 py-1 pl-1.5 pr-2 backdrop-blur-[2px]">
-              <img src="/icon-192.png" alt="" className="h-4 w-4 rounded-[4px]" />
-              <span className="text-[10px] font-extrabold uppercase leading-none tracking-[0.14em] text-white">
-                NeutralWire
-              </span>
+            {/* Bottom-right badge row: [NW brand mark] [experimental Watch
+                pill]. Same row design as the feed cards — the brand chip
+                keeps its corner, the Watch pill joins it when the video
+                feature is on. */}
+            <div className="pointer-events-none absolute bottom-2 right-2 z-[1] flex items-center gap-2">
+              <div className="pointer-events-none flex items-center gap-1.5 rounded-lg bg-black/55 py-1 pl-1.5 pr-2 backdrop-blur-[2px]">
+                <img src="/icon-192.png" alt="" className="h-4 w-4 rounded-[4px]" />
+                <span className="text-[10px] font-extrabold uppercase leading-none tracking-[0.14em] text-white">
+                  NeutralWire
+                </span>
+              </div>
+              {videoWatchOn && <WatchPill onClick={() => setVideoOpen(true)} />}
             </div>
           </div>
         )}
@@ -980,6 +1048,17 @@ export function TopicDetail({ topic, onClose, onReportBroken }: TopicDetailProps
           topic={topic}
           summary={summary}
           onClose={() => setAskAiOpen(false)}
+        />
+      )}
+
+      {/* Experimental Watch overlay (video feature) — portaled to
+          document.body inside VideoPlayer, so it escapes this sheet's
+          animated transform and sits above everything. */}
+      {videoOpen && (
+        <VideoPlayer
+          topicId={topic.topicId}
+          storyTitle={topic.title}
+          onClose={() => setVideoOpen(false)}
         />
       )}
     </motion.div>

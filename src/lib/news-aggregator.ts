@@ -24,6 +24,13 @@ export interface FeedArticle {
   pubDate: string | null
   iso: number
   imageUrl: string | null
+  /** Video URL for this article when the RSS feed carries one — a
+   *  media:content/enclosure with a video type (mp4/m3u8/etc.) or a
+   *  direct YouTube watch link (some sources ARE YouTube channel feeds).
+   *  Used by the experimental Watch button (/api/video/[topicId]) —
+   *  "the source's own video" is always preferred over a search match.
+   *  Optional so all existing cached articles keep validating. */
+  videoUrl?: string | null
   sourceId: string
   sourceName: string
   sourceHomepage: string
@@ -55,6 +62,11 @@ export interface TopicArticle {
   /** Total distinct newsrooms (domains) found by GDELT for this country
    * query. Shown as "14 distinct newsrooms" in the topic detail. */
   totalNewsrooms?: number
+  /** Global ranking boost from notification Likes (set by /api/news from
+   * the topicBoost Firebase node). 0/undefined = normal position; each
+   * like promotes the story a few positions for EVERY visitor. Included
+   * in the client's personalization score too. */
+  boostScore?: number
 }
 
 export interface CategoryCachePayload {
@@ -1155,6 +1167,17 @@ function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedA
     if (!cleanTitle || !cleanLink) continue
     if (cleanTitle.length < 8) continue
 
+    // ── Video extraction (experimental Watch feature) ──
+    // Two shapes carry a source video in RSS:
+    //   1. <media:content type="video/mp4" url="..."> / <enclosure
+    //      type="video/..." url="..."> — outlets that publish video pods.
+    //   2. The entry LINK itself is a YouTube watch URL — some sources in
+    //      the list are YouTube channel feeds, where every entry IS a video.
+    const videoUrl =
+      extractVideoAttr(block, 'media:content') ||
+      extractVideoAttr(block, 'enclosure') ||
+      (isYouTubeUrl(cleanLink) ? cleanLink : null)
+
     // Skip non-English articles.
     // Decode entities FIRST (so &lt;a href&gt; becomes <a href>),
     // then STRIP HTML tags (so <a href='...'>text</a> becomes 'text'),
@@ -1181,6 +1204,7 @@ function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedA
       pubDate,
       iso,
       imageUrl,
+      videoUrl,
       sourceId: source.id,
       sourceName: source.name,
       sourceHomepage: source.homepage,
@@ -1191,6 +1215,51 @@ function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedA
   }
 
   return articles
+}
+
+/** True when the URL points at a YouTube video page (watch/short/youtu.be). */
+function isYouTubeUrl(url: string): boolean {
+  if (!url) return false
+  try {
+    const u = new URL(url)
+    const host = u.hostname.replace(/^www\./, '').toLowerCase()
+    if (host === 'youtu.be') return u.pathname.length > 1
+    if (host === 'youtube.com' || host === 'm.youtube.com') {
+      return (
+        u.pathname === '/watch' ||
+        u.pathname.startsWith('/shorts/') ||
+        u.pathname.startsWith('/live/')
+      )
+    }
+    return false
+  } catch {
+    return /(?:youtube\.com\/watch|youtu\.be\/)/i.test(url)
+  }
+}
+
+/**
+ * Extract a VIDEO url from an RSS media:content/enclosure block — same
+ * tag-scanning approach as extractAttr(), but type-aware: the tag must
+ * declare a video MIME type (type="video/mp4") or point at a video file
+ * extension. Returns null for the (common) case where the same tags carry
+ * only images.
+ */
+function extractVideoAttr(block: string, tag: string): string | null {
+  const re = new RegExp(`<${escapeReg(tag)}\b[^>]*>`, 'gi')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(block)) !== null) {
+    const tagText = m[0]
+    const urlMatch = tagText.match(/\burl\s*=\s*["']([^"']+)["']/i)
+    if (!urlMatch) continue
+    const url = urlMatch[1]
+    const typeMatch = tagText.match(/\btype\s*=\s*["']([^"']+)["']/i)
+    const type = typeMatch ? typeMatch[1].toLowerCase() : ''
+    if (type.startsWith('video/')) return url
+    if (/\.(mp4|m3u8|webm|ogv|mov)(\?|$)/i.test(url)) return url
+    // YouTube media:content in feeds (yt namespace) points at player URLs.
+    if (isYouTubeUrl(url)) return url
+  }
+  return null
 }
 
 function extractTag(block: string, tag: string): string | null {
@@ -1308,8 +1377,25 @@ function parseDateToMs(s: string | null): number {
 function makeConciseTitle(title: string): string {
   let t = title.trim()
 
-  // Remove leading tags: BREAKING, LIVE, UPDATE, EXCLUSIVE, DEVELOPING, ANALYSIS
-  t = t.replace(/^(BREAKING|LIVE|UPDATE|UPDATED|EXCLUSIVE|DEVELOPING|ANALYSIS|JUST IN|REPORT)[\s:|-]+/i, '')
+  // Remove leading tags: BREAKING, LIVE, UPDATE, EXCLUSIVE, DEVELOPING,
+  // ANALYSIS — and WATCH / VIDEO (the "WATCH:", "WATCH LIVE:" and "Video:"
+  // prefixes Sky News, Express, GB News and ABC put on video posts).
+  // Looping handles stacked prefixes like "WATCH LIVE: X" (strips WATCH,
+  // then LIVE).
+  const LEADING_TAGS =
+    /^(BREAKING|LIVE|UPDATE|UPDATED|EXCLUSIVE|DEVELOPING|ANALYSIS|JUST IN|REPORT|WATCH|VIDEO)[\s:|-]+/i
+  for (let i = 0; i < 3; i++) {
+    const next = t.replace(LEADING_TAGS, '')
+    if (next === t) break
+    t = next
+  }
+
+  // Also strip a trailing " - WATCH" / " | WATCH" / " | Video" fragment some
+  // outlets use ("Cameron speech - WATCH"). Only the exact word as its OWN
+  // final segment — genuine uses ("Apple Watch launches...") never match,
+  // and a title that would become too short is restored by the safety net
+  // below.
+  t = t.replace(/\s*[|\-–]\s*(WATCH|Video|VIDEO)\s*$/i, '')
 
   // Remove source prefixes: "BBC News - ", "The Guardian - ", "Reuters: "
   t = t.replace(/^(BBC News|The Guardian|Reuters|AP|AFP|CNN|Fox News|NBC News|CBS News|ABC News|NPR|CNBC|New York Times|Washington Post|Financial Times|The Economist|Al Jazeera|France 24|Deutsche Welle|Bloomberg)[\s:|-]+/i, '')

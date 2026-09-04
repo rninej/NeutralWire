@@ -621,6 +621,28 @@ export default function Home({
     detailTopicRef.current = detailTopic
   }, [detailTopic])
 
+  // ── Notification Like auto-press ──
+  // When the user taps LIKE on a push notification, the SW opens the
+  // article with &like=1 (cold start) or posts an open-topic message with
+  // autoLike: true (app already open). Both land here: pendingAutoLikeRef
+  // holds the TOPIC ID whose next open should auto-press its like button;
+  // autoLikeTopicId is the id actually passed into <TopicDetail>, cleared
+  // when the overlay closes (one shot — reopening the article normally
+  // never re-likes).
+  //
+  // The marker is STICKY PER TOPIC because TWO async flows can race to
+  // open the same ?topic= URL: the topic-watcher effect (openTopicFromUrl)
+  // AND the fetchData effect's own auto-open (which calls handleOpenDetail
+  // WITHOUT autoLike). Whichever wins, a plain boolean marker would be
+  // reset by the loser — killing the 650ms auto-press timer mid-flight.
+  // Keying the marker by topic id makes the second call a no-op.
+  const pendingAutoLikeRef = React.useRef<string | null>(null)
+  const [autoLikeTopicId, setAutoLikeTopicId] = useState<string | null>(null)
+  const autoLikeTopicIdRef = React.useRef<string | null>(null)
+  useEffect(() => {
+    autoLikeTopicIdRef.current = autoLikeTopicId
+  }, [autoLikeTopicId])
+
   // ── topics ref ──
   // Lets the topic-open watcher below read the latest topics WITHOUT
   // re-subscribing its popstate/message listeners on every feed update
@@ -665,8 +687,28 @@ export default function Home({
   // If the topic is a My Country story (GDELT-sourced, topicId starts with
   // 'g') opened from the Relevant tab, bump the country-news count up (+1)
   // so more country stories appear in Relevant next time.
-  const handleOpenDetail = React.useCallback((topic: TopicArticle) => {
+  const handleOpenDetail = React.useCallback((topic: TopicArticle, autoLike?: boolean) => {
     setDetailTopic(topic)
+    // ── Notification Like auto-press (sticky per topic id) ──
+    // - If THIS topic is already armed → keep it armed (the racing second
+    //   open of the same ?topic= must not reset the marker).
+    // - Else consume the pending flag (set from ?like=1 or the SW message)
+    //   when it matches THIS topic; a pending id for a DIFFERENT topic is
+    //   discarded (the user opened something else first — never auto-like
+    //   the wrong story).
+    if (autoLikeTopicIdRef.current === topic.topicId) {
+      // already armed for this exact topic — keep
+    } else {
+      const pendingId = pendingAutoLikeRef.current
+      pendingAutoLikeRef.current = null
+      const wanted = autoLike === true ? topic.topicId : pendingId
+      const next = wanted === topic.topicId ? topic.topicId : null
+      // Update the ref SYNCHRONOUSLY (a racing second open — e.g. the
+      // fetchData auto-open — can call this before React flushes the
+      // state update and its ref-sync effect; the ref must already know).
+      autoLikeTopicIdRef.current = next
+      setAutoLikeTopicId(next)
+    }
     markTopicSeen(topic.topicId)
     setSeenTopics(getSeenTopics())
     const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
@@ -806,6 +848,30 @@ export default function Home({
       const topicId = urlParams.get('topic')
       if (!topicId) return
 
+      // ── Notification Like auto-press (?like=1) ──
+      // The SW appends like=1 when the user tapped the notification's Like
+      // button. Read it, arm the pending auto-like (keyed by topic id so a
+      // racing second open can't apply it to the wrong story), and strip it
+      // from the URL IMMEDIATELY (replaceState — no history churn) so a
+      // refresh or a share of this URL can never re-trigger the like.
+      let autoLikeFromUrl = false
+      if (urlParams.get('like') === '1') {
+        autoLikeFromUrl = true
+        pendingAutoLikeRef.current = topicId
+        try {
+          const cleanUrl = new URL(window.location.href)
+          cleanUrl.searchParams.delete('like')
+          window.history.replaceState(
+            window.history.state || {},
+            '',
+            cleanUrl.toString(),
+          )
+        } catch {
+          // URL API unavailable — leave the param; TopicDetail's own
+          // one-shot guard still prevents double-liking.
+        }
+      }
+
       // ── Fix back-button history for notification/shared-link opens ──
       // When the app is opened via a notification tap or a shared link,
       // the initial URL is `/?topic=xxx`. The browser history has only
@@ -840,7 +906,7 @@ export default function Home({
       // (fastest path — no API call needed).
       const found = topicsRef.current.find((t) => t.topicId === topicId)
       if (found) {
-        handleOpenDetailRef.current?.(found)
+        handleOpenDetailRef.current?.(found, autoLikeFromUrl)
         return
       }
 
@@ -870,7 +936,7 @@ export default function Home({
           const topicJson = await topicRes.json()
           if (cancelled) return
           if (topicJson.topic) {
-            handleOpenDetailRef.current?.(topicJson.topic)
+            handleOpenDetailRef.current?.(topicJson.topic, autoLikeFromUrl)
             return
           }
         } catch {
@@ -893,6 +959,12 @@ export default function Home({
     // Trigger on SW 'open-topic' message (covers app-already-open case)
     const messageHandler = (event: MessageEvent) => {
       if (event.data?.type === 'open-topic' && event.data?.topicId) {
+        // The SW sets autoLike: true when the user tapped the
+        // notification's Like button — arm the one-shot auto-press,
+        // keyed to this topic id.
+        if (event.data.autoLike === true) {
+          pendingAutoLikeRef.current = event.data.topicId
+        }
         // The topicId might not be in our current `topics` array (different
         // category loaded), so always go through the full openTopicFromUrl
         // flow which falls back to /api/topic/[id].
@@ -901,6 +973,9 @@ export default function Home({
         if (!window.location.search.includes(`topic=${event.data.topicId}`)) {
           const url = new URL(window.location.href)
           url.searchParams.set('topic', event.data.topicId)
+          // Warm-app like: the URL never had like=1 — keep the marker in
+          // the history state? No — the pendingAutoLikeRef above carries
+          // it; do NOT write like=1 into the URL (a refresh would re-arm).
           window.history.pushState({ detailOpen: true }, '', url.toString())
         }
         openTopicFromUrl()
@@ -1455,14 +1530,36 @@ export default function Home({
     // appear in the final feed).
     // Topics with very negative scores (< -10) are HIDDEN — the user has
     // strongly disliked this sector, so we don't show them at all.
+    //
+    // ── Notification-like ranking signals ──
+    // boostScore: the GLOBAL signal — every like on a notification adds
+    //   +6 (max 24) server-side; the user's own liked topics ALSO carry a
+    //   direct +40 here (localStorage vote) so a story they liked from a
+    //   notification ranks clearly higher for THEM, outweighing the -15
+    //   seen-penalty that opening it incurred.
     const LOCAL_BOOST = 18
+    const LIKED_DIRECT_BOOST = 40
+    const likedTopicIds = new Set<string>()
+    if (typeof window !== 'undefined') {
+      try {
+        for (const t of list) {
+          if (localStorage.getItem(`neutralwire:vote:${t.topicId}`) === 'liked') {
+            likedTopicIds.add(t.topicId)
+          }
+        }
+      } catch {
+        // localStorage unavailable (private mode) — skip the direct boost
+      }
+    }
     const scored = list
       .map((t) => ({
         topic: t,
         score:
           personalizationBoost(t, interests, engagement) -
           (seenTopicIds.has(t.topicId) ? 15 : 0) +
-          (isLocalTopic(t) ? LOCAL_BOOST : 0),
+          (isLocalTopic(t) ? LOCAL_BOOST : 0) +
+          (t.boostScore || 0) +
+          (likedTopicIds.has(t.topicId) ? LIKED_DIRECT_BOOST : 0),
         isLocal: isLocalTopic(t),
       }))
       .sort((a, b) => b.score - a.score)
@@ -2532,9 +2629,16 @@ export default function Home({
           <TopicDetail
             key={detailTopic.topicId}
             topic={detailTopic}
+            autoLike={autoLikeTopicId === detailTopic.topicId}
             onClose={() => {
+              // One-shot: clear the auto-like marker with the overlay so a
+              // later manual open of the same article never re-likes.
+              setAutoLikeTopicId(null)
               // Clean up the ?topic= URL param when closing.
               const url = new URL(window.location.href)
+              // Defensive: also drop a lingering like=1 (should already have
+              // been stripped on open, but never let it survive a close).
+              url.searchParams.delete('like')
               if (url.searchParams.has('topic')) {
                 url.searchParams.delete('topic')
                 // If we were opened via a shared link, we pushed a history

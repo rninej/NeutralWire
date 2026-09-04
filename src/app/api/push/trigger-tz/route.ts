@@ -284,6 +284,20 @@ export async function GET(req: NextRequest) {
 
     console.log(`[trigger-tz] ${toNotify.length} to notify (total=${totalDevices} noSub=${skipNoSub} notStandalone=${skipNotStandalone} noTz=${skipNoTimezone} notInWindow=${skipNotInWindow} alreadySent=${skipAlreadySent})`)
 
+    // ── Notification Like-button flag ──
+    // Read once per run (one Firebase read). notifLike=false → the payload
+    // tells the SW to ship the notification WITHOUT the Like action button
+    // (only "Not Interested"). Absent/true → the [Like | Not Interested]
+    // pair. Flipping the flag in /debug applies to every notification sent
+    // from the next cron run onward.
+    let notifLike = true
+    try {
+      const storedFlag = await firebaseRead<boolean | string>('featureFlags/notifLike')
+      if (storedFlag === false || storedFlag === 'false') notifLike = false
+    } catch {
+      // Firebase hiccup → default to ON (never break notification sending)
+    }
+
     if (toNotify.length === 0) {
       return NextResponse.json({
         ok: true, message: 'No devices need notifications', sent: 0,
@@ -514,6 +528,9 @@ export async function GET(req: NextRequest) {
           image: ogImageUrl,
           tag: `briefing-${target.slot}`,
           notifId: `tz_${target.dateKey}_${target.slot}_${target.deviceId.slice(-6)}`,
+          // Like-button gate (featureFlags/notifLike, read once per run
+          // above). false → the SW omits the Like action button.
+          likeButton: notifLike,
         })
 
         await webpush.sendNotification(

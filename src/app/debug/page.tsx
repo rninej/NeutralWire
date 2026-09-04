@@ -38,6 +38,8 @@ import {
   History,
   Layers,
   Eraser,
+  FlaskConical,
+  Play,
 } from 'lucide-react'
 import { getDeviceId } from '@/lib/referral'
 import { COUNTRY_COORDS, latLngToXY } from '@/lib/country-coords'
@@ -358,6 +360,18 @@ export default function DebugPage() {
   const [popupFlipResult, setPopupFlipResult] = React.useState<string | null>(null)
   const [popupMemoryCleared, setPopupMemoryCleared] = React.useState(false)
 
+  // ── Experimental features (notification Like button + video Watch) ──
+  // Two boolean flags stored like the others (Firebase featureFlags/*).
+  // Both default ON; the /debug switches remove them instantly-ish:
+  //   notifLike → new notifications ship without the Like action
+  //   videoWatch → Watch pills vanish on next load + /api/video refuses
+  const [notifLike, setNotifLike] = React.useState<boolean | null>(null)
+  const [notifLikeFlipping, setNotifLikeFlipping] = React.useState(false)
+  const [notifLikeResult, setNotifLikeResult] = React.useState<string | null>(null)
+  const [videoWatch, setVideoWatch] = React.useState<boolean | null>(null)
+  const [videoWatchFlipping, setVideoWatchFlipping] = React.useState(false)
+  const [videoWatchResult, setVideoWatchResult] = React.useState<string | null>(null)
+
   React.useEffect(() => {
     fetch('/api/flags')
       .then((r) => (r.ok ? r.json() : null))
@@ -371,12 +385,34 @@ export default function DebugPage() {
             ? d.popupSystem
             : DEFAULT_POPUP_MODE,
         )
+        setNotifLike(d?.notifLike !== false)
+        setVideoWatch(d?.videoWatch !== false)
       })
       .catch(() => {
         setNavMode('cards')
         setPopupMode(DEFAULT_POPUP_MODE)
+        setNotifLike(true)
+        setVideoWatch(true)
       })
   }, [])
+
+  /** POST one boolean flag (shared by the two experimental switches). */
+  const flipBooleanFlag = async (
+    flag: 'notifLike' | 'videoWatch',
+    value: boolean,
+  ): Promise<boolean> => {
+    if (!passwordRef.current) return false
+    try {
+      const res = await fetch('/api/flags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordRef.current, [flag]: value }),
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  }
 
   const setPopupSystem = async (mode: PopupMode) => {
     if (popupFlipping || mode === popupMode || !passwordRef.current) return
@@ -865,6 +901,184 @@ export default function DebugPage() {
                 ✓ Cleared — refresh the homepage now
               </span>
             )}
+          </div>
+        </Card>
+
+        {/* ── Experimental Features ──
+            The new stuff, each removable in one click if it doesn't earn
+            its place: the notification Like button and the video Watch
+            button. Both default ON; flip a switch to remove the feature. */}
+        <Card className="mb-6 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <FlaskConical className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-bold">Experimental Features</h2>
+            <span className="ml-auto text-xs text-muted-foreground">
+              Don't like one? Turn it off here
+            </span>
+          </div>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Both features are live for every visitor right now. Each switch
+            removes the feature instantly for new notifications / new page
+            loads — no redeploy needed. Flip them back on the same way.
+          </p>
+
+          <div className="grid max-w-3xl gap-3">
+            {/* ── Notification Like button ── */}
+            <div
+              className={cn(
+                'flex items-start gap-3 rounded-xl border-2 p-4 transition-colors',
+                notifLike === false ? 'border-border opacity-70' : 'border-border bg-muted/40',
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  notifLike ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground',
+                )}
+              >
+                <Bell className="h-4.5 w-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold">Like button on notifications</span>
+                  {notifLike !== null && (
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                        notifLike
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-muted-foreground/20 text-muted-foreground',
+                      )}
+                    >
+                      {notifLike ? 'Live' : 'Removed'}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Push notifications get a <b>[Like | Not Interested]</b> pair.
+                  Tapping Like opens the article, auto-presses its like button
+                  (more stories like it for that user) and nudges the story up
+                  everyone's feed a few positions. Requires Android/desktop
+                  Chrome for the inline buttons — iOS doesn't render
+                  notification actions.
+                </p>
+                {notifLikeResult && (
+                  <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    {notifLikeResult}
+                  </p>
+                )}
+              </div>
+              <Button
+                variant={notifLike ? 'destructive' : 'default'}
+                size="sm"
+                disabled={notifLikeFlipping || notifLike === null}
+                onClick={async () => {
+                  if (notifLikeFlipping || notifLike === null) return
+                  setNotifLikeFlipping(true)
+                  setNotifLikeResult(null)
+                  const next = !notifLike
+                  const ok = await flipBooleanFlag('notifLike', next)
+                  if (ok) {
+                    setNotifLike(next)
+                    setNotifLikeResult(
+                      next
+                        ? '✓ On — new notifications carry the Like button'
+                        : '✓ Off — new notifications ship without it',
+                    )
+                  } else {
+                    setNotifLikeResult('Failed to update (check password)')
+                  }
+                  setNotifLikeFlipping(false)
+                }}
+                className="shrink-0"
+              >
+                {notifLikeFlipping ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : notifLike ? (
+                  'Remove it'
+                ) : (
+                  'Turn on'
+                )}
+              </Button>
+            </div>
+
+            {/* ── Video Watch button ── */}
+            <div
+              className={cn(
+                'flex items-start gap-3 rounded-xl border-2 p-4 transition-colors',
+                videoWatch === false ? 'border-border opacity-70' : 'border-border bg-muted/40',
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  videoWatch ? 'bg-red-500/15 text-red-500' : 'bg-muted text-muted-foreground',
+                )}
+              >
+                <Play className="h-4.5 w-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold">Watch button (video version)</span>
+                  {videoWatch !== null && (
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                        videoWatch
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-muted-foreground/20 text-muted-foreground',
+                      )}
+                    >
+                      {videoWatch ? 'Live' : 'Removed'}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  A Watch pill on article images (feed cards + inside articles)
+                  that plays a video of the story — the source's own video when
+                  its feed carries one, else a matching video from a news
+                  outlet on YouTube. Refresh the homepage after switching to
+                  see the change.
+                </p>
+                {videoWatchResult && (
+                  <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    {videoWatchResult}
+                  </p>
+                )}
+              </div>
+              <Button
+                variant={videoWatch ? 'destructive' : 'default'}
+                size="sm"
+                disabled={videoWatchFlipping || videoWatch === null}
+                onClick={async () => {
+                  if (videoWatchFlipping || videoWatch === null) return
+                  setVideoWatchFlipping(true)
+                  setVideoWatchResult(null)
+                  const next = !videoWatch
+                  const ok = await flipBooleanFlag('videoWatch', next)
+                  if (ok) {
+                    setVideoWatch(next)
+                    setVideoWatchResult(
+                      next
+                        ? '✓ On — refresh the homepage to see the Watch pills'
+                        : '✓ Off — refresh and the buttons are gone (API refuses too)',
+                    )
+                  } else {
+                    setVideoWatchResult('Failed to update (check password)')
+                  }
+                  setVideoWatchFlipping(false)
+                }}
+                className="shrink-0"
+              >
+                {videoWatchFlipping ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : videoWatch ? (
+                  'Turn off'
+                ) : (
+                  'Turn on'
+                )}
+              </Button>
+            </div>
           </div>
         </Card>
 

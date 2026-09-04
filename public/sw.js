@@ -1,6 +1,18 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v24: NOTIFICATION LIKE BUTTON —
+//      1. Push notifications now carry a [Like | Not Interested] action
+//         pair (gated by the payload's likeButton flag, set from the
+//         notifLike feature flag at push time — /debug can remove the
+//         button instantly).
+//      2. Tapping LIKE: records the feedback server-side (which also
+//         boosts the story a few positions in EVERYONE's feed), then
+//         opens the article with &like=1 — the app auto-presses the
+//         like button inside the article (personal ranking boost) and
+//         the user lands on the story as normal.
+//      3. Cache-name bump v23 → v24 so installed PWAs pick up the new
+//         notification click logic on their next launch.
 // v23: LOAD-TIME HARDENING —
 //      1. Static-asset cache cap 20 → 200. Next.js emits 40-80 hashed
 //         chunks per load; the old 20-entry cap LRU-evicted live chunks,
@@ -42,9 +54,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v23'
-const API_CACHE = 'neutralwire-api-v23'
-const IMG_CACHE = 'neutralwire-img-v23'
+const SHELL_CACHE = 'neutralwire-shell-v24'
+const API_CACHE = 'neutralwire-api-v24'
+const IMG_CACHE = 'neutralwire-img-v24'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
@@ -514,6 +526,10 @@ self.addEventListener('push', (event) => {
     image: null,
     tag: 'neutralwire',
     notifId: null,
+    // Like-button flag (set at push time from the notifLike feature flag).
+    // Default true so older payloads / test pushes keep the button; only an
+    // explicit `likeButton: false` (flag flipped off in /debug) removes it.
+    likeButton: true,
   }
 
   try {
@@ -526,6 +542,20 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  // ── Notification action buttons ──
+  // Max 2 actions render (Android Chrome / desktop Chrome). iOS Safari
+  // doesn't render notification actions at all — those users still get a
+  // normal tappable notification, just without the inline buttons.
+  // When the notifLike flag is ON: [Like | Not Interested].
+  // When OFF: the original single [Not Interested].
+  const actions =
+    data.likeButton === false
+      ? [{ action: 'dislike', title: 'Not Interested', icon: '/icon-192.png' }]
+      : [
+          { action: 'like', title: 'Like', icon: '/badge-96.png' },
+          { action: 'dislike', title: 'Not Interested', icon: '/icon-192.png' },
+        ]
+
   const options = {
     body: data.body,
     icon: data.icon,
@@ -535,11 +565,12 @@ self.addEventListener('push', (event) => {
       url: data.url,
       notifId: data.notifId,
       topicTitle: data.body,
+      // Remember the like-button state for the click handler (it re-reads
+      // the notification data, not the payload).
+      likeButton: data.likeButton !== false,
     },
     image: data.image,
-    actions: [
-      { action: 'dislike', title: 'Not Interested', icon: '/icon-192.png' },
-    ],
+    actions,
   }
 
   event.waitUntil(
@@ -549,10 +580,11 @@ self.addEventListener('push', (event) => {
 
 // ---------- Notification click ----------
 self.addEventListener('notificationclick', (event) => {
+  const isLike = event.action === 'like'
   const isNotInterested = event.action === 'dislike'
   event.notification.close()
 
-  const url = event.notification.data?.url || '/'
+  let url = event.notification.data?.url || '/'
   const notifId = event.notification.data?.notifId
   const topicTitle = event.notification.data?.topicTitle || ''
 
@@ -565,6 +597,29 @@ self.addEventListener('notificationclick', (event) => {
     if (match) topicId = match[1]
   }
 
+  // ── LIKE action ──
+  // Tapping Like does THREE things:
+  //   1. Records the like server-side (keyword stats + a small ranking
+  //      boost for the story in EVERYONE's feed — see
+  //      /api/notification/feedback).
+  //   2. Marks the notification as opened (click tracking), same as a
+  //      normal tap.
+  //   3. Opens the article with &like=1 appended — the app then
+  //      AUTO-PRESSES the like button inside the article (personal
+  //      engagement boost) so the user sees the thumbs-up go green.
+  if (isLike && topicId) {
+    // Append like=1 to the target URL so the just-opened page picks it
+    // up even if the postMessage races the page load.
+    try {
+      const u = new URL(url, self.location.origin)
+      u.searchParams.set('like', '1')
+      url = u.pathname + u.search
+    } catch {
+      // URL parse failed — fall back to raw concatenation
+      url = url + (url.includes('?') ? '&' : '?') + 'like=1'
+    }
+  }
+
   event.waitUntil((async () => {
     const trackHeaders = { 'Content-Type': 'application/json' }
     if (isNotInterested) {
@@ -573,6 +628,21 @@ self.addEventListener('notificationclick', (event) => {
         headers: trackHeaders,
         body: JSON.stringify({ notifId, action: 'dislike', title: topicTitle }),
       }).catch(() => {})
+    } else if (isLike) {
+      // Like: feedback (keyword stats + topic ranking boost + notif mark)
+      fetch('/api/notification/feedback', {
+        method: 'POST',
+        headers: trackHeaders,
+        body: JSON.stringify({ notifId, action: 'like', title: topicTitle, topicId }),
+      }).catch(() => {})
+      // And standard click tracking (same as a normal open).
+      if (notifId) {
+        fetch('/api/notification/track', {
+          method: 'POST',
+          headers: trackHeaders,
+          body: JSON.stringify({ notifId, action: 'click', title: topicTitle }),
+        }).catch(() => {})
+      }
     } else if (notifId) {
       fetch('/api/notification/track', {
         method: 'POST',
@@ -598,7 +668,10 @@ self.addEventListener('notificationclick', (event) => {
 
     if (targetClient) {
       try {
-        targetClient.postMessage({ type: 'open-topic', topicId, url, notifId })
+        // autoLike: true tells the already-open app to press the like
+        // button when the article opens (the &like=1 URL param covers the
+        // cold-start case — this message covers the warm-app case).
+        targetClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
       } catch {
         // silent
       }
@@ -615,7 +688,7 @@ self.addEventListener('notificationclick', (event) => {
       if (newClient && topicId) {
         setTimeout(() => {
           try {
-            newClient.postMessage({ type: 'open-topic', topicId, url, notifId })
+            newClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
           } catch {
             // silent
           }

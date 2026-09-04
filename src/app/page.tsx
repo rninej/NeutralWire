@@ -6,6 +6,7 @@ import {
   normalizePopupMode,
   type PopupMode,
 } from '@/lib/popup-mode'
+import { VideoWatchProvider } from '@/lib/video-watch'
 import PageClient from './page-client'
 
 // Force dynamic rendering so metadata is generated per-request (needed for
@@ -79,6 +80,28 @@ async function getPopupSystem(): Promise<PopupMode> {
     return value
   } catch {
     return 'smart'
+  }
+}
+
+// ── Server-rendered videoWatch flag (experimental Watch button) ──
+// Same SSR pattern as the nav + popup flags: read HERE so the first
+// paint already knows whether to render the Watch pill on article
+// images — no button-then-vanish flash. 5s memo. Absent → ON (the
+// experiment starts live; /debug can flip it off instantly).
+let videoFlagMemo: { value: boolean; ts: number } | null = null
+const VIDEO_FLAG_TTL_MS = 5 * 1000
+
+async function getVideoWatch(): Promise<boolean> {
+  if (videoFlagMemo && Date.now() - videoFlagMemo.ts < VIDEO_FLAG_TTL_MS) {
+    return videoFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<boolean | string>('featureFlags/videoWatch')
+    const value = !(stored === false || stored === 'false')
+    videoFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return true
   }
 }
 
@@ -164,6 +187,10 @@ export default async function Page() {
   // Popup system flag — same server-side read, same zero-flash guarantee.
   const popupSystem = await getPopupSystem()
 
+  // Experimental Watch button flag — same server-side read, so the SSR
+  // HTML already includes (or omits) the Watch pills on card images.
+  const videoWatch = await getVideoWatch()
+
   // Personal override (Account → Feature Flags → "Your header style"):
   // a cookie, so the server sees it during SSR — the visitor's own pick
   // renders in the very first paint, no flash. Invalid values fall back
@@ -178,5 +205,9 @@ export default async function Page() {
     // loaded, so just fall back to it.
   }
 
-  return <PageClient initialSubtopicNav={initialSubtopicNav} popupSystem={popupSystem} />
+  return (
+    <VideoWatchProvider enabled={videoWatch}>
+      <PageClient initialSubtopicNav={initialSubtopicNav} popupSystem={popupSystem} />
+    </VideoWatchProvider>
+  )
 }

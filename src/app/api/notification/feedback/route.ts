@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { firebasePatch } from '@/lib/firebase-server'
+import { firebasePatch, firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -13,22 +13,42 @@ export const revalidate = 0
  *   notifId: string,      // e.g. "notif_2026-07-24_morning_abc123"
  *   action: 'like' | 'dislike',
  *   title: string,        // the story title (used for sector detection)
+ *   topicId?: string,     // the story's topicId (LIKE → global rank boost)
  * }
  *
  * Records the feedback in Firebase:
  *   - notifications/<notifId>/feedback = 'like' | 'dislike'
  *   - notification-feedback/<action>/<keyword> = count (for AI personalisation)
+ *   - topicBoost/<topicId> = { score, updatedAt }   (LIKE only)
  *
- * The engagement bump (per-device) is NOT done here because we don't know
- * the deviceId from the SW. Instead, we record aggregate keyword stats
- * that the trigger endpoint uses for future story selection.
+ * ── Topic boost ("everyone else a bit") ──
+ * When the user taps Like on a notification, the story gets a small
+ * ranking boost that applies to EVERY visitor's feed, not just this
+ * device: /api/news reads the topicBoost map and moves boosted stories
+ * up a few positions (a stable, index-based promotion — see
+ * boostTopics() in the news route). Scoring: +6 per like, capped at 24,
+ * expiring 7 days after the last like (stale entries are ignored on read
+ * and lazily deleted). The boost is deliberately subtle — one like
+ * nudges a story ~6 positions up; it takes several likes to reach the
+ * top of a feed.
+ *
+ * The per-USER boost (personal engagement + the auto-pressed like inside
+ * the article) happens client-side when the app opens the ?like=1 URL —
+ * this endpoint only handles the shared/global signal plus analytics.
  */
+
+// topicBoost scoring constants (shared semantics with /api/news).
+const TOPIC_BOOST_STEP = 6
+const TOPIC_BOOST_MAX = 24
+const TOPIC_BOOST_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       notifId?: string
       action: 'like' | 'dislike'
       title?: string
+      topicId?: string
     }
 
     if (!body.action || !['like', 'dislike'].includes(body.action)) {
@@ -75,6 +95,27 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ── Topic ranking boost (LIKE only, applies to everyone's feed) ──
+    // +6 per notification like, capped at 24, 7-day expiry. Best-effort —
+    // the like still counts (keyword stats above) if this write fails.
+    if (body.action === 'like' && body.topicId) {
+      try {
+        const existing = await firebaseRead<{ score?: number; updatedAt?: number }>(
+          `topicBoost/${body.topicId}`,
+        )
+        const now = Date.now()
+        const prev = existing?.updatedAt && now - existing.updatedAt < TOPIC_BOOST_TTL_MS
+          ? existing.score || 0
+          : 0
+        await firebaseWrite(`topicBoost/${body.topicId}`, {
+          score: Math.min(TOPIC_BOOST_MAX, prev + TOPIC_BOOST_STEP),
+          updatedAt: now,
+        })
+      } catch {
+        // silent — best effort
+      }
+    }
+
     return NextResponse.json({ ok: true, action: body.action })
   } catch (err) {
     return NextResponse.json(
@@ -83,9 +124,6 @@ export async function POST(req: NextRequest) {
     )
   }
 }
-
-// Inline import to avoid circular dependency
-import { firebaseRead } from '@/lib/firebase-server'
 
 async function firebaseReadStats(key: string): Promise<{
   clicks?: number
