@@ -243,6 +243,29 @@ export function syncThemeClassNow(value: string) {
 }
 
 /**
+ * Point <link rel="manifest"> at the static manifest matching the theme
+ * mode: /manifest-light.json (white background_color + theme_color) for
+ * light, /manifest.json (#0a0a0a) for dark. Both files are identical apart
+ * from those two colours and share the same start_url + scope, so the
+ * installed app IDENTITY is unchanged — Chrome simply re-reads the
+ * manifest on its next visit to the PWA scope and updates the Android
+ * launch-splash backdrop + standalone title bar to match the user's
+ * theme on the following launch. Static files, zero server cost.
+ * The head launch-gate script in layout.tsx performs the same rewrite
+ * pre-paint on every page load; this covers mid-session theme changes
+ * (toggles, family picks, auto-mode flips) so Chrome's next manifest
+ * re-read always sees the right href.
+ */
+export function syncManifestForTheme(dark: boolean) {
+  if (typeof document === 'undefined') return
+  try {
+    document.querySelectorAll('link[rel="manifest"]').forEach((el) => {
+      el.setAttribute('href', dark ? '/manifest.json' : '/manifest-light.json')
+    })
+  } catch {}
+}
+
+/**
  * The core controller hook. Returns the current family/mode plus actions,
  * and keeps the applied theme in sync:
  *  - on mount (applies stored family+mode — also fixes the case where the
@@ -279,6 +302,9 @@ export function useThemeController() {
       // Synchronous DOM mirror — see syncThemeClassNow. Ensures the class
       // is on <html> before a View Transition snapshot is captured.
       syncThemeClassNow(value)
+      // Keep the PWA manifest (Android launch backdrop + title bar) in
+      // sync with the mode — see syncManifestForTheme.
+      syncManifestForTheme(eff === 'dark')
     },
     [setTheme],
   )
@@ -321,6 +347,8 @@ export function useThemeController() {
         setTheme(value)
         // Keep the DOM class in sync immediately (see syncThemeClassNow).
         syncThemeClassNow(value)
+        // And the manifest href follows the scheme flip too.
+        syncManifestForTheme(e.matches)
       }
     }
     mq.addEventListener('change', onChange)

@@ -11,6 +11,9 @@
  *   playing    — the splash is showing this load (standalone + fresh
  *                'navigate'); false in every browser tab, on every
  *                reload/back-forward.
+ *   theme      — the pre-paint theme resolution (family + mode + effective
+ *                dark/light) used to pick the splash palette; mirrors what
+ *                the theme controller will apply post-hydration.
  *
  * Controller (only defined when playing):
  *   ready()    — called ONCE by page-client after the first feed content
@@ -27,6 +30,11 @@ declare global {
       standalone?: boolean
       navType?: string
       playing?: boolean
+      theme?: {
+        family?: string
+        mode?: 'auto' | 'light' | 'dark'
+        dark?: boolean
+      }
       ready?: () => void
       released?: boolean
       reason?: 'ready' | 'timeout'

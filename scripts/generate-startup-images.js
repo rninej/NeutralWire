@@ -12,20 +12,30 @@ const __dirname = path.dirname(__filename)
  *
  * WHY: iOS ignores the manifest's background_color for the home-screen app
  * launch screen — without startup images it shows a plain WHITE screen for
- * a beat before the first paint. That white flash sat right before our dark
- * tri-color splash. These static PNGs are a FRAME of that exact splash
- * (dark #0a0a0a, blue/red corner glows, NeutralWire wordmark, converging
- * tri-color bias bar, LEFT · CENTER · RIGHT tagline), so iOS users get:
+ * a beat before the first paint. These static PNGs are a FRAME of the
+ * splash (corner glows, NeutralWire wordmark, converging tri-color bias
+ * bar, LEFT · CENTER · RIGHT tagline), so iOS users get:
  *   OS launch (this static frame) → CSS splash (same design, animates)
- *   → app — one continuous dark branded moment, zero white flash.
+ *   → app — one continuous branded moment, zero white flash.
+ *
+ * THEME-AWARE (v26): TWO sets are generated — dark (the classic #0a0a0a
+ * design) and light (white bg, dark wordmark, softer orbs). The <link>
+ * tags in layout.tsx qualify each set's media attribute with
+ * (prefers-color-scheme: dark|light), so the OS launch image follows the
+ * DEVICE colour scheme and hands off into the in-app splash, which is
+ * themed exactly to the user's chosen family+mode (see layout.tsx). The
+ * OS cannot read the in-app theme (localStorage) before the page loads,
+ * so system-scheme neutrals are the closest possible match; the themed
+ * in-app splash takes over from the webview's first frame.
  *
  * HOW iOS picks one: it matches <link rel="apple-touch-startup-image"
  * media="(device-width: Wpx) and (device-height: Hpx) and
- * (-webkit-device-pixel-ratio: D) and (orientation: …)"> against the device.
- * We generate one PNG per modern iPhone portrait size + iPad portrait AND
- * landscape sizes (iPhone launch is locked to portrait by the manifest's
- * orientation: portrait-primary; iPads can rotate). Rendered at physical
- * pixels (CSS size × dpr) so viewportFit=cover full-screen sizes are exact.
+ * (-webkit-device-pixel-ratio: D) and (orientation: …) and
+ * (prefers-color-scheme: …)"> against the device. We generate one PNG per
+ * modern iPhone portrait size + iPad portrait AND landscape sizes (iPhone
+ * launch is locked to portrait by the manifest's orientation:
+ * portrait-primary; iPads can rotate). Rendered at physical pixels (CSS
+ * size × dpr) so viewportFit=cover full-screen sizes are exact.
  *
  * Regenerate with:  node scripts/generate-startup-images.js
  * (or: bun scripts/generate-startup-images.js)
@@ -59,22 +69,48 @@ const IPADS = [
   [1024, 1366, 2], // Pro 12.9 / 13
 ]
 
-// ── Brand constants (match the animated splash's dark design exactly) ──
-const BG = '#0a0a0a'
-const WORD_COLOR = '#ececec'
-const TAG_COLOR = '#9a9a9a'
+// ── Launch-image palettes (each mirrors one side of the in-app splash) ──
+// DARK = the classic design (neutral dark tokens: bg #0a0a0a = oklch(.145 0 0),
+// wordmark #fafafa = oklch(.985 0 0), tag #a1a1a1 = oklch(.708 0 0)).
+// LIGHT = neutral light tokens (bg #fff, wordmark #0a0a0a = oklch(.145 0 0),
+// tag #737373 = oklch(.556 0 0)) with softer orb alphas — matches the
+// html.nw-splash-light palette in layout.tsx.
+const PALETTES = [
+  {
+    scheme: 'dark',
+    dir: '', // public/apple-launch/ (unchanged paths — dark stays put)
+    bg: '#0a0a0a',
+    word: '#fafafa',
+    tag: '#a1a1a1',
+    track: 'rgba(127,127,127,0.16)',
+    orbB: 'rgba(59,130,246,0.38)',
+    orbB0: 'rgba(59,130,246,0)',
+    orbR: 'rgba(239,68,68,0.34)',
+    orbR0: 'rgba(239,68,68,0)',
+  },
+  {
+    scheme: 'light',
+    dir: 'light/', // public/apple-launch/light/
+    bg: '#ffffff',
+    word: '#0a0a0a',
+    tag: '#737373',
+    track: 'rgba(127,127,127,0.24)',
+    orbB: 'rgba(59,130,246,0.26)',
+    orbB0: 'rgba(59,130,246,0)',
+    orbR: 'rgba(239,68,68,0.22)',
+    orbR0: 'rgba(239,68,68,0)',
+  },
+]
 const SEG_BLUE = '#3b82f6'
-const SEG_GREY = '#a1a1a1' // dark-mode grey segment from the animated splash
+const SEG_GREY = '#a1a1a1' // the bias bar's centre segment (both modes)
 const SEG_RED = '#ef4444'
-const ORB_BLUE = 'rgba(59,130,246,0.38)'
-const ORB_RED = 'rgba(239,68,68,0.34)'
 
 /**
- * Build the splash-frame SVG at PHYSICAL pixel size.
+ * Build the splash-frame SVG at PHYSICAL pixel size for a palette.
  * All CSS-pixel values from the animated splash are multiplied by dpr so the
  * static frame lines up 1:1 with what the CSS splash then animates.
  */
-function buildSvg(cssW, cssH, dpr) {
+function buildSvg(cssW, cssH, dpr, P) {
   const W = cssW * dpr
   const H = cssH * dpr
 
@@ -115,75 +151,74 @@ function buildSvg(cssW, cssH, dpr) {
 <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
   <defs>
     <radialGradient id="ob" gradientUnits="userSpaceOnUse" cx="${bx}" cy="${by}" r="${orbR}">
-      <stop offset="0" stop-color="${ORB_BLUE}"/>
-      <stop offset="1" stop-color="rgba(59,130,246,0)"/>
+      <stop offset="0" stop-color="${P.orbB}"/>
+      <stop offset="1" stop-color="${P.orbB0}"/>
     </radialGradient>
     <radialGradient id="or" gradientUnits="userSpaceOnUse" cx="${rx}" cy="${ry}" r="${orbR}">
-      <stop offset="0" stop-color="${ORB_RED}"/>
-      <stop offset="1" stop-color="rgba(239,68,68,0)"/>
+      <stop offset="0" stop-color="${P.orbR}"/>
+      <stop offset="1" stop-color="${P.orbR0}"/>
     </radialGradient>
     <clipPath id="barclip">
       <rect x="${barX}" y="${railY}" width="${barW}" height="${railH}" rx="${railH / 2}"/>
     </clipPath>
   </defs>
 
-  <rect width="${W}" height="${H}" fill="${BG}"/>
+  <rect width="${W}" height="${H}" fill="${P.bg}"/>
   <rect width="${W}" height="${H}" fill="url(#ob)"/>
   <rect width="${W}" height="${H}" fill="url(#or)"/>
 
-  <text x="${cx}" y="${wordY}" font-family="Arial, Helvetica, sans-serif" font-size="${wordSize}" font-weight="bold" fill="${WORD_COLOR}" text-anchor="middle">NeutralWire</text>
+  <text x="${cx}" y="${wordY}" font-family="Arial, Helvetica, sans-serif" font-size="${wordSize}" font-weight="bold" fill="${P.word}" text-anchor="middle">NeutralWire</text>
 
-  <rect x="${barX}" y="${railY}" width="${barW}" height="${railH}" rx="${railH / 2}" fill="rgba(127,127,127,0.16)"/>
+  <rect x="${barX}" y="${railY}" width="${barW}" height="${railH}" rx="${railH / 2}" fill="${P.track}"/>
   <g clip-path="url(#barclip)">
     <rect x="${barX}" y="${railY}" width="${segB + 2}" height="${railH}" fill="${SEG_BLUE}"/>
     <rect x="${barX + segB}" y="${railY}" width="${segG}" height="${railH}" fill="${SEG_GREY}"/>
     <rect x="${barX + segB + segG - 2}" y="${railY}" width="${barW - segB - segG + 2}" height="${railH}" fill="${SEG_RED}"/>
   </g>
 
-  <text x="${cx}" y="${tagY}" font-family="Arial, Helvetica, sans-serif" font-size="${tagSize}" font-weight="bold" fill="${TAG_COLOR}" text-anchor="middle" letter-spacing="${tagTrack}">LEFT · CENTER · RIGHT</text>
+  <text x="${cx}" y="${tagY}" font-family="Arial, Helvetica, sans-serif" font-size="${tagSize}" font-weight="bold" fill="${P.tag}" text-anchor="middle" letter-spacing="${tagTrack}">LEFT · CENTER · RIGHT</text>
 </svg>`
 }
 
 async function generate() {
-  const outDir = path.join(__dirname, '..', 'public', 'apple-launch')
-  fs.mkdirSync(outDir, { recursive: true })
+  const outRoot = path.join(__dirname, '..', 'public', 'apple-launch')
+  fs.mkdirSync(outRoot, { recursive: true })
 
-  const entries = [] // { file, cssW, cssH, dpr, orientation }
+  const entries = [] // { palette, file, cssW, cssH, dpr, orientation }
   let count = 0
 
-  for (const [w, h, dpr] of IPHONES) {
-    const file = `startup-${w * dpr}x${h * dpr}.png`
-    const svg = buildSvg(w, h, dpr)
-    await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toFile(path.join(outDir, file))
-    entries.push({ file, cssW: w, cssH: h, dpr, orientation: 'portrait' })
-    count++
+  for (const P of PALETTES) {
+    const outDir = path.join(outRoot, P.dir)
+    fs.mkdirSync(outDir, { recursive: true })
+
+    const devices = []
+    for (const [w, h, dpr] of IPHONES) devices.push([w, h, dpr, 'portrait'])
+    for (const [w, h, dpr] of IPADS) {
+      devices.push([w, h, dpr, 'portrait'])
+      devices.push([h, w, dpr, 'landscape']) // swapped
+    }
+
+    for (const [w, h, dpr, orientation] of devices) {
+      const file = `startup-${w * dpr}x${h * dpr}.png`
+      const svg = buildSvg(w, h, dpr, P)
+      await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toFile(path.join(outDir, file))
+      entries.push({ palette: P, file, cssW: w, cssH: h, dpr, orientation })
+      count++
+    }
   }
 
-  for (const [w, h, dpr] of IPADS) {
-    // Portrait
-    const pFile = `startup-${w * dpr}x${h * dpr}.png`
-    const pSvg = buildSvg(w, h, dpr)
-    await sharp(Buffer.from(pSvg)).png({ compressionLevel: 9 }).toFile(path.join(outDir, pFile))
-    entries.push({ file: pFile, cssW: w, cssH: h, dpr, orientation: 'portrait' })
-    count++
-    // Landscape (swapped)
-    const lFile = `startup-${h * dpr}x${w * dpr}.png`
-    const lSvg = buildSvg(h, w, dpr)
-    await sharp(Buffer.from(lSvg)).png({ compressionLevel: 9 }).toFile(path.join(outDir, lFile))
-    entries.push({ file: lFile, cssW: h, cssH: w, dpr, orientation: 'landscape' })
-    count++
-  }
-
-  // Emit the ready-to-paste <link> block for layout.tsx <head>.
+  // Emit the ready-to-paste <link> block for layout.tsx <head> — each
+  // device gets TWO links (dark + light), both qualified with
+  // prefers-color-scheme so exactly one matches per device scheme.
   const links = entries
     .map(
       (e) =>
-        `        <link rel="apple-touch-startup-image" href="/apple-launch/${e.file}" media="(device-width: ${e.cssW}px) and (device-height: ${e.cssH}px) and (-webkit-device-pixel-ratio: ${e.dpr}) and (orientation: ${e.orientation})" />`,
+        `        <link rel="apple-touch-startup-image" href="/apple-launch/${e.palette.dir}${e.file}" media="(device-width: ${e.cssW}px) and (device-height: ${e.cssH}px) and (-webkit-device-pixel-ratio: ${e.dpr}) and (orientation: ${e.orientation}) and (prefers-color-scheme: ${e.palette.scheme})" />`,
     )
     .join('\n')
 
-  fs.writeFileSync(path.join(outDir, '_links.txt'), links + '\n')
-  console.log(`Generated ${count} startup images → public/apple-launch/`)
+  fs.writeFileSync(path.join(outRoot, '_links.txt'), links + '\n')
+  console.log(`Generated ${count} startup images (dark + light sets) → public/apple-launch/`)
   console.log('Link tags written to public/apple-launch/_links.txt')
 }
 
