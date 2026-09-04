@@ -2276,3 +2276,33 @@ Stage Summary:
 - The PWA launch splash + loading animation now render in the user's EXACT theme (all 11 families × light/dark), resolved before first paint with zero flash; splash bg = app bg so the release cross-fade is seamless.
 - OS-level launch screens are now scheme-correct: Android via theme-matched manifest (static, no CPU), iOS via prefers-color-scheme-qualified startup images. iOS status-bar style left as "black" (changing it would shift app layout under the clock).
 - OS-level assets can't read localStorage (page not loaded yet), so they follow the system scheme as the closest match; the in-app themed splash takes over from the webview's first controlled frame.
+
+---
+
+## Session 14 — notification Like button, global rank boost, WATCH title fix, experimental Watch video feature
+
+Task ID: 14
+Agent: main (Super Z)
+Task: (1) Like button on push notifications that opens the article, auto-presses its like button, and pushes the article higher in the rankings for that user and everyone else a bit, removable in /debug. (2) Fix WATCH appearing in article titles. (3) Experimental video version for every article — a Watch button on the image's bottom-right that shows a video fetched from a news outlet, also inside articles, instantly killable in /debug.
+
+Work Log:
+- Workspace reset again — re-cloned (state = d6bfc80; splash-theme + CPU work confirmed shipped).
+- Recon: SW v23 already renders a [Not Interested] notification action; /api/notification/feedback already handles action 'like' (keyword stats); /api/engagement topicVote persists per-device votes; the Relevant feed ranks client-side via personalizationBoost; flags = Firebase featureFlags/* read SSR in page.tsx.
+- SW v24 (cache names bumped): push payload gains likeButton (default true); actions = [Like | Not Interested] when on. notificationclick handles action 'like': feedback POST (now carries topicId), click tracking, target URL gets &like=1, client focus/openWindow + postMessage now include autoLike: true. node --check validated.
+- /api/notification/feedback: like + topicId → topicBoost/<id> = {score: min(24, prev+6), updatedAt}, 7-day expiry on read.
+- /api/news: reads topicBoost (module memo 60s), boostTopics() = stable promotion by (index − boost) BEFORE offset/limit slicing, tags boostScore on boosted topics; zero cost when no boosts; both fresh + cached paths.
+- Client ranking: score += (t.boostScore || 0) + (liked-by-this-user ? +40 : 0) — outweighs the −15 seen-penalty so a notification-liked story ranks clearly higher for that user.
+- Auto-like flow: SW cold-start → /?topic=x&like=1 → openTopicFromUrl arms pendingAutoLikeRef (topic id), strips like=1 immediately (replaceState); warm app → SW message autoLike. handleOpenDetail passes autoLike into TopicDetail; FIXED a real race found in browser testing — fetchData's own ?topic= auto-open re-called handleOpenDetail WITHOUT autoLike and reset the marker mid-flight (timer cleared, vote never saved) → marker is now a STICKY per-topic-id (ref updated synchronously + state), second open of the same topic is a no-op, pending id for a different topic is discarded.
+- TopicDetail autoLike prop: 650ms-delayed auto-press (user sees the thumbs-up pop green), skips if a vote exists (idempotent), emerald confirmation banner "Liked — you'll see more stories like this, and it ranks a bit higher for everyone." for 3.2s. Verified e2e in the browser: vote='liked' in localStorage, button green, toast visible, URL stripped, no re-like without the param.
+- WATCH fix: makeConciseTitle leading-tag loop (max 3 passes) now strips WATCH + VIDEO (covers "WATCH:", "WATCH LIVE:", "Video:", dash/pipe separators) + trailing " - WATCH" / " | Video" fragments; genuine "Apple Watch"/"video game" titles untouched — 11/11 unit tests (scripts/test-title-cleaner.ts). Also caught a live "Video:" title in the real feed during testing, hence VIDEO added. CACHE_VERSION 6 → 7 so every feed rebuilds with cleaned titles.
+- Video feature: /api/video/[topicId] — flag-gated (videoWatch); resolves the source's own video first (new FeedArticle.videoUrl from RSS media:content/enclosure video types + YouTube-channel source links, extracted at ingest), else YouTube search (server scrape of results page for videoIds → oEmbed verify → ≥2 shared keywords or news-channel name); cached in Firebase videos/<id> 24h found / 6h miss. Verified live: Nepal tunnel story → "Two rescued from hydropower tunnel 9 days after Nepal floods | ABC NEWS" embed.
+- VideoPlayer overlay: portaled to body (escapes the article sheet's transform), youtube-nocookie iframe / native <video> with hotlink-failure fallback link, shimmer loading, friendly miss state; WatchPill (play icon + Watch label; icon-only on mini thumbnails) shares the bottom-right badge row with the NW mark on cards and the article hero. useVideoWatch context fed by page.tsx SSR read (5s memo, zero flash). 48 pills render in the live feed; click → overlay → embed verified in the browser.
+- Flags: /api/flags GET/POST handle notifLike + videoWatch (booleans, default ON, normalizeBooleanFlag); trigger-tz reads notifLike once per run → payload likeButton; /debug gains an "Experimental Features" card with two one-click Remove/Turn-on switches (Live/Removed badges).
+- Cleanup: test topicBoost + notification entries deleted from Firebase. bun run lint clean, tsc 0 errors.
+- Commit 3b34c5d pushed to main → Vercel deploy.
+
+Stage Summary:
+- Notification Like: full chain live (button → feedback + global +6-position boost for everyone → article opens with auto-pressed like + personal boosts). Platform note: notification action buttons render on Android/desktop Chrome only — iOS Safari never supported notification actions (taps still open the article).
+- WATCH/VIDEO prefixes are stripped on rebuild (cache v7) — feeds refresh on the next aggregate cycle.
+- Watch video: experimental, default ON, one-click kill in /debug (UI vanishes on next load AND /api/video refuses → zero CPU while off).
+- Deliverable state: 15 files, +1616/−52; all e2e-verified in a real browser against live Firebase.
