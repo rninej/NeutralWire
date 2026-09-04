@@ -904,14 +904,14 @@ export default function DebugPage() {
           </div>
         </Card>
 
-        {/* ── Experimental Features ──
-            The new stuff, each removable in one click if it doesn't earn
+        {/* ── Feature Toggles ──
+            The newer features, each removable in one click if it doesn't earn
             its place: the notification Like button and the video Watch
             button. Both default ON; flip a switch to remove the feature. */}
         <Card className="mb-6 p-4 md:p-6">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <FlaskConical className="h-5 w-5 text-muted-foreground" />
-            <h2 className="text-base font-bold">Experimental Features</h2>
+            <h2 className="text-base font-bold">Feature Toggles</h2>
             <span className="ml-auto text-xs text-muted-foreground">
               Don't like one? Turn it off here
             </span>

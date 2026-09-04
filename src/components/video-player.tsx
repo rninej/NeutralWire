@@ -24,6 +24,18 @@
  * carry ?retry=N so the server skips its cached miss and re-resolves; the
  * "disabled" outcome (feature flag off) is never retried.
  *
+ * FULLSCREEN: the video area is a "stage" element with its OWN fullscreen
+ * square (top-right corner). The embed's own fullscreen control is not
+ * always offered (narrow portrait YouTube players hide it; some iframes
+ * lack the permission), so we never depend on it — requestFullscreen()
+ * runs on OUR stage element, which works for iframes and native video
+ * alike and needs no iframe permission. iPhone Safari has no element
+ * fullscreen at all: a native <video> hands off to Apple's system player,
+ * anything else falls back to a pseudo-fullscreen (the dialog card itself
+ * goes edge-to-edge). While fullscreen, tapping the screen (top strip,
+ * letterbox areas, or any iframe interaction seen via window blur/focus)
+ * reveals an exit chip in the top-right corner that un-fullscreens.
+ *
  * Rendering:
  *   - kind 'youtube' → privacy-enhanced iframe embed (youtube-nocookie)
  *   - kind 'video'   → native <video controls> for direct mp4/etc URLs
@@ -40,7 +52,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Play, ExternalLink, Clapperboard, AlertCircle, Loader2 } from 'lucide-react'
+import { X, Play, ExternalLink, Clapperboard, AlertCircle, Loader2, Maximize2, Minimize2 } from 'lucide-react'
 
 export interface VideoPlayerProps {
   topicId: string
@@ -96,9 +108,25 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
   // (the parent's conditional render can't animate a portaled exit).
   const [closing, setClosing] = React.useState(false)
 
+  // ── Fullscreen ──
+  // The stage is the video-area element itself: fullscreening OUR element
+  // works for both iframes and native video, and needs no iframe
+  // permission (the embed's own fullscreen button is not always offered —
+  // narrow portrait players hide it — so we always surface our own).
+  const stageRef = React.useRef<HTMLDivElement | null>(null)
+  const videoRef = React.useRef<HTMLVideoElement | null>(null)
+  const fsExitTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [realFs, setRealFs] = React.useState(false)
+  const [pseudoFs, setPseudoFs] = React.useState(false)
+  const [fsExitVisible, setFsExitVisible] = React.useState(false)
+  const isFs = realFs || pseudoFs
+
   const handleClose = React.useCallback(() => {
     if (closing) return
     setClosing(true)
+    // Drop pseudo-fullscreen first so the exit animation runs from the
+    // normal card, not the edge-to-edge one.
+    setPseudoFs(false)
     // Pause a native <video> immediately on close (iframes die on unmount).
     try {
       const el = document.querySelector<HTMLVideoElement>('[data-nw-video]')
@@ -120,6 +148,127 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
       document.body.style.overflow = prev
     }
   }, [])
+
+  // ── Fullscreen machinery ───────────────────────────────────────────
+
+  /** Reveal the exit-fullscreen chip and restart its idle auto-hide. */
+  const showFsExit = React.useCallback(() => {
+    setFsExitVisible(true)
+    if (fsExitTimer.current) clearTimeout(fsExitTimer.current)
+    fsExitTimer.current = setTimeout(() => setFsExitVisible(false), 3000)
+  }, [])
+
+  const enterFs = React.useCallback(() => {
+    const stageEl = stageRef.current as
+      | (HTMLDivElement & { webkitRequestFullscreen?: () => void })
+      | null
+    if (!stageEl) return
+    const canElementFs =
+      typeof stageEl.requestFullscreen === 'function' ||
+      typeof stageEl.webkitRequestFullscreen === 'function'
+    if (canElementFs) {
+      try {
+        if (typeof stageEl.requestFullscreen === 'function') {
+          stageEl.requestFullscreen().catch(() => setPseudoFs(true))
+        } else {
+          stageEl.webkitRequestFullscreen?.()
+        }
+        return
+      } catch {
+        setPseudoFs(true)
+        return
+      }
+    }
+    // iPhone Safari: no element fullscreen — a native <video> can still
+    // hand off to Apple's system player; anything else gets the
+    // pseudo-fullscreen (edge-to-edge) card.
+    const v = videoRef.current as
+      | (HTMLVideoElement & { webkitEnterFullscreen?: () => void })
+      | null
+    if (v && typeof v.webkitEnterFullscreen === 'function') {
+      try {
+        v.webkitEnterFullscreen()
+        return
+      } catch {
+        // fall through to pseudo-fullscreen
+      }
+    }
+    setPseudoFs(true)
+  }, [])
+
+  const exitFs = React.useCallback(() => {
+    setPseudoFs(false)
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null
+      webkitExitFullscreen?: () => void
+    }
+    if (!document.fullscreenElement && !doc.webkitFullscreenElement) return
+    try {
+      if (document.exitFullscreen) document.exitFullscreen().catch(() => {})
+      else doc.webkitExitFullscreen?.()
+    } catch {
+      doc.webkitExitFullscreen?.()
+    }
+  }, [])
+
+  // Track real fullscreen (the user may also exit via system UI / ESC).
+  React.useEffect(() => {
+    const onChange = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element | null }
+      const active = Boolean(document.fullscreenElement || doc.webkitFullscreenElement)
+      setRealFs(active)
+      if (!active) setPseudoFs(false)
+    }
+    document.addEventListener('fullscreenchange', onChange)
+    document.addEventListener('webkitfullscreenchange', onChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange)
+      document.removeEventListener('webkitfullscreenchange', onChange)
+    }
+  }, [])
+
+  // While fullscreen: reveal the exit chip on any interaction we CAN
+  // observe — the top strip, the letterbox areas, and (for taps landing
+  // INSIDE the cross-origin iframe, which never bubble to us) the window
+  // blur/focus pair that fires as focus moves in and out of the embed.
+  React.useEffect(() => {
+    if (!isFs) {
+      setFsExitVisible(false)
+      return
+    }
+    showFsExit()
+    const onInteract = () => showFsExit()
+    document.addEventListener('click', onInteract, true)
+    document.addEventListener('touchstart', onInteract, true)
+    window.addEventListener('blur', onInteract)
+    window.addEventListener('focus', onInteract)
+    return () => {
+      document.removeEventListener('click', onInteract, true)
+      document.removeEventListener('touchstart', onInteract, true)
+      window.removeEventListener('blur', onInteract)
+      window.removeEventListener('focus', onInteract)
+    }
+  }, [isFs, showFsExit])
+
+  // Never leak the exit-chip timer.
+  React.useEffect(
+    () => () => {
+      if (fsExitTimer.current) clearTimeout(fsExitTimer.current)
+    },
+    [],
+  )
+
+  // ESC exits fullscreen first; a second ESC closes the player.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (realFs || pseudoFs) exitFs()
+        else handleClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [realFs, pseudoFs, exitFs, handleClose])
 
   // Fetch the resolved video for this story — with automatic retries.
   // A failed pass (fetch throw, ok:false with a non-disabled reason) re-runs
@@ -193,15 +342,6 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
     [],
   )
 
-  // ESC closes.
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [handleClose])
-
   if (!mounted || !portalEl) return null
 
   // Adaptive sizing: the CARD wraps the video box, so its width follows the
@@ -213,7 +353,9 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
 
   const overlay = (
     <motion.div
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      className={`fixed inset-0 z-[90] flex items-center justify-center ${
+        pseudoFs ? 'bg-black p-0' : 'bg-black/70 p-4 backdrop-blur-sm'
+      }`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -224,15 +366,21 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
       aria-label={`Video: ${storyTitle}`}
     >
       <motion.div
-        className="overflow-hidden rounded-2xl border bg-background shadow-2xl transition-[width] duration-300 ease-out"
-        style={{ width: cardWidth }}
+        className={`overflow-hidden bg-background shadow-2xl ${
+          pseudoFs
+            ? 'flex h-[100dvh] w-screen flex-col rounded-none border-0'
+            : 'rounded-2xl border transition-[width] duration-300 ease-out'
+        }`}
+        style={{ width: pseudoFs ? '100vw' : cardWidth }}
         initial={{ opacity: 0, scale: 0.92, y: 24 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 16 }}
         transition={{ duration: 0.28, ease: EASE_OUT }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
+        {/* Header (hidden while pseudo-fullscreen — the screen belongs to
+            the video alone) */}
+        {!pseudoFs && (
         <div className="flex items-start gap-3 border-b px-4 py-3">
           <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-500">
             <Clapperboard className="h-4 w-4" />
@@ -260,11 +408,20 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
             <X className="h-4 w-4" />
           </button>
         </div>
+        )}
 
-        {/* Player area — sized to the video's actual proportions */}
+        {/* Player area — the fullscreen STAGE. Normally sized to the
+            video's actual proportions; fills the screen while fullscreen
+            (real Fullscreen API top-layer, or the in-flow pseudo-fullscreen
+            card for iPhone Safari). */}
         <div
+          ref={stageRef}
           className="relative w-full bg-black"
-          style={{ aspectRatio: ratioCss, maxHeight: `${MAX_VIDEO_DVH}dvh` }}
+          style={
+            isFs
+              ? { aspectRatio: 'auto', maxHeight: 'none', width: '100%', height: '100%' }
+              : { aspectRatio: ratioCss, maxHeight: `${MAX_VIDEO_DVH}dvh` }
+          }
         >
           {loading ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
@@ -284,7 +441,7 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
           ) : video?.ok && video.kind === 'youtube' && video.videoId ? (
             <iframe
               key={video.videoId}
-              src={`https://www.youtube-nocookie.com/embed/${video.videoId}?autoplay=1&rel=0&modestbranding=1`}
+              src={`https://www.youtube-nocookie.com/embed/${video.videoId}?autoplay=1&rel=0&fs=1&modestbranding=1`}
               title={video.title || storyTitle}
               className="h-full w-full"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
@@ -294,6 +451,7 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
           ) : video?.ok && video.kind === 'video' && video.url ? (
             <video
               key={video.url}
+              ref={videoRef}
               src={video.url}
               data-nw-video=""
               className="h-full w-full"
@@ -339,9 +497,66 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
               )}
             </div>
           )}
+
+          {/* Tap strip (fullscreen only): tapping the top edge of the
+              screen reveals the exit chip. Taps INSIDE a cross-origin
+              iframe never reach us — the strip, the letterbox areas and
+              the window blur/focus pair cover the "tap the screen"
+              reveal. */}
+          {isFs && (
+            <div
+              className="absolute inset-x-0 top-0 z-[2] h-10"
+              onClick={(e) => {
+                e.stopPropagation()
+                showFsExit()
+              }}
+            />
+          )}
+
+          {/* Our OWN fullscreen square — always offered whenever a video
+              plays. Some embeds (narrow portrait players, iframes without
+              the permission) never surface their own fullscreen control,
+              so we never depend on it. */}
+          {!isFs && video?.ok && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                e.preventDefault()
+                enterFs()
+              }}
+              className="absolute right-2 top-2 z-[3] flex h-10 w-10 items-center justify-center rounded-xl bg-black/85 text-white shadow-lg backdrop-blur-[2px] transition-transform active:scale-95"
+              aria-label="Fullscreen"
+              title="Fullscreen"
+            >
+              <Maximize2 className="h-[18px] w-[18px]" />
+            </button>
+          )}
+
+          {/* Exit-fullscreen chip — reveals when the screen is tapped,
+              hides again after a few idle seconds. */}
+          {isFs && fsExitVisible && (
+            <motion.button
+              type="button"
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.18, ease: EASE_OUT }}
+              onClick={(e) => {
+                e.stopPropagation()
+                e.preventDefault()
+                exitFs()
+              }}
+              className="absolute right-3 top-3 z-[4] flex h-11 w-11 items-center justify-center rounded-xl bg-black/85 text-white shadow-lg backdrop-blur-[2px] transition-transform active:scale-95"
+              aria-label="Exit fullscreen"
+              title="Exit fullscreen"
+            >
+              <Minimize2 className="h-5 w-5" />
+            </motion.button>
+          )}
         </div>
 
-        {/* Footer */}
+        {/* Footer (hidden while pseudo-fullscreen) */}
+        {!pseudoFs && (
         <div className="flex items-center gap-2 px-4 py-2.5 text-[11px] text-muted-foreground">
           <Play className="h-3 w-3 shrink-0" />
           <span className="min-w-0 flex-1 truncate">
@@ -359,6 +574,7 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
             </a>
           )}
         </div>
+        )}
       </motion.div>
     </motion.div>
   )
@@ -370,12 +586,13 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
 }
 
 /**
- * The Watch button — a clean black square embedded in the image's
- * BOTTOM-LEFT corner: a large drawn play triangle on top, small "watch"
- * text beneath it. Renders ONLY inside the article view (topic-detail hero
- * image) — never on home-screen cards (the NW brand mark owns the
- * bottom-right corner). pointer-events-auto + stopPropagation so tapping
- * it opens the video without hitting the image/link underneath.
+ * The Watch button — a solid black square FLUSH in the image's bottom-LEFT
+ * corner (touching both the left and bottom edges; the image's own rounded
+ * corner clips it), a single large drawn play triangle centered inside —
+ * no text. Renders ONLY inside the article view (topic-detail hero image)
+ * — never on home-screen cards (the NW brand mark owns the bottom-right
+ * corner). pointer-events-auto + stopPropagation so tapping it opens the
+ * video without hitting the image/link underneath.
  */
 export function WatchPill({
   onClick,
@@ -390,24 +607,21 @@ export function WatchPill({
         e.preventDefault()
         onClick()
       }}
-      whileTap={{ scale: 0.92 }}
+      whileTap={{ scale: 0.9 }}
       transition={{ duration: 0.15, ease: 'easeOut' }}
-      className="pointer-events-auto absolute bottom-2 left-2 z-[2] flex w-[54px] flex-col items-center justify-center gap-[3px] rounded-xl bg-black/90 pb-[7px] pt-[10px] text-white shadow-lg backdrop-blur-[2px] transition-colors hover:bg-black active:scale-95"
+      className="pointer-events-auto absolute bottom-0 left-0 z-[2] flex h-[54px] w-[54px] items-center justify-center bg-black text-white"
       aria-label="Watch a video about this story"
       title="Watch — video coverage of this story"
     >
-      {/* Large drawn triangle (play) */}
+      {/* Large drawn play triangle */}
       <svg
         viewBox="0 0 24 24"
-        className="h-[19px] w-[19px] shrink-0"
+        className="h-[26px] w-[26px] shrink-0"
         fill="currentColor"
         aria-hidden="true"
       >
         <path d="M8.6 4.9v14.2c0 .91.98 1.46 1.76 1L21.25 13a1.17 1.17 0 0 0 0-2L10.36 3.9c-.78-.46-1.76.09-1.76 1z" />
       </svg>
-      <span className="text-[9px] font-semibold uppercase leading-none tracking-[0.1em]">
-        Watch
-      </span>
     </motion.button>
   )
 }
