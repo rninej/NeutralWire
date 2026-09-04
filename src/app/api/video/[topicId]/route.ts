@@ -49,9 +49,19 @@ export const maxDuration = 15
  * true } and the UI hides the pill).
  *
  * Response:
- *   { ok: true, kind: 'youtube', videoId, title, author, sourceUrl }
+ *   { ok: true, kind: 'youtube', videoId, title, author, sourceUrl, aspect }
  *   { ok: true, kind: 'video', url, title, author }
  *   { ok: false, reason: 'no-video' | 'disabled' | 'not-found' }
+ *
+ * `aspect` (w/h, e.g. 0.5625 for 9:16) is measured from the video's
+ * original-aspect thumbnail so the popup can match the video's real
+ * proportions (portrait Shorts no longer letterbox inside a landscape
+ * box).
+ *
+ * ?retry=1/2 — sent by the player's automatic retry: a CACHED MISS is
+ * skipped so the endpoint re-resolves instead of echoing "no video" back
+ * (a resolution that hiccuped once often works on a second pass). Cached
+ * FOUND videos are still returned instantly.
  */
 
 // Whole-resolution budget: slow YouTube fetches can never eat the 15s
@@ -91,6 +101,8 @@ interface VideoResult {
   title?: string
   author?: string
   sourceUrl?: string
+  /** w/h of the actual video — sizes the Watch popup (0.5625 = 9:16). */
+  aspect?: number
   reason?: string
 }
 
@@ -110,7 +122,7 @@ interface TopicForVideo {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ topicId: string }> },
 ) {
   const { topicId } = await ctx.params
@@ -120,6 +132,12 @@ export async function GET(
       { headers: { 'Cache-Control': 'no-store' } },
     )
   }
+
+  // The player's automatic retry — skip cached misses so the resolution
+  // actually re-runs (a transient YouTube/aggregate hiccup can succeed on
+  // the second pass). Cached FOUND videos still short-circuit.
+  const isRetry = req.nextUrl.searchParams.get('retry') === '1' ||
+    req.nextUrl.searchParams.get('retry') === '2'
 
   // 1. Feature flag — /debug can kill the feature instantly (no resolving
   //    CPU is spent while it's off; the UI also hides the pill).
@@ -132,14 +150,18 @@ export async function GET(
   }
 
   // 2. Cache (per-topic, TTL by outcome). videos2/ — see header comment.
+  //    A retry run skips CACHED MISSES only — re-resolving in case the
+  //    first pass failed on a transient fetch.
   try {
     const cached = await firebaseRead<CachedVideo>(`videos2/${topicId}`)
     if (cached?.result && typeof cached.ts === 'number') {
       const ttl = cached.result.ok ? FOUND_TTL_MS : MISS_TTL_MS
       if (Date.now() - cached.ts < ttl) {
-        return NextResponse.json(cached.result, {
-          headers: { 'Cache-Control': 'no-store' },
-        })
+        if (cached.result.ok || !isRetry) {
+          return NextResponse.json(cached.result, {
+            headers: { 'Cache-Control': 'no-store' },
+          })
+        }
       }
     }
   } catch {
@@ -219,6 +241,7 @@ export async function GET(
         title: searchHit.title,
         author: searchHit.author,
         sourceUrl: `https://www.youtube.com/watch?v=${searchHit.videoId}`,
+        aspect: searchHit.aspect ?? undefined,
       }
       void cacheResult(topicId, found)
       return NextResponse.json(found, {

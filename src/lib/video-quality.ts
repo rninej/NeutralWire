@@ -174,6 +174,100 @@ export interface QualifiedVideo {
   videoId: string
   title: string
   author: string
+  /** Width/height of the actual video (0.5625 for 9:16, 1.778 for 16:9).
+   *  Measured from the original-aspect-ratio thumbnail (oar2.jpg) so the
+   *  Watch popup can size itself to the video's real proportions —
+   *  a portrait Short gets a portrait player, not a letterboxed sliver.
+   *  null when the measurement failed (client falls back to 16:9). */
+  aspect?: number | null
+}
+
+// ── Aspect ratio (for the adaptive popup) ──
+
+/**
+ * Parse a JPEG's dimensions from its leading bytes (SOF0/SOF2 markers —
+ * height at marker+5..6, width at marker+7..8, big-endian). Works on a
+ * partial image: the SOF always precedes the scan data, so the first
+ * 16KB are enough for every YouTube thumbnail.
+ */
+export function jpegDimensions(buf: Uint8Array): { width: number; height: number } | null {
+  if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null
+  let i = 2
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) {
+      i++
+      continue
+    }
+    const marker = buf[i + 1]
+    // Standalone markers (no length payload).
+    if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) {
+      i += 2
+      continue
+    }
+    if (marker === 0xda) return null // scan data — no SOF in the fetched prefix
+    const len = (buf[i + 2] << 8) | buf[i + 3]
+    // SOF0..SOF15, minus DHT (C4) / JPG (C8) / DAC (CC).
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      const height = (buf[i + 5] << 8) | buf[i + 6]
+      const width = (buf[i + 7] << 8) | buf[i + 8]
+      if (height > 0 && width > 0) return { width, height }
+    }
+    i += 2 + len
+  }
+  return null
+}
+
+/**
+ * Measure a YouTube video's real aspect ratio from its ORIGINAL-ASPECT
+ * thumbnail. Standard thumbs (hqdefault/mqdefault/maxresdefault) are
+ * always padded to fixed ratios, but `oar2.jpg` / `oardefault.jpg` keep
+ * the video's true proportions — a vertical Short returns a portrait
+ * image (e.g. 720x1280), a landscape video a wide one (1920x1080).
+ * Range-fetched (first 16KB) and JPEG-header-parsed — cheap enough to
+ * run once per RESOLVED video (never per candidate). Returns null when
+ * both variants fail (client falls back to 16:9).
+ */
+export async function fetchYouTubeAspectRatio(
+  videoId: string,
+  timeoutMs = 4000,
+): Promise<number | null> {
+  for (const thumb of ['oar2', 'oardefault'] as const) {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      try {
+        const res = await fetch(`https://i.ytimg.com/vi/${videoId}/${thumb}.jpg`, {
+          signal: controller.signal,
+          cache: 'no-store',
+          // Only the header bytes matter — the SOF marker lives early.
+          headers: { ...BROWSER_HEADERS, Range: 'bytes=0-16383' },
+        })
+        if (!res.ok && res.status !== 206) continue
+        const buf = new Uint8Array(await res.arrayBuffer())
+        const dims = jpegDimensions(buf)
+        if (!dims) continue
+        const ratio = dims.width / dims.height
+        // Sanity window: 9:16 (0.5625) … 21:9 (2.33) covers everything
+        // YouTube actually serves; anything outside is a parsing artifact.
+        if (ratio >= 0.4 && ratio <= 2.6) return Math.round(ratio * 10000) / 10000
+      } finally {
+        clearTimeout(timer)
+      }
+    } catch {
+      // try the next variant
+    }
+  }
+  return null
+}
+
+/** Attach the measured aspect ratio to a winning video (deadline-aware). */
+async function withAspect(
+  hit: QualifiedVideo,
+  deadline: number,
+): Promise<QualifiedVideo> {
+  if (Date.now() > deadline) return hit
+  const aspect = await fetchYouTubeAspectRatio(hit.videoId)
+  return aspect === null ? hit : { ...hit, aspect }
 }
 
 /**
@@ -477,7 +571,7 @@ export async function searchYouTubeForStory(
         { channelUrlHint: c.channelUrl, durationHint: c.durationSec },
         deadline,
       )
-      if (hit) return hit
+      if (hit) return withAspect(hit, deadline)
     } else if (!fallback && looksLikeNews) {
       fallback = c
     }
@@ -490,7 +584,7 @@ export async function searchYouTubeForStory(
       { channelUrlHint: fallback.channelUrl, durationHint: fallback.durationSec },
       deadline,
     )
-    if (hit) return hit
+    if (hit) return withAspect(hit, deadline)
   }
   return null
 }

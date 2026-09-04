@@ -959,7 +959,6 @@
   background: rgb(255 255 255 / 0.6);
   backdrop-filter: blur(30px) saturate(180%);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
-  border: 1px solid rgb(255 255 255 / 0.12);
 }
 .dark .glass-liquid,
 .midnight .glass-liquid,
@@ -974,7 +973,6 @@
   background: rgb(22 22 26 / 0.55);
   backdrop-filter: blur(30px) saturate(150%);
   -webkit-backdrop-filter: blur(30px) saturate(150%);
-  border: 1px solid rgb(255 255 255 / 0.08);
 }
 .midnight .glass-liquid {
   background: rgb(18 22 38 / 0.55);
@@ -987,6 +985,8 @@
 .glass {
   /* Default (no platform class) — keep element's existing backdrop styles. */
 }
+/* Border removed here too — see the .platform-apple .glass note above:
+   the hairline showed as a light line at the top edge of sticky bars. */
 .platform-android .glass {
   background: rgb(255 255 255 / 0.75);
   backdrop-filter: blur(20px) saturate(120%);
@@ -1003,11 +1003,15 @@
 .platform-android .midnight .glass {
   background: rgb(14 18 32 / 0.65);
 }
+/* NO border on .glass bars: the hairline (rgb(255 255 255 / 0.12)) painted
+   a 1px light line along the TOP edge of the full-width sticky header —
+   invisible on white, a "weird white line" on dark mobile. Sticky bars
+   already carry their own border-b; floating dialogs that use .glass keep
+   their own border classes. */
 .platform-apple .glass {
   background: rgb(255 255 255 / 0.6);
   backdrop-filter: blur(30px) saturate(180%);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
-  border: 1px solid rgb(255 255 255 / 0.12);
   box-shadow: 0 8px 32px -8px rgb(0 0 0 / 0.08);
 }
 :is(.dark, .midnight, .ocean, .forest, .sunset, .lavender, .rose, .mono, .cyber, .gradient) .platform-apple .glass,
@@ -1015,7 +1019,6 @@
   background: rgb(22 22 26 / 0.55);
   backdrop-filter: blur(30px) saturate(150%);
   -webkit-backdrop-filter: blur(30px) saturate(150%);
-  border: 1px solid rgb(255 255 255 / 0.08);
   box-shadow: 0 8px 32px -8px rgb(0 0 0 / 0.3);
 }
 .midnight .platform-apple .glass,
