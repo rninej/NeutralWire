@@ -2345,3 +2345,22 @@ Work Log:
 Stage Summary:
 - All 5 requested fixes delivered and verified live: no white line in mobile dark mode; popup adapts to video proportions (portrait = portrait player); failed fetches auto-retry (client ×2 + server miss-cache bypass); clean black square Watch button (triangle + WATCH, bottom-left); "experimental" wording gone from user-facing UI.
 - New capability worth knowing: YouTube aspect detection via oar2.jpg works for most videos incl. all vertical ones tested; ~404 for some landscape (falls back to 16:9).
+
+---
+Task ID: session16
+Agent: main
+Task: video fullscreen reliability + watch button polish (user report: fullscreen option sometimes missing; watch button not flush to corner; remove "watch" text; tap-to-reveal exit-fullscreen overlay)
+
+Work Log:
+- video-player.tsx: added a stage-level fullscreen system — the video area is now a "stage" element with its OWN fullscreen square (top-right, black chip, Maximize2). requestFullscreen() runs on OUR element, so it works for both YouTube iframes and native <video> with no iframe permission needed (embeds' own fullscreen buttons are unreliable — narrow portrait players hide them). Added fs=1 to the YT embed URL and kept allowFullScreen.
+- iPhone Safari (no element fullscreen): native <video> hands off to webkitEnterFullscreen (Apple system player); anything else falls back to pseudo-fullscreen — the dialog card itself goes edge-to-edge (w-screen h-[100dvh], header/footer hidden, black overlay, p-0), kept in-flow to dodge fixed/containing-block pitfalls.
+- While fullscreen (real or pseudo): tapping the screen reveals an exit chip (top-right corner, Minimize2). Reveal signals: top tap strip (h-10 over the iframe top edge), letterbox/black-area taps (document click/touchstart capture), and window blur/focus (fires as focus moves into/out of the cross-origin iframe). Chip auto-hides after 3s idle; pressing it un-fullscreens. ESC exits fullscreen first, second ESC closes the player. fullscreenchange (webkit too) syncs state so system-UI exits also clean up.
+- WatchPill: now a solid black 54x54 square FLUSH in the hero image's bottom-left corner (bottom-0 left-0, no rounding — the image's rounded corner clips it), a single large 26px play triangle centered, "watch" text removed.
+- debug/page.tsx: renamed "Experimental Features" section heading to "Feature Toggles" (last user-visible "experimental" wording).
+- Verified: bunx tsc --noEmit exit 0, eslint clean, dev server 200 on / and /debug.
+- Committed c7578e9 and pushed to main.
+
+Stage Summary:
+- Fullscreen is now always offered via our own control, independent of the embed's button; exit is discoverable via tap-to-reveal corner chip.
+- Watch button is a clean textless black square fully touching the image's bottom-left corner.
+- Remaining known backlog: notification like-button polish, bias bar/banner image work, Active CPU audit, article swipe-down regression, loading animation restore, privacy policy country+city, email swap to moneyisbroken@gmail.com.
