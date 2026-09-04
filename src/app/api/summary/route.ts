@@ -53,6 +53,23 @@ interface StoredSummary {
   sourceCount: number
 }
 
+/**
+ * Edge-cache a FOUND summary response (Fluid CPU).
+ *
+ * A stored summary is immutable content keyed by topicId — every visitor
+ * asking for the same topic gets the same bytes. The 5-min s-maxage +
+ * stale-while-revalidate means repeat opens (back button, second device,
+ * cold service worker) are served from the Vercel CDN without running
+ * the function or reading Firebase. The SW already caches this client-
+ * side; this covers the cross-device / cold-SW case. 404s are never
+ * cached (default) so a topic that gets summarized later is found on
+ * the next request — behaviour unchanged.
+ */
+function withEdgeCache(res: NextResponse): NextResponse {
+  res.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600')
+  return res
+}
+
 /** True when a stored summary is the EXTRACTIVE (template) fallback that
  *  the old code persisted when every AI provider failed. These read like
  *  "This story is being covered by N sources across the political spectrum,
@@ -111,12 +128,14 @@ export async function GET(req: NextRequest) {
   // 1. Check in-process cache (instant).
   const procCached = SUMMARY_CACHE.get(topicId)
   if (procCached && Date.now() - procCached.ts < SUMMARY_TTL_MS) {
-    return NextResponse.json({
-      topicId,
-      summary: procCached.summary,
-      cached: true,
-      source: 'memory',
-    })
+    return withEdgeCache(
+      NextResponse.json({
+        topicId,
+        summary: procCached.summary,
+        cached: true,
+        source: 'memory',
+      }),
+    )
   }
 
   // 2. Check Firebase. Template (extractive) summaries are treated as
@@ -124,12 +143,14 @@ export async function GET(req: NextRequest) {
   const fbCached = await firebaseRead<StoredSummary>(`${FIREBASE_ROOT}/${topicId}`)
   if (fbCached?.summary && !isTemplateSummary(fbCached.summary)) {
     SUMMARY_CACHE.set(topicId, { ts: Date.now(), summary: fbCached.summary })
-    return NextResponse.json({
-      topicId,
-      summary: fbCached.summary,
-      cached: true,
-      source: 'firebase',
-    })
+    return withEdgeCache(
+      NextResponse.json({
+        topicId,
+        summary: fbCached.summary,
+        cached: true,
+        source: 'firebase',
+      }),
+    )
   }
 
   // Not found — client should POST to generate.

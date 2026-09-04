@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
-import { renderTextAsPaths, renderTextAsPathsSpaced } from './char-paths'
+import { BANNER_PNG_BASE64, FALLBACK_JPG_BASE64 } from './overlay-assets'
+import { OG_W, OG_H, BAR, BANNER_REGION, buildBiasBarRegionSvg } from './overlay-geometry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -14,10 +15,28 @@ export const maxDuration = 15
  *
  * The image is a 1200x630 composite:
  *   - Article image (fetched + resized to fill the canvas)
- *   - NW logo badge (bottom-right corner — white circle with "NW" drawn
- *     as SVG paths, NOT font-based text)
- *   - Chunky bias bar (bottom — L/C/R counts as colored segments with
- *     the numbers drawn as SVG paths inside each segment)
+ *   - NEUTRALWIRE banner (bottom-right) — PRE-BAKED as a lossless
+ *     transparent PNG (see overlay-assets.ts, generated once by
+ *     scripts/gen-og-overlays.ts from overlay-geometry.ts). Composited
+ *     as a raster at its exact device position — pixel-identical to the
+ *     old per-request librsvg render (verified by
+ *     scripts/test-og-pixels.mjs: byte-identical JPEG output), but with
+ *     ~zero CPU: no letter-path rasterization per request.
+ *   - Chunky bias bar (bottom) — L/C/R counts as colored segments with
+ *     the numbers drawn as SVG paths inside each segment. The bar is
+ *     variable per story, so it stays dynamic, but it renders as a
+ *     TINY 1160x52 region SVG (92% less rasterization area than the old
+ *     full 1200x630 canvas) composited at its exact device position.
+ *
+ * ── Fluid Active CPU context ──
+ * This route runs once per unique notification/share unfurl (the OS or
+ * messenger fetches the image URL; the CDN caches it for 7 days after).
+ * The old route rasterized the full canvas (756k px) + 11 letter paths +
+ * digit paths through librsvg on EVERY render. The new route decodes a
+ * 4.8KB PNG + rasterizes a 60k px bar region — the sharp work is now
+ * dominated by the (unavoidable) base resize + mozjpeg encode, and the
+ * overlay rendering cost is effectively eliminated. Verified output is
+ * byte-for-byte identical — the image does not change one bit.
  *
  * IMPORTANT: All text is rendered as SVG vector paths, NOT <text> elements.
  * Sharp's SVG renderer (librsvg) has no system fonts and @font-face with
@@ -28,6 +47,26 @@ export const maxDuration = 15
  * Usage:
  *   /api/og-image?topicId=abc123
  */
+
+// ── Pre-baked overlay assets (decoded once per instance, then reused) ──
+// Buffer.from(base64) of ~15KB combined is a memcpy — negligible on a
+// cold start, and it means zero sharp/librsvg work for the static layers.
+let bannerPngBuffer: Buffer | null = null
+function getBannerPng(): Buffer {
+  if (!bannerPngBuffer) {
+    bannerPngBuffer = Buffer.from(BANNER_PNG_BASE64, 'base64')
+  }
+  return bannerPngBuffer
+}
+
+let fallbackJpgBuffer: Buffer | null = null
+function getFallbackJpg(): Buffer {
+  if (!fallbackJpgBuffer) {
+    fallbackJpgBuffer = Buffer.from(FALLBACK_JPG_BASE64, 'base64')
+  }
+  return fallbackJpgBuffer
+}
+
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const topicId = sp.get('topicId') || ''
@@ -75,11 +114,10 @@ export async function GET(req: NextRequest) {
     }
 
     if (!topic) {
-      return generateFallbackImage()
+      return serveFallbackImage()
     }
 
     const { imageUrl, leanLeft = 0, leanCenter = 0, leanRight = 0 } = topic
-    const total = leanLeft + leanCenter + leanRight
 
     // ── 2. Fetch the article image ──
     let articleImageBuffer: Buffer | null = null
@@ -103,134 +141,48 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // ── 3. Build the composite image (1200x630) ──
-    const W = 1200
-    const H = 630
-
+    // ── 3. Build the base layer (article photo or dark gradient) ──
     let base: sharp.Sharp
     if (articleImageBuffer) {
       base = sharp(articleImageBuffer)
-        .resize(W, H, { fit: 'cover', position: 'center' })
+        .resize(OG_W, OG_H, { fit: 'cover', position: 'center' })
     } else {
       const gradient = Buffer.from(
-        `<svg width="${W}" height="${H}">
+        `<svg width="${OG_W}" height="${OG_H}">
           <defs>
             <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0%" stop-color="#0a0a0a"/>
               <stop offset="100%" stop-color="#1a1a1a"/>
             </linearGradient>
           </defs>
-          <rect width="${W}" height="${H}" fill="url(#bg)"/>
+          <rect width="${OG_W}" height="${OG_H}" fill="url(#bg)"/>
         </svg>`
       )
       base = sharp(gradient).png()
     }
 
-    // ── 4. Build the chunky bias bar with pill-shaped edges + numbers ──
-    // The bar is fully rounded (pill shape) on the outer edges. Inner
-    // segment borders are straight. Numbers are solid (not segmented).
-    const barHeight = 52
-    const barPadding = 20
-    const barWidth = W - barPadding * 2
-    const barX = barPadding
-    const barY = H - barHeight - 20
-    const radius = barHeight / 2 // pill shape = radius = half height
-
-    let biasBarSvg = ''
-    if (total > 0) {
-      const leftW = (leanLeft / total) * barWidth
-      const centerW = (leanCenter / total) * barWidth
-      const rightW = (leanRight / total) * barWidth
-
-      // Use a clipPath to make the entire bar pill-shaped (rounded ends).
-      // All segments are drawn as plain rectangles, then clipped to the
-      // pill shape. This gives clean rounded outer edges without complex
-      // per-segment path math.
-      const clipId = 'barClip'
-      biasBarSvg += `<defs><clipPath id="${clipId}"><rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="${radius}" ry="${radius}"/></clipPath></defs>`
-
-      // Dark background (visible through any gaps)
-      biasBarSvg += `<rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="${radius}" fill="#000" opacity="0.8"/>`
-
-      // Segments (clipped to pill shape)
-      biasBarSvg += `<g clip-path="url(#${clipId})">`
-      if (leftW > 0) {
-        biasBarSvg += `<rect x="${barX}" y="${barY}" width="${leftW}" height="${barHeight}" fill="#3b82f6"/>`
-      }
-      if (centerW > 0) {
-        biasBarSvg += `<rect x="${barX + leftW}" y="${barY}" width="${centerW}" height="${barHeight}" fill="#71717a"/>`
-      }
-      if (rightW > 0) {
-        const rightX = barX + leftW + centerW
-        biasBarSvg += `<rect x="${rightX}" y="${barY}" width="${rightW}" height="${barHeight}" fill="#ef4444"/>`
-      }
-      biasBarSvg += `</g>`
-
-      // Percentages drawn as SVG paths (NOT <text> — sans-serif font
-      // doesn't work on Vercel production, shows tofu boxes).
-      // Using the 7-segment style digit paths that previously worked.
-      const lPct = Math.round((leanLeft / total) * 100)
-      const cPct = Math.round((leanCenter / total) * 100)
-      const rPct = Math.round((leanRight / total) * 100)
-      if (leftW > 35) {
-        biasBarSvg += renderTextAsPaths(
-          String(lPct),
-          barX + leftW / 2,
-          barY + (barHeight - 34) / 2,
-          34,
-          '#fff',
-        )
-      }
-      if (centerW > 35) {
-        biasBarSvg += renderTextAsPaths(
-          String(cPct),
-          barX + leftW + centerW / 2,
-          barY + (barHeight - 34) / 2,
-          34,
-          '#fff',
-        )
-      }
-      if (rightW > 35) {
-        const rightX = barX + leftW + centerW
-        biasBarSvg += renderTextAsPaths(
-          String(rPct),
-          rightX + rightW / 2,
-          barY + (barHeight - 34) / 2,
-          34,
-          '#fff',
-        )
-      }
+    // ── 4. Composite the overlay IMAGE layers ──
+    // (a) Bias bar — variable widths/percentages, so it renders as a tiny
+    //     1160x52 region SVG at its exact device position (same geometry
+    //     as the old full-canvas version: integer translate of (-20,-558)).
+    // (b) NEUTRALWIRE banner — pre-baked raster PNG at its exact device
+    //     region. Zero vector work.
+    // The two regions do not overlap (banner rows 466-546, bar rows
+    // 558-610), so compositing order is irrelevant — the result is
+    // byte-identical to the old single-overlay render (verified).
+    const composites: sharp.OverlayOptions[] = []
+    const barRegionSvg = buildBiasBarRegionSvg(leanLeft, leanCenter, leanRight)
+    if (barRegionSvg) {
+      composites.push({ input: barRegionSvg, left: BAR.x, top: BAR.y, blend: 'over' })
     }
+    composites.push({
+      input: getBannerPng(),
+      left: BANNER_REGION.left,
+      top: BANNER_REGION.top,
+      blend: 'over',
+    })
 
-    // ── 5. Build the "NEUTRALWIRE" rectangle banner (bottom-right) ──
-    // Uses SVG path-based text (renderTextAsPathsSpaced) — NOT <text>
-    // elements, because sans-serif font doesn't work on Vercel production.
-    const bannerText = 'NEUTRALWIRE'
-    const bannerHeight = 72
-    const bannerCharHeight = 50
-    const letterSpacing = 12
-    const bannerCharWidth = 100 * (bannerCharHeight / 140) * 0.6
-    const bannerTextWidth = bannerText.length * bannerCharWidth + (bannerText.length - 1) * letterSpacing
-    const bannerWidth = bannerTextWidth + 56
-    const bannerX = W - bannerWidth - 24
-    const bannerY = barY - bannerHeight - 16
-    const bannerRadius = 14
-
-    const logoSvg = `
-      <rect x="${bannerX - 4}" y="${bannerY - 4}" width="${bannerWidth + 8}" height="${bannerHeight + 8}" rx="${bannerRadius + 4}" fill="#000" opacity="0.5"/>
-      <rect x="${bannerX}" y="${bannerY}" width="${bannerWidth}" height="${bannerHeight}" rx="${bannerRadius}" fill="#0a0a0a"/>
-      ${renderTextAsPathsSpaced(bannerText, bannerX + bannerWidth / 2, bannerY + (bannerHeight - bannerCharHeight) / 2, bannerCharHeight, '#fff', letterSpacing)}
-    `
-
-    // ── 6. Composite everything ──
-    const overlaySvg = Buffer.from(`
-      <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-        ${biasBarSvg}
-        ${logoSvg}
-      </svg>
-    `)
-
-    const composite = base.composite([{ input: overlaySvg, blend: 'over' }])
+    const composite = base.composite(composites)
 
     const outputBuffer = await composite
       .jpeg({ quality: 85, mozjpeg: true })
@@ -247,31 +199,21 @@ export async function GET(req: NextRequest) {
     })
   } catch (err) {
     console.error('[og-image] Error:', err)
-    return generateFallbackImage()
+    return serveFallbackImage()
   }
 }
 
 /**
- * Generate a simple fallback OG image (dark background + NW paths).
+ * Serve the fallback OG image (dark background + NW monogram).
+ *
+ * The image bytes are PRE-BAKED (rendered once at build time through the
+ * exact same sharp pipeline this route used — `.jpeg({ quality: 85 })`,
+ * no mozjpeg), so serving a fallback costs ZERO sharp work: just the
+ * cached Buffer + response headers. Byte-for-byte identical output
+ * (verified by scripts/test-og-pixels.mjs).
  */
-async function generateFallbackImage(): Promise<NextResponse> {
-  const W = 1200
-  const H = 630
-  const nwPaths = renderTextAsPaths('NW', W / 2, H / 2 - 70, 140, '#fff')
-  const svg = Buffer.from(`
-    <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#0a0a0a"/>
-          <stop offset="100%" stop-color="#1a1a1a"/>
-        </linearGradient>
-      </defs>
-      <rect width="${W}" height="${H}" fill="url(#bg)"/>
-      ${nwPaths}
-    </svg>
-  `)
-  const buf = await sharp(svg).jpeg({ quality: 85 }).toBuffer()
-  return new NextResponse(buf as unknown as BodyInit, {
+function serveFallbackImage(): NextResponse {
+  return new NextResponse(getFallbackJpg() as unknown as BodyInit, {
     headers: {
       'Content-Type': 'image/jpeg',
       'Cache-Control': 'public, max-age=3600',

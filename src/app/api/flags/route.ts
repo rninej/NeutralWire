@@ -113,13 +113,28 @@ export async function GET() {
     })(),
   ])
 
+  // ── CDN cache (Fluid CPU) ──
+  // The memo above already dedupes Firebase reads per warm instance;
+  // this header lets the Vercel edge cache serve the (rarely-changing)
+  // flag payload for 60s WITHOUT invoking the function at all, and serve
+  // it stale for up to 2 min while one background revalidation runs.
+  // The value the user actually SEES still comes from the page's SSR
+  // (page.tsx reads Firebase directly, 5s memo) — so a flag flip from
+  // /debug is live on the next page load exactly as before; only this
+  // mount-time safety-net fetch can lag ≤60s, which it already could
+  // (the old 10s per-instance memo). The POST path is never cached —
+  // a flip still propagates to every warm instance's memo instantly.
   return NextResponse.json(
     {
       subtopicNav: navResult.status === 'fulfilled' ? navResult.value : 'cards',
       popupSystem:
         popupResult.status === 'fulfilled' ? popupResult.value : DEFAULT_POPUP_MODE,
     },
-    { headers: { 'Cache-Control': 'no-store' } },
+    {
+      headers: {
+        'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120',
+      },
+    },
   )
 }
 

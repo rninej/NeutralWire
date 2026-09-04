@@ -45,6 +45,7 @@ import { detectCountryClient, detectCountryClientFresh, DEFAULT_COUNTRY } from '
 import { getDeviceId } from '@/lib/referral'
 import { trackPageView } from '@/lib/analytics-tracker'
 import { reportInstallMetric, reportActiveMetric, reportAppOpenMetric } from '@/lib/pwa-metrics'
+import { gateAllows, markGate } from '@/lib/client-call-gate'
 import { usePlatform } from '@/lib/use-platform'
 import { NAV_STYLE_EVENT, readNavOverride, type NavMode } from '@/lib/nav-override'
 import { restoreGradient } from '@/lib/use-theme-reveal'
@@ -116,6 +117,21 @@ const MilestoneCelebration = dynamic(
   { ssr: false },
 )
 
+// ── Client call-gate keys (see src/lib/client-call-gate.ts) ──
+// Skip provably-redundant idempotent server calls (Fluid CPU). The TTLs
+// are heartbeats: a call still fires when its fields change OR when the
+// TTL lapses, so server-side data loss self-heals within the window.
+const GATE_DEVICE_REGISTER = 'device-register' // /api/referral/track (no ?ref=)
+const DEVICE_REGISTER_TTL_MS = 24 * 60 * 60 * 1000
+const GATE_SESSION_PING = 'session-ping' // /api/session immediate tz ping
+const SESSION_PING_TTL_MS = 4.5 * 60 * 1000
+const GATE_PUSH_SUB = 'push-sub' // /api/push/subscribe
+const PUSH_SUB_TTL_MS = 24 * 60 * 60 * 1000
+const GATE_NOTIF_BOOT = 'notif-boot' // /api/notifications {enabled:true} on boot
+const NOTIF_BOOT_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000 // effectively once-ever
+const GATE_PWA_INSTALLED = 'pwa-installed' // /api/pwa-installed on PWA launch
+const PWA_INSTALLED_TTL_MS = 24 * 60 * 60 * 1000
+
 /**
  * Subscribe to push notifications via the Push API.
  *
@@ -164,15 +180,33 @@ async function subscribeToPush(deviceId: string): Promise<void> {
     }
 
     // Send the subscription to the server with the isStandalone flag.
-    await fetch('/api/push/subscribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        deviceId,
-        subscription: subscription.toJSON(),
-        isStandalone,
-      }),
-    })
+    //
+    // ── CPU GATE (Fluid) ── /api/push/subscribe performs a full device
+    // read + full write in Firebase. It used to run on EVERY PWA launch
+    // even though the subscription was byte-identical to the one already
+    // stored. Now it only fires when the endpoint or the standalone flag
+    // CHANGED, or once per 24h as a heartbeat (heals any server-side
+    // data loss within a day). New/rotated endpoints (getSubscription()
+    // returning a different value) and the first launch after install
+    // (standalone flips) always post immediately.
+    const subscribeFields = {
+      endpoint: subscription.endpoint,
+      standalone: isStandalone,
+    }
+    if (gateAllows(GATE_PUSH_SUB, subscribeFields, PUSH_SUB_TTL_MS)) {
+      const res = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceId,
+          subscription: subscription.toJSON(),
+          isStandalone,
+        }),
+      })
+      if (res.ok) {
+        markGate(GATE_PUSH_SUB, subscribeFields)
+      }
+    }
   } catch (err) {
     // If subscribe() fails (e.g. permission denied, push blocked),
     // do NOT retry. The user needs to fix their browser settings.
@@ -926,11 +960,29 @@ export default function Home({
     trackPageView(deviceId)
 
     // Track the referral click + register device.
-    fetch('/api/referral/track', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId, referralCode: refCode }),
-    }).catch(() => {})
+    // ── CPU GATE (Fluid) ── Loads WITH a ?ref= code ALWAYS fire (referral
+    // attribution is the money moment — never gated). Loads WITHOUT one
+    // only register/refresh the device record: a full Firebase
+    // read-modify-write that used to run on EVERY page view. It's now
+    // gated to a 24h heartbeat — first visit still registers, and the
+    // record still heals daily. lastSeen/ipHash freshness has no
+    // sub-day consumer (notifications use timezone + countryCode, which
+    // come from the session ping / country detection instead).
+    const hasRefCode = !!refCode
+    if (
+      hasRefCode ||
+      gateAllows(GATE_DEVICE_REGISTER, {}, DEVICE_REGISTER_TTL_MS)
+    ) {
+      fetch('/api/referral/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, referralCode: refCode }),
+      })
+        .then((r) => {
+          if (r.ok && !hasRefCode) markGate(GATE_DEVICE_REGISTER)
+        })
+        .catch(() => {})
+    }
 
     // ── Send timezone IMMEDIATELY on page load ──
     // This ensures even first-time visitors get their timezone stored in
@@ -938,15 +990,28 @@ export default function Home({
     // at the correct local time. Without this, the timezone is only sent
     // during the session ping — which means a user who opens the app and
     // closes it within 5 minutes never gets their timezone stored.
+    //
+    // ── CPU GATE (Fluid) ── A reload within 4.5 min of ANY session ping
+    // with the SAME timezone skips this call — the server already has
+    // the timezone and the streak's daily qualification comes from the
+    // 5-minute pings (this 1-second ping alone never qualifies a day,
+    // which needs 15s). First visits and timezone changes always fire.
     const userTimezone = typeof Intl !== 'undefined'
       ? Intl.DateTimeFormat().resolvedOptions().timeZone || ''
       : ''
-    if (userTimezone) {
+    if (
+      userTimezone &&
+      gateAllows(GATE_SESSION_PING, { tz: userTimezone }, SESSION_PING_TTL_MS)
+    ) {
       fetch('/api/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceId, seconds: 1, referralCode: refCode, tz: userTimezone }),
-      }).catch(() => {})
+      })
+        .then((r) => {
+          if (r.ok) markGate(GATE_SESSION_PING, { tz: userTimezone })
+        })
+        .catch(() => {})
     }
 
     // ── Track session activity every 5 MINUTES (was 2 min) ──
@@ -975,7 +1040,13 @@ export default function Home({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceId, seconds: SESSION_SECONDS, referralCode: refCode, tz: userTimezone }),
-      }).catch(() => {})
+      })
+        .then((r) => {
+          // Mark the gate so a reload right after this ping skips the
+          // redundant immediate tz ping (same timezone → nothing to send).
+          if (r.ok) markGate(GATE_SESSION_PING, { tz: userTimezone })
+        })
+        .catch(() => {})
     }
 
     const startSessionTracking = () => {
@@ -1018,11 +1089,22 @@ export default function Home({
       (window.navigator as Navigator & { standalone?: boolean }).standalone === true
 
     if (isStandalone) {
-      fetch('/api/pwa-installed', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceId, referralCode: refCode }),
-      }).catch(() => {})
+      // ── CPU GATE (Fluid) ── /api/pwa-installed re-marks an immutable
+      // flag (pwaInstalled=true + referral qualification). It fired on
+      // EVERY standalone launch; now it's a 24h heartbeat. The real
+      // `appinstalled` event below still always reports (and re-arms
+      // this gate), and first launches always fire.
+      if (gateAllows(GATE_PWA_INSTALLED, {}, PWA_INSTALLED_TTL_MS)) {
+        fetch('/api/pwa-installed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deviceId, referralCode: refCode }),
+        })
+          .then((r) => {
+            if (r.ok) markGate(GATE_PWA_INSTALLED)
+          })
+          .catch(() => {})
+      }
       // First launch in the installed app = the install moment; also
       // counts today's app-open (consent-gated, 1/day).
       reportInstallMetric()
@@ -1031,11 +1113,16 @@ export default function Home({
 
     // Also listen for the appinstalled event.
     const installedHandler = () => {
+      // The REAL install moment — always reported, never gated.
       fetch('/api/pwa-installed', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceId, referralCode: refCode }),
-      }).catch(() => {})
+      })
+        .then((r) => {
+          if (r.ok) markGate(GATE_PWA_INSTALLED)
+        })
+        .catch(() => {})
       reportInstallMetric()
 
       // Auto-open the PWA as soon as it's installed.
@@ -1120,11 +1207,22 @@ export default function Home({
       'PushManager' in window &&
       Notification.permission === 'granted'
     ) {
-      fetch('/api/notifications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceId, enabled: true }),
-      }).catch(() => {})
+      // ── CPU GATE (Fluid) ── This boot POST re-asserts enabled=true on
+      // every PWA launch — a no-op write when notifications are already
+      // on (the permission-grant flow and every settings toggle always
+      // POST for real, ungated). Gated to once-ever; the real toggles
+      // keep the server state correct.
+      if (gateAllows(GATE_NOTIF_BOOT, {}, NOTIF_BOOT_TTL_MS)) {
+        fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deviceId, enabled: true }),
+        })
+          .then((r) => {
+            if (r.ok) markGate(GATE_NOTIF_BOOT)
+          })
+          .catch(() => {})
+      }
       // Wait for SW to be ready, then subscribe to push.
       navigator.serviceWorker.ready.then(() => {
         subscribeToPush(deviceId).catch(() => {})

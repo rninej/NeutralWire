@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import webpush from 'web-push'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { readCachedNews, isVirtualCategory } from '@/lib/news-cache'
 import { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } from '@/lib/vapid'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import type { Category } from '@/lib/news-sources'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -302,11 +304,41 @@ export async function GET(req: NextRequest) {
     const dominantCountry = Object.entries(countryCounts)
       .sort((a, b) => b[1] - a[1])[0]?.[0] || 'GB'
 
+    // ── DIRECT Firebase reads (Fluid CPU optimization) ──
+    // The old code self-fetched ${PRODUCTION_ORIGIN}/api/news for 7
+    // categories — 7 extra serverless function invocations per cron run,
+    // each paying a cold-start module load (plus a JSON HTTP round trip
+    // through the CDN). We now read the SAME Firebase cache nodes that
+    // /api/news serves from, in-process, and apply the EXACT same filter
+    // /api/news applied (limit=5, minCoverage=1, offset=0, slim=false →
+    // topics.filter(coverage >= 1).slice(0, 5)). The notification picks
+    // identical stories; ~7 invocations per run are eliminated.
+    //
+    // Behaviour-preservation notes:
+    //   - Stale caches: /api/news returns the stale payload immediately
+    //     (and refreshes in the background for the NEXT run) — a direct
+    //     read returns the same stale payload, so THIS run's picks are
+    //     identical. Freshness is kept by /api/cron/refresh-all (every
+    //     30 min) and visitor traffic, exactly as before.
+    //   - Missing cache node (only on a truly first-ever run): fall back
+    //     to the HTTP self-fetch for that category — /api/news aggregates
+    //     synchronously on a missing cache, so even that edge case picks
+    //     the same stories.
     let allStories: TopicArticle[] = []
     try {
-      const categories = ['mycountry', 'relevant', 'world', 'technology', 'business', 'science', 'top']
+      const categories: Category[] = [
+        'mycountry', 'relevant', 'world', 'technology', 'business', 'science', 'top',
+      ]
       const results = await Promise.allSettled(
         categories.map(async (cat) => {
+          const country = isVirtualCategory(cat) ? dominantCountry : ''
+          const cached = await readCachedNews(cat, country).catch(() => null)
+          if (cached && Array.isArray(cached.topics)) {
+            // EXACT replica of /api/news applyFilters(limit=5, minCoverage=1)
+            return cached.topics.filter((t) => t.coverage >= 1).slice(0, 5)
+          }
+          // Cold-start fallback: no cache node at all — use the HTTP route
+          // (it aggregates synchronously on a missing cache).
           const newsRes = await fetch(
             `${PRODUCTION_ORIGIN}/api/news?category=${cat}&country=${dominantCountry}&limit=5&minCoverage=1`,
             { cache: 'no-store' },
@@ -518,33 +550,55 @@ export async function GET(req: NextRequest) {
         // cron), the summary is already cached in Firebase by the time
         // the user clicks — so the detail page loads instantly.
         //
-        // We fire-and-forget this (don't await) so it doesn't slow down
-        // the push sending. The summary API deduplicates concurrent
-        // requests for the same topicId, so multiple cron runs won't
-        // generate the same summary twice.
-        try {
-          const articlesForSummary = (bestStory.articles || []).slice(0, 12).map((a) => ({
-            title: a.title,
-            description: a.description,
-            sourceName: a.sourceName,
-            leaning: a.leaning,
-          }))
-          if (articlesForSummary.length > 0 || bestStory.summary) {
-            fetch(`${PRODUCTION_ORIGIN}/api/summary`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                topicId: bestStory.topicId,
-                title: bestStory.title,
-                topicSummary: bestStory.summary || '',
-                articles: articlesForSummary,
-              }),
-              signal: AbortSignal.timeout(12000),
-            }).catch(() => {}) // fire-and-forget — don't block push sending
+        // ── CPU SAVING (Fluid Active CPU) ──
+        // BEFORE firing the /api/summary invocation, check Firebase for
+        // an existing REAL summary. /api/summary itself checks the cache
+        // before generating, but the HTTP invocation still costs a
+        // function cold-start + module load + a Firebase read. Skipping
+        // the invocation entirely when the summary already exists (often
+        // the case — /api/refresh pre-generates summaries for the top 3
+        // topics of every refresh, and these stories come from the same
+        // top-of-cache positions) removes the whole invocation for free.
+        // The template-summary markers mirror /api/summary's
+        // isTemplateSummary(): a template fallback is treated as missing
+        // so the POST still runs and regenerates a real LLM summary.
+        // The whole check stays FIRE-AND-FORGET (not awaited) so it never
+        // delays the push loop — exactly like the fetch it guards.
+        void (async () => {
+          try {
+            const articlesForSummary = (bestStory.articles || []).slice(0, 12).map((a) => ({
+              title: a.title,
+              description: a.description,
+              sourceName: a.sourceName,
+              leaning: a.leaning,
+            }))
+            if (articlesForSummary.length === 0 && !bestStory.summary) return
+
+            const existingSummary = await firebaseRead<{ summary?: string }>(
+              `summaries/${bestStory.topicId}`,
+            ).catch(() => null)
+            const existingText = existingSummary?.summary || ''
+            const isTemplate =
+              existingText.includes('indicating significant public interest') ||
+              existingText.includes('The breadth of coverage suggests') ||
+              existingText.includes('Source details are no longer available for this archived story')
+            if (!existingText || isTemplate) {
+              await fetch(`${PRODUCTION_ORIGIN}/api/summary`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  topicId: bestStory.topicId,
+                  title: bestStory.title,
+                  topicSummary: bestStory.summary || '',
+                  articles: articlesForSummary,
+                }),
+                signal: AbortSignal.timeout(12000),
+              }).catch(() => {}) // fire-and-forget — don't block push sending
+            }
+          } catch {
+            // silent — summary generation is a nice-to-have, not critical
           }
-        } catch {
-          // silent — summary generation is a nice-to-have, not critical
-        }
+        })()
 
         await new Promise((r) => setTimeout(r, 100))
       } catch (err) {

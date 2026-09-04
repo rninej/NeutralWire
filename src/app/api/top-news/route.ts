@@ -89,12 +89,25 @@ export async function GET(req: NextRequest) {
       ? top.map((t) => ({ ...t, articles: [] }))
       : top
 
-    return NextResponse.json({
+    // ── CDN cache (Fluid CPU) ──
+    // This handler reads 17 Firebase cache nodes per request. The data is
+    // derived from the same newsCache nodes /api/news serves (which itself
+    // is CDN-cached for 5 min) — so a 2-minute edge cache here is the SAME
+    // freshness class the feed already delivers, while repeat requests
+    // (bots, refreshes, multiple callers) skip the function + all 17 reads.
+    // The URL includes limit/slim/country, so each variant caches
+    // independently and correctly.
+    const response = NextResponse.json({
       topics: finalTopics,
       total: finalTopics.length,
       fetchedAt: new Date().toISOString(),
       ms: Date.now() - t0,
     })
+    response.headers.set(
+      'Cache-Control',
+      'public, s-maxage=120, stale-while-revalidate=300',
+    )
+    return response
   } catch (err) {
     console.error('[api/top-news] error:', err)
     return NextResponse.json(
