@@ -1034,11 +1034,12 @@ export default function DebugPage() {
                   )}
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  A Watch pill on article images (feed cards + inside articles)
-                  that plays a video of the story — the source's own video when
-                  its feed carries one, else a matching video from a news
-                  outlet on YouTube. Refresh the homepage after switching to
-                  see the change.
+                  A Watch pill inside articles only (bottom-left of the image,
+                  never on the home feed) that plays a video of the story —
+                  the source's own video when its feed carries one, else a
+                  matching video from a news outlet on YouTube. Videos must
+                  be longer than 10 seconds and from channels with at least
+                  10k subscribers. Refresh after switching to see the change.
                 </p>
                 {videoWatchResult && (
                   <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">

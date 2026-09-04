@@ -800,19 +800,18 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
               transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
               onError={() => setImgError(true)}
             />
-            {/* Bottom-right badge row: [NW brand mark] [experimental Watch
-                pill]. Same row design as the feed cards — the brand chip
-                keeps its corner, the Watch pill joins it when the video
-                feature is on. */}
-            <div className="pointer-events-none absolute bottom-2 right-2 z-[1] flex items-center gap-2">
-              <div className="pointer-events-none flex items-center gap-1.5 rounded-lg bg-black/55 py-1 pl-1.5 pr-2 backdrop-blur-[2px]">
-                <img src="/icon-192.png" alt="" className="h-4 w-4 rounded-[4px]" />
-                <span className="text-[10px] font-extrabold uppercase leading-none tracking-[0.14em] text-white">
-                  NeutralWire
-                </span>
-              </div>
-              {videoWatchOn && <WatchPill onClick={() => setVideoOpen(true)} />}
+            {/* Corner badges on the hero image: the NW brand mark keeps the
+                bottom-RIGHT corner; the experimental Watch pill owns the
+                bottom-LEFT corner (user request: watch only inside the
+                article — never on the home feed — on the left side of the
+                image). The pill positions itself absolutely. */}
+            <div className="pointer-events-none absolute bottom-2 right-2 z-[1] flex items-center gap-1.5 rounded-lg bg-black/55 py-1 pl-1.5 pr-2 backdrop-blur-[2px]">
+              <img src="/icon-192.png" alt="" className="h-4 w-4 rounded-[4px]" />
+              <span className="text-[10px] font-extrabold uppercase leading-none tracking-[0.14em] text-white">
+                NeutralWire
+              </span>
             </div>
+            {videoWatchOn && <WatchPill onClick={() => setVideoOpen(true)} />}
           </div>
         )}
 

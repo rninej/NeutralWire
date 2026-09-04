@@ -31,6 +31,11 @@ export interface FeedArticle {
    *  "the source's own video" is always preferred over a search match.
    *  Optional so all existing cached articles keep validating. */
   videoUrl?: string | null
+  /** Declared duration (seconds) of videoUrl when the RSS feed carries a
+   *  media:content duration attribute — used by /api/video to enforce the
+   *  "longer than 10 seconds" requirement on native source videos.
+   *  Optional so all existing cached articles keep validating. */
+  videoDuration?: number | null
   sourceId: string
   sourceName: string
   sourceHomepage: string
@@ -1169,14 +1174,17 @@ function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedA
 
     // ── Video extraction (experimental Watch feature) ──
     // Two shapes carry a source video in RSS:
-    //   1. <media:content type="video/mp4" url="..."> / <enclosure
-    //      type="video/..." url="..."> — outlets that publish video pods.
+    //   1. <media:content type="video/mp4" url="..." duration="..."> /
+    //      <enclosure type="video/..." url="..."> — outlets that publish
+    //      video pods. The MRSS duration attribute (seconds) is kept so
+    //      the Watch feature can enforce its >10s requirement.
     //   2. The entry LINK itself is a YouTube watch URL — some sources in
     //      the list are YouTube channel feeds, where every entry IS a video.
-    const videoUrl =
-      extractVideoAttr(block, 'media:content') ||
-      extractVideoAttr(block, 'enclosure') ||
-      (isYouTubeUrl(cleanLink) ? cleanLink : null)
+    const videoMedia =
+      extractVideoMedia(block, 'media:content') ||
+      extractVideoMedia(block, 'enclosure')
+    const videoUrl = videoMedia?.url || (isYouTubeUrl(cleanLink) ? cleanLink : null)
+    const videoDuration = videoMedia?.duration ?? null
 
     // Skip non-English articles.
     // Decode entities FIRST (so &lt;a href&gt; becomes <a href>),
@@ -1205,6 +1213,7 @@ function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedA
       iso,
       imageUrl,
       videoUrl,
+      videoDuration,
       sourceId: source.id,
       sourceName: source.name,
       sourceHomepage: source.homepage,
@@ -1237,14 +1246,20 @@ function isYouTubeUrl(url: string): boolean {
   }
 }
 
+/** A video URL plus its declared MRSS duration (seconds, when present). */
+interface ExtractedVideo {
+  url: string
+  duration: number | null
+}
+
 /**
- * Extract a VIDEO url from an RSS media:content/enclosure block — same
- * tag-scanning approach as extractAttr(), but type-aware: the tag must
- * declare a video MIME type (type="video/mp4") or point at a video file
- * extension. Returns null for the (common) case where the same tags carry
- * only images.
+ * Extract a VIDEO url (+ optional duration) from an RSS
+ * media:content/enclosure block — same tag-scanning approach as
+ * extractAttr(), but type-aware: the tag must declare a video MIME type
+ * (type="video/mp4") or point at a video file extension. Returns null
+ * for the (common) case where the same tags carry only images.
  */
-function extractVideoAttr(block: string, tag: string): string | null {
+function extractVideoMedia(block: string, tag: string): ExtractedVideo | null {
   const re = new RegExp(`<${escapeReg(tag)}\b[^>]*>`, 'gi')
   let m: RegExpExecArray | null
   while ((m = re.exec(block)) !== null) {
@@ -1254,10 +1269,17 @@ function extractVideoAttr(block: string, tag: string): string | null {
     const url = urlMatch[1]
     const typeMatch = tagText.match(/\btype\s*=\s*["']([^"']+)["']/i)
     const type = typeMatch ? typeMatch[1].toLowerCase() : ''
-    if (type.startsWith('video/')) return url
-    if (/\.(mp4|m3u8|webm|ogv|mov)(\?|$)/i.test(url)) return url
-    // YouTube media:content in feeds (yt namespace) points at player URLs.
-    if (isYouTubeUrl(url)) return url
+    const isVideo =
+      type.startsWith('video/') ||
+      /\.(mp4|m3u8|webm|ogv|mov)(\?|$)/i.test(url) ||
+      // YouTube media:content in feeds (yt namespace) points at player
+      // URLs.
+      isYouTubeUrl(url)
+    if (!isVideo) continue
+    // MRSS duration attribute is in SECONDS (media:content only in practice).
+    const durMatch = tagText.match(/\bduration\s*=\s*["']([\d.]+)["']/i)
+    const duration = durMatch ? Math.round(parseFloat(durMatch[1])) : null
+    return { url, duration: Number.isFinite(duration as number) ? duration : null }
   }
   return null
 }

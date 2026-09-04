@@ -3,10 +3,13 @@
 /**
  * video-player.tsx — the Watch overlay (experimental video feature).
  *
- * Opened by the Watch pill on article images (topic cards + the article
- * detail hero). Fetches /api/video/[topicId], which resolves:
+ * Opened by the Watch pill on the ARTICLE VIEW's hero image (bottom-left;
+ * home-screen cards never show it). Fetches /api/video/[topicId], which
+ * resolves:
  *   1. the source's OWN video (RSS video enclosures / YouTube feeds), or
  *   2. a YouTube video about the story from a news outlet.
+ * Both paths enforce the quality requirements: the video's channel must
+ * have ≥ 10k subscribers and the video must run longer than 10 seconds.
  *
  * Rendering:
  *   - kind 'youtube' → privacy-enhanced iframe embed (youtube-nocookie)
@@ -25,7 +28,6 @@ import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Play, ExternalLink, Clapperboard, AlertCircle, Loader2 } from 'lucide-react'
-import { cn } from '@/lib/utils'
 
 export interface VideoPlayerProps {
   topicId: string
@@ -265,17 +267,16 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
 }
 
 /**
- * The Watch pill that sits on article images (bottom-right). Two sizes:
- *  - full (hero/default cards + article view): play icon + "Watch" label
- *  - compact (mini card thumbnails): play icon only
+ * The Watch pill — the entry point for the experimental video feature.
+ * Renders ONLY inside the article view (topic-detail hero image), pinned
+ * to the image's BOTTOM-LEFT corner (user request: watch from the article
+ * only, on the left side — the NW brand mark owns the bottom-right).
  * pointer-events-auto + stopPropagation so tapping it opens the video
- * WITHOUT opening the article card behind it.
+ * without hitting the image/link underneath.
  */
 export function WatchPill({
-  compact = false,
   onClick,
 }: {
-  compact?: boolean
   onClick: () => void
 }) {
   return (
@@ -288,24 +289,18 @@ export function WatchPill({
       }}
       whileTap={{ scale: 0.9 }}
       transition={{ duration: 0.15, ease: 'easeOut' }}
-      className={cn(
-        'pointer-events-auto absolute z-[2] flex items-center gap-1.5 rounded-full bg-black/65 font-semibold text-white shadow-lg backdrop-blur-[3px] transition-colors hover:bg-black/80 active:scale-95',
-        compact ? 'bottom-1.5 right-1.5 h-7 w-7 justify-center p-0' : 'bottom-2 right-2 h-8 px-3',
-      )}
+      className="pointer-events-auto absolute bottom-2 left-2 z-[2] flex h-8 items-center gap-1.5 rounded-full bg-black/65 px-3 font-semibold text-white shadow-lg backdrop-blur-[3px] transition-colors hover:bg-black/80 active:scale-95"
       aria-label="Watch a video about this story"
       title="Watch — video coverage of this story"
     >
       <motion.span
-        className={cn(
-          'flex items-center justify-center rounded-full bg-red-500',
-          compact ? 'h-4 w-4' : 'h-4.5 w-4.5 p-0.5',
-        )}
+        className="flex h-4.5 w-4.5 items-center justify-center rounded-full bg-red-500 p-0.5"
         initial={{ scale: 0.8 }}
         animate={{ scale: 1 }}
       >
-        <Play className={cn('fill-white', compact ? 'h-2 w-2' : 'h-2.5 w-2.5')} />
+        <Play className="h-2.5 w-2.5 fill-white" />
       </motion.span>
-      {!compact && <span className="text-[11px] tracking-wide">Watch</span>}
+      <span className="text-[11px] tracking-wide">Watch</span>
     </motion.button>
   )
 }

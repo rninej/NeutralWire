@@ -17,8 +17,6 @@ import { BiasBar } from '@/components/bias-bar'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { getDeviceId } from '@/lib/referral'
 import { bumpEngagementForTopic } from '@/lib/user-interests'
-import { useVideoWatch } from '@/lib/video-watch'
-import { VideoPlayer, WatchPill } from '@/components/video-player'
 
 interface TopicCardProps {
   topic: TopicArticle
@@ -87,9 +85,9 @@ function proxyImage(url: string): string {
 /**
  * NW brand watermark — a small dark chip with the NW logo icon (plus the
  * NEUTRALWIRE wordmark on larger images). NON-absolute: it sits inside the
- * ImageBadges row (bottom-right of card images) so it can share the corner
- * with the experimental Watch pill. Mirrors the branding on generated
- * share/notification images (bias bar + NEUTRALWIRE banner) so cards,
+ * ImageBadges container (bottom-right of card images). Mirrors the
+ * branding on generated share/notification images (bias bar +
+ * NEUTRALWIRE banner) so cards,
  * shares and notifications all read as one brand. pointer-events-none —
  * never blocks card clicks, and it stays fixed while the image zooms
  * underneath on hover (broadcast-watermark behaviour).
@@ -114,15 +112,16 @@ function NWMark({ withText = true }: { withText?: boolean }) {
 }
 
 /**
- * Bottom-right badge row on card images: [NW chip] [Watch pill]. The
- * Watch pill is the experimental video feature (useVideoWatch gates it);
- * when it's off the row degrades to exactly the old NW-only watermark.
+ * Bottom-right brand watermark row on card images. The experimental
+ * Watch pill now renders ONLY inside the article view (user request:
+ * videos are watched from the article, never from the home feed) — so
+ * this row is back to the NW chip alone, exactly the pre-experiment
+ * watermark.
  */
-function ImageBadges({ showWatch, onWatch }: { showWatch: boolean; onWatch: () => void }) {
+function ImageBadges() {
   return (
-    <div className="pointer-events-none absolute bottom-1.5 right-1.5 z-[2] flex items-center gap-1.5">
+    <div className="pointer-events-none absolute bottom-1.5 right-1.5 z-[2]">
       <NWMark />
-      {showWatch && <WatchPill onClick={onWatch} />}
     </div>
   )
 }
@@ -140,9 +139,6 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
   const [showSources, setShowSources] = React.useState(false)
   // "Copied" feedback for the share button (clipboard fallback only).
   const [shared, setShared] = React.useState(false)
-  // ── Experimental Watch button (video feature) ──
-  const videoWatchOn = useVideoWatch()
-  const [videoOpen, setVideoOpen] = React.useState(false)
   const imageUrl = pickImage(topic)
   // Key the imgError state to the imageUrl so it auto-resets when the image changes.
   // This avoids stale error state from a previous render.
@@ -485,16 +481,11 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
               className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
               onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
             />
-            {/* Mini thumbnails: compact play-icon watch button only — no
-                NW brand mark here (too small; see the non-mini variants). */}
-            {videoWatchOn && (
-              <div className="absolute bottom-1 right-1 z-[2]">
-                <WatchPill compact onClick={() => setVideoOpen(true)} />
-              </div>
-            )}
-            {/* NO NWMark here — the brand watermark only appears on LARGE
-                form factors (hero/default cards + the article detail view).
-                On tiny thumbnails it just covered the photo. */}
+            {/* NO NWMark and no Watch pill here — the brand watermark
+                only appears on LARGE form factors (hero/default cards +
+                the article detail view), and the experimental video
+                button lives exclusively inside the article view. On tiny
+                thumbnails the watermark just covered the photo. */}
           </div>
         )}
         <div className="flex flex-col gap-1 p-2.5 flex-1 min-w-0 justify-center">
@@ -547,7 +538,7 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
             className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
-          <ImageBadges showWatch={videoWatchOn} onWatch={() => setVideoOpen(true)} />
+          <ImageBadges />
         </div>
       )}
 
@@ -610,7 +601,7 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
             className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
-          <ImageBadges showWatch={videoWatchOn} onWatch={() => setVideoOpen(true)} />
+          <ImageBadges />
         </div>
       )}
 
@@ -652,16 +643,6 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
   return (
     <>
       {renderCard()}
-      {/* Experimental Watch overlay — portaled to document.body inside
-          VideoPlayer (same transform-escape reason as the sources popup).
-          It handles its own exit animation, so no AnimatePresence here. */}
-      {videoOpen && (
-        <VideoPlayer
-          topicId={topic.topicId}
-          storyTitle={topic.title}
-          onClose={() => setVideoOpen(false)}
-        />
-      )}
       {typeof document !== 'undefined' &&
         createPortal(
           <AnimatePresence>

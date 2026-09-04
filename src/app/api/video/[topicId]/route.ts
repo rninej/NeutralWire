@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
+import {
+  MIN_DURATION_SECONDS,
+  searchYouTubeForStory,
+  youTubeIdFromUrl,
+} from '@/lib/video-quality'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -10,31 +15,48 @@ export const maxDuration = 15
 /**
  * Video resolution for the experimental Watch button — /api/video/[topicId].
  *
- * The user taps the Watch pill on an article image (card or article view)
- * → the client fetches this endpoint → we resolve ONE playable video for
- * the story, in priority order:
+ * The user opens an article and taps the Watch pill (bottom-left of the
+ * hero image — the pill only exists inside the article view, never on
+ * home-screen cards) → the client fetches this endpoint → we resolve ONE
+ * playable video for the story, in priority order:
  *
  *   1. The SOURCE'S OWN video — the topic's articles now carry videoUrl
  *      (RSS media:content/enclosure with a video type, or a YouTube watch
  *      link when the source feed IS a YouTube channel). Extracted at
  *      ingest in news-aggregator.ts.
  *   2. A video ABOUT the story from a news outlet — a YouTube search for
- *      the headline (server-side, no API key), verified with YouTube's
- *      keyless oEmbed endpoint and a light relevance check so we return a
- *      video actually about the story, not a random match.
+ *      the headline (server-side, no API key), relevance-checked so we
+ *      return a video actually about the story.
  *
- * Results are cached in Firebase (videos/<topicId>): 24h for a found
- * video, 6h for a "no video" miss. Every resolution is user-initiated and
- * at most 2 outbound fetches (search + oEmbed) + 1-2 Firebase reads, and
- * never happens while the videoWatch feature flag is off — /debug can
- * kill the whole feature instantly (this endpoint returns
- * { ok: false, disabled: true } and the UI hides the buttons).
+ * QUALITY REQUIREMENTS (user spec, enforced by lib/video-quality.ts):
+ * every YouTube video must run LONGER THAN 10 SECONDS and come from a
+ * channel with AT LEAST 10,000 SUBSCRIBERS — videos that fail either
+ * check are skipped and the resolver moves to the next candidate. The
+ * search prefers uploads from the story's own outlets (the "source's
+ * video" preference — a bare YouTube videoId can't be quality-checked
+ * directly, but the outlet's own upload about the story normally tops
+ * the results). Native RSS source videos enforce the duration rule when
+ * the feed declares a media:content duration attribute; the subs rule is
+ * a YouTube-channel concept and doesn't apply to a vetted outlet's own
+ * feed enclosure.
+ *
+ * Results are cached in Firebase (videos2/<topicId> — namespace bumped
+ * from "videos" so every entry cached before the requirements are
+ * ignored): 24h for a found video, 6h for a "no video" miss. Every
+ * resolution is user-initiated, bounded by a ~10.5s budget, and never
+ * happens while the videoWatch feature flag is off — /debug can kill the
+ * whole feature instantly (this endpoint returns { ok: false, disabled:
+ * true } and the UI hides the pill).
  *
  * Response:
  *   { ok: true, kind: 'youtube', videoId, title, author, sourceUrl }
  *   { ok: true, kind: 'video', url, title, author }
  *   { ok: false, reason: 'no-video' | 'disabled' | 'not-found' }
  */
+
+// Whole-resolution budget: slow YouTube fetches can never eat the 15s
+// function cap — past the budget we return (and cache a short-TTL miss).
+const RESOLVE_BUDGET_MS = 10_500
 
 // ── Feature flag (Firebase featureFlags/videoWatch, default ON) ──
 let videoFlagMemo: { value: boolean; ts: number } | null = null
@@ -55,7 +77,9 @@ async function isVideoWatchEnabled(): Promise<boolean> {
   return value
 }
 
-// ── Resolution cache (Firebase videos/<topicId>) ──
+// ── Resolution cache (Firebase videos2/<topicId>) ──
+// v2 namespace: bumping it invalidated every pre-requirements entry —
+// cached "found" results may not meet the >=10k-subs / >10s rules.
 const FOUND_TTL_MS = 24 * 60 * 60 * 1000
 const MISS_TTL_MS = 6 * 60 * 60 * 1000
 
@@ -75,170 +99,14 @@ interface CachedVideo {
   result: VideoResult
 }
 
-// ── YouTube helpers ──
-
-/** Extract a YouTube videoId from any watch/short/youtu.be URL shape. */
-function youTubeIdFromUrl(url: string): string | null {
-  if (!url) return null
-  try {
-    const u = new URL(url)
-    const host = u.hostname.replace(/^www\./, '').toLowerCase()
-    if (host === 'youtu.be') {
-      const id = u.pathname.slice(1).split('/')[0]
-      return /^[\w-]{11}$/.test(id) ? id : null
-    }
-    if (host.endsWith('youtube.com')) {
-      if (u.pathname === '/watch') {
-        const v = u.searchParams.get('v')
-        return v && /^[\w-]{11}$/.test(v) ? v : null
-      }
-      const shortMatch = u.pathname.match(/^\/(?:shorts|live|embed)\/([\w-]{11})/)
-      return shortMatch ? shortMatch[1] : null
-    }
-    return null
-  } catch {
-    const m = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([\w-]{11})/)
-    return m ? m[1] : null
-  }
-}
-
-const YT_STOPWORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of',
-  'with', 'from', 'by', 'is', 'was', 'are', 'were', 'be', 'as', 'it', 'its',
-  'this', 'that', 'new', 'news', 'video', 'watch', 'live', 'update', 'says',
-  'said', 'after', 'amid', 'over', 'into', 'up', 'down', 'out', 'off',
-])
-
-function keywords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length > 3 && !YT_STOPWORDS.has(w))
-}
-
-/** Count shared significant keywords between the story and a video title. */
-function sharedKeywords(a: string, b: string): number {
-  const ka = new Set(keywords(a))
-  const kb = new Set(keywords(b))
-  let shared = 0
-  for (const w of ka) if (kb.has(w)) shared++
-  return shared
-}
-
-const NEWS_CHANNEL_HINTS = [
-  'news', 'tv', 'times', 'bbc', 'cnn', 'guardian', 'reuters', 'sky', 'itv',
-  'channel', 'abc', 'nbc', 'cbs', 'al jazeera', 'independent', 'telegraph',
-  'post', 'express', 'mail', 'mirror', 'sun', 'press', 'journal', 'daily',
-  'herald', 'agency', 'radio', 'media', 'group', 'broadcast', 'now', 'world',
-]
-
-/** oEmbed-verify a YouTube video and return its title + channel. */
-async function verifyYouTubeVideo(videoId: string): Promise<{
-  title: string
-  author: string
-} | null> {
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 5000)
-    const res = await fetch(
-      `https://www.youtube.com/oembed?url=${encodeURIComponent(
-        `https://www.youtube.com/watch?v=${videoId}`,
-      )}&format=json`,
-      { signal: controller.signal, cache: 'no-store' },
-    )
-    clearTimeout(timer)
-    if (!res.ok) return null
-    const data = (await res.json()) as { title?: string; author_name?: string }
-    if (!data?.title) return null
-    return { title: data.title, author: data.author_name || 'YouTube' }
-  } catch {
-    return null
-  }
-}
-
-/**
- * Search YouTube for a video about the story. Server-side scrape of the
- * public results page (no API key): the HTML embeds ytInitialData JSON
- * which contains every result's videoId. We take the first handful of
- * unique ids in result order, oEmbed-verify each (also filters dead /
- * private videos), and pick the first that's plausibly about the story:
- *   - ≥2 significant keywords shared with the headline, OR
- *   - the channel name looks like a news outlet.
- */
-async function searchYouTubeForStory(
-  storyTitle: string,
-): Promise<{ videoId: string; title: string; author: string } | null> {
-  const query = storyTitle.replace(/["?&/\\]/g, ' ').slice(0, 70).trim() + ' news'
-  if (!query.trim()) return null
-
-  let html = ''
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 8000)
-    const res = await fetch(
-      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
-      {
-        signal: controller.signal,
-        cache: 'no-store',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-          'Accept-Language': 'en-GB,en;q=0.9',
-        },
-      },
-    )
-    clearTimeout(timer)
-    if (!res.ok) return null
-    html = await res.text()
-  } catch {
-    return null
-  }
-
-  // Collect unique videoIds in result order (ytInitialData repeats each id
-  // many times — the Set dedupes while preserving first-seen order).
-  const seen = new Set<string>()
-  const ids: string[] = []
-  const re = /"videoId":"([\w-]{11})"/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(html)) !== null && ids.length < 6) {
-    if (!seen.has(m[1])) {
-      seen.add(m[1])
-      ids.push(m[1])
-    }
-  }
-  if (ids.length === 0) return null
-
-  let firstVerified: { videoId: string; title: string; author: string } | null = null
-  for (const videoId of ids) {
-    const verified = await verifyYouTubeVideo(videoId)
-    if (!verified) continue
-    const candidate = { videoId, ...verified }
-    if (!firstVerified) firstVerified = candidate
-    // Relevance: shared keywords with the headline, or a news-y channel.
-    const shared = sharedKeywords(storyTitle, verified.title)
-    const authorLower = verified.author.toLowerCase()
-    const looksLikeNews = NEWS_CHANNEL_HINTS.some((h) => authorLower.includes(h))
-    if (shared >= 2 || (shared >= 1 && looksLikeNews)) {
-      return candidate
-    }
-  }
-  // No candidate passed the relevance check — fall back to the first
-  // verified video only when its channel looks like a news outlet.
-  if (firstVerified) {
-    const authorLower = firstVerified.author.toLowerCase()
-    if (NEWS_CHANNEL_HINTS.some((h) => authorLower.includes(h))) {
-      return firstVerified
-    }
-  }
-  return null
-}
-
-// ── Route ──
-
 interface TopicForVideo {
   title: string
-  articles?: Array<{ link?: string; videoUrl?: string | null; sourceName?: string }>
+  articles?: Array<{
+    link?: string
+    videoUrl?: string | null
+    videoDuration?: number | null
+    sourceName?: string
+  }>
 }
 
 export async function GET(
@@ -254,7 +122,7 @@ export async function GET(
   }
 
   // 1. Feature flag — /debug can kill the feature instantly (no resolving
-  //    CPU is spent while it's off; the UI also hides the buttons).
+  //    CPU is spent while it's off; the UI also hides the pill).
   const enabled = await isVideoWatchEnabled()
   if (!enabled) {
     return NextResponse.json(
@@ -263,9 +131,9 @@ export async function GET(
     )
   }
 
-  // 2. Cache (per-topic, TTL by outcome).
+  // 2. Cache (per-topic, TTL by outcome). videos2/ — see header comment.
   try {
-    const cached = await firebaseRead<CachedVideo>(`videos/${topicId}`)
+    const cached = await firebaseRead<CachedVideo>(`videos2/${topicId}`)
     if (cached?.result && typeof cached.ts === 'number') {
       const ttl = cached.result.ok ? FOUND_TTL_MS : MISS_TTL_MS
       if (Date.now() - cached.ts < ttl) {
@@ -291,70 +159,72 @@ export async function GET(
     return NextResponse.json(miss, { headers: { 'Cache-Control': 'no-store' } })
   }
 
-  // 4. The source's OWN video first (RSS video enclosures / YouTube feeds).
+  // Shared deadline for the whole resolution.
+  const deadline = Date.now() + RESOLVE_BUDGET_MS
+
+  // 4. The source's OWN NATIVE video (a direct mp4/m3u8/... enclosure in
+  //    the outlet's RSS feed). The >10s rule applies when the feed
+  //    declares a media:content duration attribute; the 10k-subs rule is
+  //    a YouTube-channel concept and doesn't apply to a vetted outlet's
+  //    own enclosure. YouTube-shaped videoUrls/links are NOT embedded
+  //    directly — a bare videoId has no keyless duration source (watch
+  //    pages 429-block server IPs), so it could never pass the quality
+  //    gate; instead the search below prefers the story's own outlets,
+  //    which surfaces the source's upload when it exists.
   const articles = topic.articles || []
   for (const a of articles) {
-    // 4a. An explicit videoUrl on the article (RSS media:content/enclosure).
     const videoUrl = a?.videoUrl || null
-    if (videoUrl) {
-      const ytId = youTubeIdFromUrl(videoUrl)
-      if (ytId) {
-        const verified = await verifyYouTubeVideo(ytId)
-        const found: VideoResult = {
-          ok: true,
-          kind: 'youtube',
-          videoId: ytId,
-          title: verified?.title || topic.title,
-          author: verified?.author || a?.sourceName || 'YouTube',
-          sourceUrl: `https://www.youtube.com/watch?v=${ytId}`,
-        }
-        void cacheResult(topicId, found)
-        return NextResponse.json(found, { headers: { 'Cache-Control': 'no-store' } })
+    if (!videoUrl) continue
+    if (youTubeIdFromUrl(videoUrl)) continue // search path handles YouTube
+    if (/^https?:\/\//i.test(videoUrl)) {
+      const declared = a?.videoDuration
+      if (typeof declared === 'number' && !(declared > MIN_DURATION_SECONDS)) {
+        continue // the feed itself says this clip is too short
       }
-      if (/^https?:\/\//i.test(videoUrl)) {
-        const found: VideoResult = {
-          ok: true,
-          kind: 'video',
-          url: videoUrl,
-          title: topic.title,
-          author: a?.sourceName || 'Source video',
-        }
-        void cacheResult(topicId, found)
-        return NextResponse.json(found, { headers: { 'Cache-Control': 'no-store' } })
+      const found: VideoResult = {
+        ok: true,
+        kind: 'video',
+        url: videoUrl,
+        title: topic.title,
+        author: a?.sourceName || 'Source video',
       }
-    }
-    // 4b. The article LINK itself is a YouTube video (YouTube-channel feeds).
-    const linkId = a?.link ? youTubeIdFromUrl(a.link) : null
-    if (linkId) {
-      const verified = await verifyYouTubeVideo(linkId)
-      if (verified) {
-        const found: VideoResult = {
-          ok: true,
-          kind: 'youtube',
-          videoId: linkId,
-          title: verified.title,
-          author: verified.author || a?.sourceName || 'YouTube',
-          sourceUrl: `https://www.youtube.com/watch?v=${linkId}`,
-        }
-        void cacheResult(topicId, found)
-        return NextResponse.json(found, { headers: { 'Cache-Control': 'no-store' } })
-      }
+      void cacheResult(topicId, found)
+      return NextResponse.json(found, {
+        headers: { 'Cache-Control': 'no-store' },
+      })
     }
   }
 
-  // 5. YouTube search fallback — a video about the story from a news outlet.
-  const searchHit = await searchYouTubeForStory(topic.title)
-  if (searchHit) {
-    const found: VideoResult = {
-      ok: true,
-      kind: 'youtube',
-      videoId: searchHit.videoId,
-      title: searchHit.title,
-      author: searchHit.author,
-      sourceUrl: `https://www.youtube.com/watch?v=${searchHit.videoId}`,
+  // 5. YouTube search — a video about the story from a news outlet that
+  //    meets the requirements (alive, >10s, >=10k subs), preferring
+  //    uploads from the story's own outlets.
+  if (Date.now() < deadline) {
+    const sourceNames = [
+      ...new Set(
+        articles
+          .map((a) => a?.sourceName)
+          .filter((n): n is string => typeof n === 'string' && !!n),
+      ),
+    ].slice(0, 12)
+    const searchHit = await searchYouTubeForStory(
+      topic.title,
+      deadline,
+      sourceNames,
+    )
+    if (searchHit) {
+      const found: VideoResult = {
+        ok: true,
+        kind: 'youtube',
+        videoId: searchHit.videoId,
+        title: searchHit.title,
+        author: searchHit.author,
+        sourceUrl: `https://www.youtube.com/watch?v=${searchHit.videoId}`,
+      }
+      void cacheResult(topicId, found)
+      return NextResponse.json(found, {
+        headers: { 'Cache-Control': 'no-store' },
+      })
     }
-    void cacheResult(topicId, found)
-    return NextResponse.json(found, { headers: { 'Cache-Control': 'no-store' } })
   }
 
   // 6. Nothing found — cache the miss (short TTL) so repeat taps on the
@@ -366,7 +236,7 @@ export async function GET(
 
 async function cacheResult(topicId: string, result: VideoResult): Promise<void> {
   try {
-    await firebaseWrite(`videos/${topicId}`, { ts: Date.now(), result })
+    await firebaseWrite(`videos2/${topicId}`, { ts: Date.now(), result })
   } catch {
     // best-effort — a failed cache write just means we resolve again later
   }
