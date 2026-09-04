@@ -2253,3 +2253,26 @@ Stage Summary:
 - OG image: bias bar + NEUTRALWIRE banner are now IMAGE layers (pre-baked banner PNG + tiny region bar SVG) — pixel/byte-identical output proven under node, ~92% less rasterization area + zero letter-path rasterization + zero-work fallbacks.
 - Every visitor's page load now skips 2-5 redundant invocations (device RMW, session ping, subscribe RMW, boot re-enable, install re-mark) while first-visit/change/heartbeat paths keep the server state identical — 829-device fleet no longer re-registered per page view.
 - Cacheable GETs (flags, summary hits, top-news) are edge-cached so warm-traffic repeats never invoke the function.
+
+---
+Task ID: 13
+Agent: main (Super Z)
+Task: Make the PWA splash screen + loading animation follow the user's chosen theme (was permanent dark) — light mode for light users, correct palette for ALL theme families, across the OS launch screens too.
+
+Work Log:
+- Workspace had been reset — re-cloned the repo from GitHub (state = 20421ef, the CPU-overhaul commit; all prior tasks confirmed done).
+- Recon: theme system = family (neutralwire:theme-family, 11 families) + mode (neutralwire:theme-mode: auto/light/dark); splash was hardcoded dark (#0a0a0a/#ececec) in layout.tsx; extracted every theme class's --background/--foreground/--muted-foreground from globals.css.
+- layout.tsx head launch-gate script extended: resolves family+mode pre-paint (legacy neutralwire:theme reverse-map fallback), adds html classes nw-splash-<family> + nw-splash-light|dark, rewrites link[rel=manifest] → /manifest-light.json for light users. Exposed as window.__NW_LAUNCH.theme.
+- Inline splash CSS: neutral dark defaults (now token-exact: #0a0a0a bg is literally oklch(.145 0 0)), neutral-light override, then 20 per-family×mode palette rules (oklch tokens straight from globals.css). #nw-splash/orbs/track/tagline now var-driven (--nw-sp-bg/fg/sub/orb-b/orb-r/track). Bias-bar segments stay brand blue/grey/red in all themes. Fixed orb gradients to interpolate to same-hue transparent stops.
+- public/manifest-light.json added (identical identity: same start_url/scope, white background_color + theme_color) → Chrome's Android launch splash + title bar follow the theme on next launch. Zero server cost (static file).
+- theme-families.ts: syncManifestForTheme() re-syncs the manifest href on every theme change (apply() + auto-mode media flips).
+- scripts/generate-startup-images.js: two palettes (dark + light), 52 PNGs generated; layout links now 52, each qualified with (prefers-color-scheme: dark|light) → iOS OS launch image follows the device scheme.
+- viewport.themeColor → two media-variant metas (light #ffffff / dark #0a0a0a).
+- manifest link rendered manually with suppressHydrationWarning (removed metadata.manifest) — kills the hydration attribute-mismatch warning the pre-paint href swap caused.
+- Verified with agent-browser: sepia-light, ocean-dark, midnight-light, cyber-dark, neutral light/dark, legacy 'ocean-light' fallback, auto+system-light — html classes, computed splash bg (exact oklch tokens), manifest href swap, pixel-level screenshots (warm beige / deep teal / white+blue-glow), zero console errors, zero hydration warnings. tsc + eslint clean.
+- Commit 3179692 pushed to main (Vercel deploy triggered).
+
+Stage Summary:
+- The PWA launch splash + loading animation now render in the user's EXACT theme (all 11 families × light/dark), resolved before first paint with zero flash; splash bg = app bg so the release cross-fade is seamless.
+- OS-level launch screens are now scheme-correct: Android via theme-matched manifest (static, no CPU), iOS via prefers-color-scheme-qualified startup images. iOS status-bar style left as "black" (changing it would shift app layout under the clock).
+- OS-level assets can't read localStorage (page not loaded yet), so they follow the system scheme as the closest match; the in-app themed splash takes over from the webview's first controlled frame.
