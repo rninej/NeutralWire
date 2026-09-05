@@ -2364,3 +2364,23 @@ Stage Summary:
 - Fullscreen is now always offered via our own control, independent of the embed's button; exit is discoverable via tap-to-reveal corner chip.
 - Watch button is a clean textless black square fully touching the image's bottom-left corner.
 - Remaining known backlog: notification like-button polish, bias bar/banner image work, Active CPU audit, article swipe-down regression, loading animation restore, privacy policy country+city, email swap to moneyisbroken@gmail.com.
+
+---
+Task ID: session17
+Agent: main
+Task: un-fullscreen reliability + card→article flash + <7min video preference + read-article feed retention (user reports)
+
+Work Log:
+- video-player.tsx (exit): exit chip now fires on onPointerDown (click delivery over a cross-origin iframe is flaky on mobile browsers) with click as idempotent backstop; chip enlarged to 48px, bg-black/90, no backdrop-blur (iOS hit-testing above iframes); auto-hide 3s→8s (the 3s vanish made the exit feel broken mid-reach). The fullscreen top tap-strip now toggles: first tap reveals the chip, a tap while the chip is showing exits fullscreen directly (large reliable exit target). exitFs tries document.exitFullscreen → webkitExitFullscreen → webkitCancelFullscreen with promise catch fallback.
+- topic-detail.tsx (flash): replaced the full-screen opacity 0→1 crossfade (mid-transition the whole viewport is a half-transparent solid = the "fullscreen flash"; backdrop-blur top bar inside a fading parent compounds it) with an opaque sheet slide-up: initial y:100% → 0, exit y:100% (also the natural continuation of swipe-down close), 0.34s ease [0.32,0.72,0,1], willChange:transform. dragClosing state removed (both close paths slide down).
+- video-quality.ts (duration): PREFERRED_MAX_DURATION_SECONDS=420. Candidate order is now concise-first within source-preference bands: [own-source ≤7min, other ≤7min, own-source long, other long]; longer videos remain eligible (preference, not requirement). Fallback news-y pick prefers a concise candidate if one appears later. Candidate window 7→9 so the long bands still get tried after concise failures.
+- route.ts: cache namespace videos2 → videos3 so pre-concise-first cached picks (incl. half-hour roundups) re-resolve immediately instead of replaying for 24h.
+- page-client.tsx (read retention): seen topics read within the last 10 minutes keep their FULL score (no demotion — the just-read story stays on screen, no scroll hunt, when returning to the feed); older seen topics still get the -15 demotion. The visibility gate now tests the score WITHOUT the seen penalty (base > -10) — a read story can rank lower but can NEVER be removed just because it was read; only genuine dislike signals hide a topic. (Root cause: the old -15 penalty + score>-10 filter was deleting low-base read topics outright.)
+- Verified: bunx tsc --noEmit exit 0, eslint clean, dev server 200, SSR renders, no errors in dev log.
+- Committed 6472716 and pushed to main.
+
+Stage Summary:
+- Un-fullscreen now works via 3 redundant paths: the chip (pointerdown), a second tap on the top strip, and ESC.
+- Article open/close is a smooth opaque sheet slide — no screen-wide crossfade flash.
+- Watch videos prefer ≤7-minute coverage; half-hour broadcast roundups lose to any qualifying concise video; cached old picks re-resolve (videos3).
+- Reading an article no longer deletes it from the feed: recent reads keep their position, old reads demote but never disappear.
