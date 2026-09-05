@@ -558,8 +558,8 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
           <ImageBadges />
-          {/* Experimental video preview — half-volume inline video
-              0.8s after the image is viewed (landscape only). */}
+          {/* Experimental video preview — half-volume inline video the
+              moment the card is on screen (WATCH chip bottom-left). */}
           {showVideoPreview && <HeroVideoPreview topicId={topic.topicId} />}
         </div>
       )}

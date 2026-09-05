@@ -29,7 +29,9 @@ import { getRating } from '@/lib/source-ratings'
 import { useVideoWatch } from '@/lib/video-watch'
 import { InlineVideo, WatchPill } from '@/components/video-player'
 import {
+  cancelLateVideoArm,
   consumeVideoAutoplay,
+  onLateVideoArm,
   pauseAllPreviews,
   resumeAllPreviews,
   type ResolvedVideo,
@@ -107,6 +109,28 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     handedOffRef.current,
   )
   const [videoOpen, setVideoOpen] = React.useState(false)
+  // ── LATE handoff (user: "a few times when i click on a preview video
+  // it takes me to the article and the video doesn't play in the
+  // article") ──
+  // The card was tapped while its video was still RESOLVING — the
+  // fetch lands a beat after this sheet opened. The store notifies us
+  // the moment that happens; we start playing it here exactly like the
+  // synchronous handoff (unless the user already opened the video
+  // themselves via the Watch square).
+  React.useEffect(() => {
+    if (!videoWatchOn) return
+    const off = onLateVideoArm((armedTopicId, video) => {
+      if (armedTopicId !== topic.topicId) return
+      if (videoOpen || handedOffVideo) return
+      setHandedOffVideo(video)
+    })
+    return () => {
+      off()
+      // The article closed before the video resolved — drop the
+      // request so the feed preview just plays normally when it lands.
+      cancelLateVideoArm(topic.topicId)
+    }
+  }, [topic.topicId, videoWatchOn, videoOpen, handedOffVideo])
   // ── Article-open silencing (see video-preview-store) ──
   // The sheet renders OVER the still-mounted feed — every rolling card
   // preview pauses while the article is open (otherwise a preview's

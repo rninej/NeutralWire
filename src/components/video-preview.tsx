@@ -15,12 +15,15 @@
  *      loaded in the background — do not show the black screen with
  *      loading animation"). The player mounts INVISIBLE (opacity 0,
  *      over the photo) and only fades in once it is genuinely PLAYING.
- *   2. Once the image has been CONTINUOUSLY on screen for 0.8s
- *      (IntersectionObserver ≥ 50% + a dwell timer — a card the user
- *      is actively scrolling past never triggers it), we fetch the
+ *   2. The video resolves the MOMENT the image is sufficiently on
+ *      screen (IntersectionObserver ≥ 50% — the 0.8s dwell was
+ *      removed, user: "show it as fast as possible"; a card the user
+ *      is actively scrolling past never triggers it). We fetch the
  *      story's video (/api/video with the user's hl=/gl= locale so the
  *      video is in the user's language — UK → English). A two-slot
  *      semaphore keeps a fast scroll from firing a dozen resolutions.
+ *      While an article sheet is open, no preview player mounts (a
+ *      video must never roll behind the sheet) — see the store.
  *   3. LANDSCAPE PREFERRED, SHORTS ALLOWED (user spec): the RESOLVER
  *      ranks landscape candidates strictly ahead of portrait ones (a
  *      story with any landscape coverage resolves a landscape video —
@@ -46,6 +49,11 @@
  *   6. Scrolling the card off screen UNLOADS the player (no bandwidth
  *      burn); scrolling back re-plays it without re-fetching. A
  *      "no video" outcome is remembered for the tab session.
+ *   7. A small "WATCH" chip sits in the image's bottom-left corner
+ *      whenever the preview isn't rolling (user: "ONLY for the large
+ *      news cards show the play button in the bottom left corner, so
+ *      people know you can watch too") — the PREVIEW chip takes over
+ *      the corner while the video plays. Known misses drop it.
  *
  * The whole feature rides behind the videoWatch flag too — /api/video
  * refuses while the master video feature is off.
@@ -53,12 +61,19 @@
 
 import * as React from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Volume1, VolumeX } from 'lucide-react'
+import { Play, Volume1, VolumeX } from 'lucide-react'
 import { loadYouTubeIframeApi, type YTPlayer } from '@/lib/youtube-player'
 import {
   acquirePreviewSlot,
+  armLateIfRequested,
   claimPreviewAudio,
+  hasUserGestured,
+  isArticleSheetOpen,
+  markPreviewFetchPending,
+  markPreviewFetchSettled,
   markPreviewPlaying,
+  onArticleOpenChange,
+  onUserGesture,
   releasePreviewAudio,
   registerPreviewControls,
   videoLocaleParams,
@@ -66,8 +81,11 @@ import {
   type ResolvedVideo,
 } from '@/lib/video-preview-store'
 
-/** User spec: the image must be viewed for 0.8s before the preview arms. */
-const DWELL_MS = 800
+/** User spec: "remove the 0.8 second wait from the preview and show it
+ *  as fast as possible" — the video resolves the moment the card is
+ *  sufficiently on screen (no dwell timer). The ≥50% visibility gate
+ *  itself stays: an off-screen card still never arms. */
+const DWELL_MS = 0
 
 /** User spec: preview sound at half of normal volume. */
 const PREVIEW_VOLUME = 50 // percent (YouTube) — 0.5 for <video>
@@ -97,7 +115,10 @@ const EASE_OUT = [0.16, 1, 0.3, 1] as const
  *
  * Mounts hidden; the parent fades the whole overlay in only when this
  * reports PLAYING. Half-volume, unmuted, with an autoplay-block
- * fallback to muted (then the audio-lease waiters never see us). */
+ * fallback to muted — and the muted state is RECOVERABLE: the first
+ * user interaction with the page un-mutes it (the fallback used to be
+ * permanent, which read as "sound is muted on home and only activates
+ * in article" — see the store's gesture tracking). */
 function YouTubePreviewPlayer({
   topicId,
   videoId,
@@ -123,6 +144,40 @@ function YouTubePreviewPlayer({
   React.useEffect(() => {
     let cancelled = false
     let reported = false
+
+    // ── Audible recovery (un-mute paths, all gesture-gated) ──
+    // Browsers pause a video you un-mute outside a user gesture, so
+    // every un-mute first ensures the user has interacted.
+    const unMuteNow = () => {
+      if (cancelled) return
+      blockedRef.current = false
+      audibleRef.current = true
+      try {
+        playerRef.current?.unMute()
+        playerRef.current?.setVolume(PREVIEW_VOLUME)
+      } catch {
+        // player died — silent
+      }
+      onMutedChange(false)
+    }
+    const tryUnmute = () => {
+      if (cancelled) return
+      if (claimPreviewAudio(topicId)) {
+        unMuteNow()
+        return
+      }
+      // Someone else is audible — queue (fires when they scroll off).
+      waitForPreviewAudio(topicId, () => {
+        if (cancelled) return
+        if (!hasUserGestured()) {
+          // Un-muting now would just get the video paused by policy —
+          // drop the lease; the gesture handler re-claims later.
+          releasePreviewAudio(topicId)
+          return
+        }
+        unMuteNow()
+      })
+    }
 
     loadYouTubeIframeApi()
       .then((YT) => {
@@ -150,7 +205,8 @@ function YouTubePreviewPlayer({
             onReady: (e) => {
               if (cancelled) return
               // Audible preview requires the single-sound lease; without
-              // it we start muted so two cards never talk over each other.
+              // it we start muted so two cards never talk over each
+              // other.
               audibleRef.current = claimPreviewAudio(topicId)
               if (audibleRef.current) {
                 e.target.setVolume(PREVIEW_VOLUME)
@@ -160,15 +216,15 @@ function YouTubePreviewPlayer({
                 // Queue for the lease — granted when the audible card
                 // scrolls away.
                 waitForPreviewAudio(topicId, () => {
-                  if (cancelled || blockedRef.current) return
-                  audibleRef.current = true
-                  try {
-                    playerRef.current?.unMute()
-                    playerRef.current?.setVolume(PREVIEW_VOLUME)
-                    onMutedChange(false)
-                  } catch {
-                    // player died — silent
+                  if (cancelled) return
+                  if (!hasUserGestured()) {
+                    // Un-muting now would just get the video paused by
+                    // policy — drop the lease; the gesture handler
+                    // re-claims later.
+                    releasePreviewAudio(topicId)
+                    return
                   }
+                  unMuteNow()
                 })
               }
               e.target.playVideo()
@@ -196,6 +252,9 @@ function YouTubePreviewPlayer({
               } catch {
                 // silent
               }
+              // Recover as soon as the user interacts with the page —
+              // from then on audible playback is allowed.
+              onUserGesture(tryUnmute)
             },
             onError: () => {
               // 101/150 = the owner disallows embedding — the parent
@@ -251,6 +310,8 @@ function YouTubePreviewPlayer({
       } catch {
         // silent
       }
+      // Recover the sound as soon as the user interacts (see the store).
+      onUserGesture(tryUnmute)
     }, 3500)
 
     return () => {
@@ -314,11 +375,64 @@ function NativePreviewPlayer({
           onDead() // even muted failed — hotlink protection etc.
           return
         }
-        // Autoplay policy — retry muted, free the sound lease.
+        // Autoplay policy — retry muted, free the sound lease, and
+        // recover the sound at the first user gesture (the fallback
+        // used to be permanent: "sound is muted on home screen and
+        // only activates in article" — see the store's gesture
+        // tracking).
         releasePreviewAudio(topicId)
         audibleRef.current = false
         onMutedChange(true)
         attempt(true)
+        onUserGesture(() => {
+          const el2 = ref.current
+          if (!el2 || startedRef.current !== true) return
+          if (claimPreviewAudio(topicId)) {
+            el2.muted = false
+            el2.volume = PREVIEW_VOLUME / 100
+            audibleRef.current = true
+            el2.play().catch(() => {
+              // policy still blocks — revert to muted
+              el2.muted = true
+              releasePreviewAudio(topicId)
+              audibleRef.current = false
+              el2.play().catch(() => {})
+            })
+            onMutedChange(false)
+            return
+          }
+          // Someone else is audible — queue for the lease; un-mute only
+          // once the user has interacted (policy pauses otherwise).
+          waitForPreviewAudio(topicId, () => {
+            const el3 = ref.current
+            if (!el3) return
+            if (!hasUserGestured()) {
+              releasePreviewAudio(topicId)
+              return
+            }
+            el3.muted = false
+            el3.volume = PREVIEW_VOLUME / 100
+            audibleRef.current = true
+            onMutedChange(false)
+          })
+        })
+      })
+    }
+    if (!audibleRef.current) {
+      // No lease — start muted and queue; un-mute on grant, but only
+      // after the user has interacted (un-muting earlier gets the
+      // video paused by the autoplay policy).
+      waitForPreviewAudio(topicId, () => {
+        const el2 = ref.current
+        if (!el2) return
+        if (!hasUserGestured()) {
+          releasePreviewAudio(topicId)
+          return
+        }
+        el2.muted = false
+        el2.volume = PREVIEW_VOLUME / 100
+        audibleRef.current = true
+        onMutedChange(false)
       })
     }
     attempt(!audibleRef.current)
@@ -382,12 +496,27 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   // ≥50% on screen (updated by the IntersectionObserver).
   const [visible, setVisible] = React.useState(false)
-  // Resolved video (null until found; landscape-gated for YouTube).
+  // Resolved video (null until found).
   const [video, setVideo] = React.useState<ResolvedVideo | null>(null)
   // The player is genuinely PLAYING → fade the overlay in.
   const [playing, setPlaying] = React.useState(false)
   // Muted state (lease lost or autoplay blocked) — chip icon only.
   const [muted, setMuted] = React.useState(false)
+  // A miss (no video for this story) — hides the Watch affordance too.
+  const [missed, setMissed] = React.useState(false)
+  // An article sheet is open — no NEW preview player mounts (a video
+  // must never roll behind the sheet while the user watches the
+  // article: user: "the video doesn't play in the article and i find out
+  // it is still playing on the main page"). A player that was ALREADY
+  // rolling when the sheet opened stays mounted and paused (the store
+  // pauses it) so it can RESUME at its position when the article closes
+  // — instead of restarting from zero.
+  const [sheetOpen, setSheetOpen] = React.useState(false)
+  const [holdMounted, setHoldMounted] = React.useState(false)
+  const playingRef = React.useRef(false)
+  React.useEffect(() => {
+    playingRef.current = playing
+  }, [playing])
   // One attempt per topic per session — never refetch after the first try.
   const triedRef = React.useRef(false)
   // Dead-video swaps (embed-disallowed candidates) — the client
@@ -397,6 +526,21 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
   // embeddable one ranks). After that the card is a miss for the
   // session; the server-side dead list persists for everyone else.
   const deadIdsRef = React.useRef<string[]>([])
+
+  // ── Article-open tracking (reactive — see the store) ──
+  React.useEffect(() => {
+    setSheetOpen(isArticleSheetOpen())
+    return onArticleOpenChange(setSheetOpen)
+  }, [])
+  // When the sheet opens: a playing preview is HELD (mounted + paused,
+  // resuming at its position on close); a resolving/buffering one is
+  // gated off entirely (mounts fresh after the close — it had never
+  // started, so nothing is lost).
+  React.useEffect(() => {
+    if (sheetOpen) setHoldMounted(playingRef.current)
+    else setHoldMounted(false)
+  }, [sheetOpen])
+
   // ── Visibility tracking ──
   React.useEffect(() => {
     const el = containerRef.current
@@ -421,6 +565,7 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
     if (!deadVideoId || deadIdsRef.current.includes(deadVideoId) || deadIdsRef.current.length >= 3) {
       setVideo(null)
       markMiss(topicId)
+      setMissed(true)
       return
     }
     deadIdsRef.current = [...deadIdsRef.current, deadVideoId]
@@ -447,10 +592,12 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
         } else {
           setVideo(null)
           markMiss(topicId)
+          setMissed(true)
         }
       } catch {
         setVideo(null)
         markMiss(topicId)
+        setMissed(true)
       }
     })()
   }
@@ -465,13 +612,17 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
     }
   }, [visible])
 
-  // ── 0.8s dwell → resolve the video (once, throttled, locale-aware) ──
-  // The timer RESETS every time the card dips below 50% visibility, so a
-  // card the user is actively scrolling past never arms.
+  // ── Resolve the video (once, throttled, locale-aware) — as soon as
+  //    the card is on screen (user: "remove the 0.8 second wait from
+  //    the preview and show it as fast as possible"). The fetch is
+  //    registered as PENDING in the store while in flight: if the user
+  //    taps the card mid-flight, the article that opens gets handed the
+  //    video the moment it lands (late handoff). ──
   React.useEffect(() => {
     if (!visible || triedRef.current || hadMiss(topicId)) return
-    const timer = setTimeout(() => {
+    const arm = () => {
       triedRef.current = true
+      markPreviewFetchPending(topicId)
       ;(async () => {
         const release = await acquirePreviewSlot()
         try {
@@ -483,25 +634,37 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
           const data = (await res.json()) as ResolvedVideo & { ok: boolean; reason?: string; aspect?: number }
           if (data?.ok && data.kind) {
             // Any aspect previews now — the RESOLVER already ranks
-            // landscape candidates ahead of portrait ones ("try harder
-            // to fetch videos which are in landscape mode"), and a
+            // landscape candidates ahead of portrait ones, and a
             // short-form video is a valid big-card preview (user spec).
             const resolved: ResolvedVideo = data
             // Tapping this card while the video is previewing opens the
             // article with the video already rolling.
             markPreviewPlaying(topicId, resolved)
             setVideo(resolved)
+            // The card may have been tapped while this fetch was in
+            // flight — its article is open and waiting for THIS.
+            armLateIfRequested(topicId, resolved)
           } else {
             markMiss(topicId)
+            setMissed(true)
           }
         } catch {
           markMiss(topicId)
+          setMissed(true)
         } finally {
+          markPreviewFetchSettled(topicId)
           release()
         }
       })()
-    }, DWELL_MS)
-    return () => clearTimeout(timer)
+    }
+    // DWELL_MS = 0 → resolve immediately (still after the visibility
+    // gate — an off-screen card never arms); a positive DWELL_MS keeps
+    // the resettable dwell timer for future tuning.
+    if (DWELL_MS > 0) {
+      const timer = setTimeout(arm, DWELL_MS)
+      return () => clearTimeout(timer)
+    }
+    arm()
   }, [visible, topicId])
 
   // ── Unmount: release any audio lease (the resolved-video handoff
@@ -513,10 +676,29 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
     }
   }, [topicId])
 
-  const active = Boolean(video && visible)
+  // While an article sheet is open no NEW player mounts (a video must
+  // never roll behind the sheet); a player that was already rolling is
+  // HELD mounted + paused (resumes at position on close). Scrolling the
+  // card off screen unloads the player — scrolling back remounts a fresh
+  // one that must buffer again before it can fade in (otherwise the
+  // overlay would flash black over the photo).
+  const active = Boolean(video && visible && (!sheetOpen || holdMounted))
 
   return (
     <div ref={containerRef} className="pointer-events-none absolute inset-0 z-[1]">
+      {/* Watch affordance (bottom-left, ONLY on these large cards —
+          user: "so people know you can watch too"). Rendered while no
+          video is rolling (the PREVIEW chip takes the corner once it
+          is) and dropped for known misses. pointer-events pass through
+          to the card: tapping opens the article, as always. */}
+      {!playing && !missed && !sheetOpen && (
+        <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 py-[3px] pl-1.5 pr-2 backdrop-blur-[2px]">
+          <Play className="h-3 w-3 fill-current text-white/80" />
+          <span className="text-[8px] font-extrabold uppercase leading-none tracking-[0.14em] text-white/90">
+            Watch
+          </span>
+        </div>
+      )}
       {/* The player mounts over the photo INVISIBLE and only fades in
           when it is genuinely playing — the image is never replaced by
           a black loading box. */}
@@ -528,7 +710,7 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
             initial={{ opacity: 0 }}
             animate={{ opacity: playing ? 1 : 0 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.35, ease: EASE_OUT }}
+            transition={{ duration: 0.25, ease: EASE_OUT }}
           >
             {video?.kind === 'youtube' && video.videoId ? (
               <YouTubePreviewPlayer

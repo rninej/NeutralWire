@@ -1120,16 +1120,21 @@ export default function DebugPage() {
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                   Every large news card (the hero cards + the desktop
-                  magazine grid) plays a video preview inside its image
-                  0.8 seconds after it has been on screen — resolved in
-                  the user's language, preferring landscape videos
+                  magazine grid) shows a small WATCH chip in the image's
+                  bottom-left corner and plays a video preview inside its
+                  image the moment it is on screen — resolved in the
+                  user's language, preferring landscape videos
                   (short-form videos play too when that's the coverage),
-                  sound at half volume, and shown only once fully loaded
-                  (no loading box). Tapping a card with a rolling
-                  preview opens the article with the video continuing
-                  right where the preview was. Scroll down — each big
-                  card resolves as it comes into view. Refresh the
-                  homepage after switching to see the change.
+                  sound at half volume (un-muted at the first user
+                  interaction if the browser muted the autoplay), and
+                  shown only once fully loaded (no loading box). Tapping
+                  a card with a rolling preview opens the article with
+                  the video continuing right where the preview was — and
+                  a tap while it is still resolving hands it over the
+                  moment it lands (the feed never keeps playing behind
+                  the article). Scroll down — each big card resolves as
+                  it comes into view. Refresh the homepage after
+                  switching to see the change.
                 </p>
                 {videoPreviewResult && (
                   <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">

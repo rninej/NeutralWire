@@ -63,6 +63,35 @@ const playingByTopic = new Map<string, ResolvedVideo>()
 /** One-shot "open with the video rolling" requests, keyed by topicId. */
 const armedByTopic = new Map<string, ResolvedVideo>()
 
+/** Recently-consumed handoffs (topic → video + timestamp). React can
+ *  RESTART a render (concurrent features discard the in-progress render
+ *  when an update lands mid-render) — the first, discarded render already
+ *  consumed the one-shot arm, and the committed re-render would find the
+ *  map empty → the article opens with the photo + Watch square instead of
+ *  the playing video (user: "the video doesn't play in the article").
+ *  A short re-consume window hands the SAME video to those restarts; it
+ *  expires so one-shot semantics survive (a much later open never
+ *  autoplays). */
+const recentlyConsumed = new Map<string, { video: ResolvedVideo; ts: number }>()
+
+/** How long after a consume a re-render may claim the same video. */
+const RECONSUME_WINDOW_MS = 5000
+
+/** Cards the user tapped while their video was still RESOLVING (the
+ *  fetch was in flight) — the handoff is "late": when the fetch lands,
+ *  the already-open article is notified and starts playing it (user:
+ *  "a few times when I click on a preview video it takes me to the
+ *  article and the video doesn't play in the article"). */
+const lateArmByTopic = new Set<string>()
+
+/** Topics whose /api/video fetch is currently in flight (registered by
+ *  HeroVideoPreview around its resolve) — lets the card's click handler
+ *  know a late handoff is possible. */
+const pendingFetchTopics = new Set<string>()
+
+/** Late-handoff listeners (the open article subscribes). */
+const armListeners = new Set<(topicId: string, video: ResolvedVideo) => void>()
+
 /** Called by HeroVideoPreview when its video actually starts PLAYING. */
 export function markPreviewPlaying(topicId: string, video: ResolvedVideo): void {
   playingByTopic.set(topicId, video)
@@ -106,33 +135,81 @@ export function registerPreviewControls(
   }
 }
 
+/** Register/unregister an in-flight preview resolution (late-arm window). */
+export function markPreviewFetchPending(topicId: string): void {
+  pendingFetchTopics.add(topicId)
+}
+export function markPreviewFetchSettled(topicId: string): void {
+  pendingFetchTopics.delete(topicId)
+}
+
 /**
  * Called by the CARD's click handler (synchronously, before
  * onOpenDetail) — if this card's preview is playing, arm the topic so
  * the article opens with the video rolling, carrying the preview's
  * CURRENT POSITION (the article continues instead of restarting), and
  * PAUSE the card's player so the two never play audio on top of each
- * other while the article's player spins up. Cheap no-op otherwise.
+ * other while the article's player spins up. If the video is still
+ * RESOLVING, a LATE arm is requested instead: the moment the fetch
+ * lands, the (already-open) article is notified and starts playing.
+ * Cheap no-op otherwise.
  */
 export function armVideoIfPlaying(topicId: string): void {
   const video = playingByTopic.get(topicId)
-  if (!video) return
-  const controls = previewControls.get(topicId)
-  const startAt = (() => {
+  if (video) {
+    const controls = previewControls.get(topicId)
+    const startAt = (() => {
+      try {
+        return controls?.getTime() ?? 0
+      } catch {
+        return 0
+      }
+    })()
+    // Only attach a meaningful startAt (a second or less is a restart).
+    armedByTopic.set(topicId, startAt > 1 ? { ...video, startAt } : video)
+    // Silence the card immediately — the article's player takes over.
     try {
-      return controls?.getTime() ?? 0
+      controls?.pause()
     } catch {
-      return 0
+      // player already gone — silent
     }
-  })()
-  // Only attach a meaningful startAt (a second or less is a restart).
-  armedByTopic.set(topicId, startAt > 1 ? { ...video, startAt } : video)
-  // Silence the card immediately — the article's player takes over.
-  try {
-    controls?.pause()
-  } catch {
-    // player already gone — silent
+    return
   }
+  // Fetch in flight → the article that is about to open gets the video
+  // the moment it resolves (late handoff). Nothing to do otherwise.
+  if (pendingFetchTopics.has(topicId)) {
+    lateArmByTopic.add(topicId)
+  }
+}
+
+/** Called by HeroVideoPreview when a fetch RESOLVES: if the user had
+ *  tapped this card's article open while the fetch was in flight, arm
+ *  the handoff NOW and notify the open article so it starts playing. */
+export function armLateIfRequested(topicId: string, video: ResolvedVideo): void {
+  if (!lateArmByTopic.has(topicId)) return
+  lateArmByTopic.delete(topicId)
+  armedByTopic.set(topicId, video)
+  for (const cb of [...armListeners]) {
+    try {
+      cb(topicId, video)
+    } catch {
+      // a broken listener must never block the others
+    }
+  }
+}
+
+/** Subscribe to late handoffs (the open article). Returns unregister. */
+export function onLateVideoArm(
+  cb: (topicId: string, video: ResolvedVideo) => void,
+): () => void {
+  armListeners.add(cb)
+  return () => armListeners.delete(cb)
+}
+
+/** Drop a stale late-arm request (the article closed before the video
+ *  resolved — the feed preview just plays normally when it lands). */
+export function cancelLateVideoArm(topicId: string): void {
+  lateArmByTopic.delete(topicId)
 }
 
 /**
@@ -143,8 +220,19 @@ export function armVideoIfPlaying(topicId: string): void {
  */
 export function consumeVideoAutoplay(topicId: string): ResolvedVideo | null {
   const video = armedByTopic.get(topicId)
-  if (video) armedByTopic.delete(topicId)
-  return video ?? null
+  if (video) {
+    armedByTopic.delete(topicId)
+    recentlyConsumed.set(topicId, { video, ts: Date.now() })
+    return video
+  }
+  // Render-restart re-consume (see recentlyConsumed above): a discarded
+  // render already took the one-shot arm — the committed render still
+  // deserves the video it was opened with.
+  const recent = recentlyConsumed.get(topicId)
+  if (recent && Date.now() - recent.ts < RECONSUME_WINDOW_MS) {
+    return recent.video
+  }
+  return null
 }
 
 // ── 2. User locale → /api/video query params ──
@@ -291,10 +379,41 @@ export function acquirePreviewSlot(): Promise<() => void> {
 // sheet while the article's own player runs. TopicDetail pauses EVERY
 // live preview when it opens and resumes them when it closes (the ones
 // that were armed for THIS article stay paused by the handoff until the
-// sheet is gone, then continue right where they left off).
+// sheet is gone, then continue right where they left off). The flag is
+// also REACTIVE: a card whose video resolves only AFTER the sheet is
+// already open (the click→fetch race) must never start rolling behind
+// it — HeroVideoPreview gates its player on this state.
+
+/** Whether an article sheet is currently open. */
+let articleOpenState = false
+const articleOpenListeners = new Set<(open: boolean) => void>()
+
+/** Read the article-sheet state (a preview resolving while an article
+ *  is open stays parked, not playing). */
+export function isArticleSheetOpen(): boolean {
+  return articleOpenState
+}
+
+/** Subscribe to article open/close. Returns unregister. */
+export function onArticleOpenChange(cb: (open: boolean) => void): () => void {
+  articleOpenListeners.add(cb)
+  return () => articleOpenListeners.delete(cb)
+}
+
+function notifyArticleOpen(open: boolean): void {
+  for (const cb of [...articleOpenListeners]) {
+    try {
+      cb(open)
+    } catch {
+      // a broken listener must never block the others
+    }
+  }
+}
 
 /** Pause every live preview player (called when an article opens). */
 export function pauseAllPreviews(): void {
+  articleOpenState = true
+  notifyArticleOpen(true)
   for (const [id, controls] of previewControls) {
     try {
       controls.pause()
@@ -307,6 +426,8 @@ export function pauseAllPreviews(): void {
 
 /** Resume the previews that pauseAllPreviews() paused (article closed). */
 export function resumeAllPreviews(): void {
+  articleOpenState = false
+  notifyArticleOpen(false)
   for (const id of [...pausedByArticle]) {
     const controls = previewControls.get(id)
     pausedByArticle.delete(id)
@@ -376,4 +497,64 @@ export function releasePreviewAudio(topicId: string): void {
   } else {
     audioLeaseWaiters.delete(topicId)
   }
+}
+
+// ── 6. User-gesture tracking (audible autoplay recovery) ──
+// Browsers refuse AUDIBLE autoplay until the user has interacted with
+// the page (a tap/keypress — scrolling does NOT count). A preview that
+// started before the first gesture therefore falls back to muted — but
+// that used to be PERMANENT for the player's lifetime, so the feed
+// stayed silent even after the user had tapped around (user: "sometimes
+// the sound is muted on home screen and only activates in article").
+// Muted previews now recover: the first pointerdown/keydown anywhere
+// un-mutes them (Chrome/Firefox honour sticky interaction; a still-
+// refusing browser just pauses, which the user's next tap resumes).
+
+let userGestured = false
+const gestureWaiters: Array<() => void> = []
+
+if (typeof document !== 'undefined') {
+  const markGesture = () => {
+    userGestured = true
+    const waiters = gestureWaiters.splice(0)
+    for (const w of waiters) {
+      try {
+        w()
+      } catch {
+        // a broken waiter must never block the others
+      }
+    }
+  }
+  // once:true — the FIRST interaction is all the autoplay policy needs.
+  document.addEventListener('pointerdown', markGesture, {
+    capture: true,
+    once: true,
+    passive: true,
+  })
+  document.addEventListener('keydown', markGesture, {
+    capture: true,
+    once: true,
+    passive: true,
+  })
+}
+
+/** Whether the user has interacted with the page at least once — from
+ *  then on, browsers allow audible playback attempts. */
+export function hasUserGestured(): boolean {
+  return userGestured
+}
+
+/** Run cb once the user has interacted (immediately if they already
+ *  have). Un-muting outside a gesture is what gets videos paused by
+ *  the autoplay policy, so lease grants check this first. */
+export function onUserGesture(cb: () => void): void {
+  if (userGestured) {
+    try {
+      cb()
+    } catch {
+      // listener's own failure is not our problem
+    }
+    return
+  }
+  gestureWaiters.push(cb)
 }

@@ -3,20 +3,23 @@
 /**
  * video-player.tsx — the Watch feature, in-article INLINE video.
  *
- * Opened by the Watch square on the ARTICLE VIEW's hero image (bottom-left;
- * home-screen cards never show it) — or AUTO-OPENED with `initialVideo`
- * when the user taps a home-feed card whose video preview is rolling
- * (user: "when I click on the preview it should open the article with
- * the video playing, not the normal image with the play button"). Tapping
- * Watch / the preview plays the video INSIDE the news image itself — the
- * image box becomes the player and the close square restores the photo.
+ * OPENED BY the Watch square on the ARTICLE VIEW's hero image
+ * (bottom-left; home-screen cards never show it) — or AUTO-OPENED with
+ * `initialVideo` when the user taps a home-feed card whose video preview
+ * is rolling (user: "when I click on the preview it should open the
+ * article with the video playing, not the normal image with the play
+ * button"). Tapping Watch / the preview plays the video INSIDE the news
+ * image itself — the image box becomes the player and the close square
+ * restores the photo.
  *
- * NO LOADING UI (user spec): while the video resolves and buffers, the
- * overlay stays TRANSPARENT — the news photo keeps showing through; there
- * is no black box, no shimmer, no spinner. The player (YouTube embed via
- * the official IFrame API, or a native <video>) mounts hidden and the
- * overlay only fades to black + video once the player reports it is
- * genuinely PLAYING.
+ * LOADING FEEDBACK (user: "in the news article when i click play button
+ * it doesn't show a loading animation"): a USER-INITIATED open (the
+ * Watch square) shows a centered spinner from the tap until the video
+ * is genuinely PLAYING — through resolution and first-play buffering —
+ * over a lightly dimmed photo; mid-play buffering shows a small spinner
+ * over the video. The PREVIEW-HANDOFF path (initialVideo) stays
+ * spinner-free and transparent: that transition is meant to be
+ * seamless, with the photo showing through until playback starts.
  *
  * NO CHROME AT LOAD (user spec: "when the video is showing it looks
  * cluttered because for first 2 seconds I see the video progress bar,
@@ -127,6 +130,28 @@ function fmtTime(s: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`
 }
 
+/** Safari's prefixed element-fullscreen surface (older macOS / iPad). */
+interface WebkitFullscreenElement extends HTMLElement {
+  webkitRequestFullscreen?: () => Promise<void> | void
+}
+interface WebkitFullscreenDocument extends Document {
+  webkitFullscreenElement?: Element | null
+  webkitExitFullscreen?: () => Promise<void> | void
+}
+
+/** The current fullscreen element, unprefixed or -webkit- (Safari). */
+function currentFullscreenElement(): Element | null {
+  const doc = document as WebkitFullscreenDocument
+  return doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null
+}
+
+/** Whether ELEMENT (box) fullscreen is supported at all. */
+function boxFullscreenSupported(): boolean {
+  if (typeof document === 'undefined') return false
+  const root = document.documentElement as WebkitFullscreenElement
+  return typeof root.requestFullscreen === 'function' || typeof root.webkitRequestFullscreen === 'function'
+}
+
 /** iOS Safari only fullscreens <video> elements (webkitEnterFullscreen);
  *  everywhere else the whole image box goes fullscreen (the video keeps
  *  letterboxing inside it). */
@@ -146,12 +171,29 @@ function toggleBoxFullscreen(
   video: HTMLVideoElement | null,
 ): void {
   try {
-    if (document.fullscreenElement) {
-      if (document.exitFullscreen) void document.exitFullscreen()
+    if (currentFullscreenElement()) {
+      const doc = document as WebkitFullscreenDocument
+      if (doc.exitFullscreen) {
+        void doc.exitFullscreen()
+      } else if (doc.webkitExitFullscreen) {
+        void doc.webkitExitFullscreen()
+      }
       return
     }
-    if (box?.requestFullscreen) {
-      box.requestFullscreen().catch(() => tryIosVideoFullscreen(video))
+    const el = box as WebkitFullscreenElement | null
+    if (el?.requestFullscreen) {
+      el.requestFullscreen().catch(() => tryIosVideoFullscreen(video))
+      return
+    }
+    if (el?.webkitRequestFullscreen) {
+      try {
+        const r = el.webkitRequestFullscreen()
+        if (r && typeof (r as Promise<void>).catch === 'function') {
+          ;(r as Promise<void>).catch(() => tryIosVideoFullscreen(video))
+        }
+      } catch {
+        tryIosVideoFullscreen(video)
+      }
       return
     }
   } catch {
@@ -362,13 +404,18 @@ function VideoChrome({
 
 // ── shared fullscreen state hook ──
 
-/** Tracks whether OUR box is the fullscreen element (icon swap). */
+/** Tracks whether OUR box is the fullscreen element (icon swap) —
+ *  listens to both the standard and Safari's -webkit- event. */
 function useIsFullscreen(): boolean {
   const [fs, setFs] = React.useState(false)
   React.useEffect(() => {
-    const onChange = () => setFs(!!document.fullscreenElement)
+    const onChange = () => setFs(!!currentFullscreenElement())
     document.addEventListener('fullscreenchange', onChange)
-    return () => document.removeEventListener('fullscreenchange', onChange)
+    document.addEventListener('webkitfullscreenchange', onChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange)
+      document.removeEventListener('webkitfullscreenchange', onChange)
+    }
   }, [])
   return fs
 }
@@ -387,6 +434,7 @@ function ArticleYouTubePlayer({
   startAt,
   onPlaying,
   onDead,
+  onBuffering,
 }: {
   videoId: string
   storyTitle: string
@@ -395,8 +443,18 @@ function ArticleYouTubePlayer({
   /** The player rejected this video (embed-disallowed etc.) — the
    *  parent reports it to the resolver and swaps to the next candidate. */
   onDead: (videoId: string) => void
+  /** Buffering started/ended (YT state 3 → 1/2) — drives the parent's
+   *  loading spinner (user: "when i click play button it doesn't show
+   *  a loading animation"). */
+  onBuffering: (buffering: boolean) => void
 }) {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
+  // A STABLE wrapper the IFrame API never replaces (it swaps the inner
+  // host div for its iframe — hostRef.current ends up DETACHED from the
+  // DOM, so `hostRef.current.closest('[data-nw-video-box]')` returned
+  // null and the fullscreen button did NOTHING. User: "the fullscreen
+  // button doesn't work".)
+  const wrapRef = React.useRef<HTMLDivElement | null>(null)
   const playerRef = React.useRef<YTPlayer | null>(null)
   const [fallbackIframe, setFallbackIframe] = React.useState(false)
   const reportedRef = React.useRef(false)
@@ -456,8 +514,13 @@ function ArticleYouTubePlayer({
                   onPlaying()
                 }
                 setPlaying(true)
+                onBuffering(false)
               } else if (e.data === 2 /* PAUSED */) {
                 setPlaying(false)
+                onBuffering(false)
+              } else if (e.data === 3 /* BUFFERING */) {
+                // Data catching up mid-play — the parent's spinner.
+                onBuffering(true)
               }
             },
             // The user just tapped — a gesture — so audible autoplay is
@@ -555,15 +618,16 @@ function ArticleYouTubePlayer({
     }
   }
   const toggleFullscreen = () => {
-    const box = hostRef.current?.closest('[data-nw-video-box]') ?? null
+    // wrapRef is a STABLE DOM node (never replaced by the API), so the
+    // lookup of the fullscreen-target box actually resolves — this was
+    // the dead button (see wrapRef above).
+    const box = wrapRef.current?.closest('[data-nw-video-box]') ?? null
     toggleBoxFullscreen(box as HTMLElement | null, null)
   }
-  const fullscreenAvailable =
-    typeof document !== 'undefined' &&
-    typeof document.documentElement.requestFullscreen === 'function'
+  const fullscreenAvailable = boxFullscreenSupported()
 
   return (
-    <div className="absolute inset-0">
+    <div className="absolute inset-0" ref={wrapRef}>
       {/* The API REPLACES the inner host div with its iframe — sizing
           classes live on this stable outer wrapper. */}
       <div className="absolute inset-0 [&_iframe]:h-full [&_iframe]:w-full">
@@ -596,11 +660,14 @@ function ArticleNativeVideo({
   startAt,
   onPlaying,
   onError,
+  onBuffering,
 }: {
   url: string
   startAt?: number
   onPlaying: () => void
   onError: () => void
+  /** Buffering started/ended (waiting/playing) — the parent's spinner. */
+  onBuffering: (buffering: boolean) => void
 }) {
   const ref = React.useRef<HTMLVideoElement | null>(null)
   const [playing, setPlaying] = React.useState(false)
@@ -614,11 +681,7 @@ function ArticleNativeVideo({
   React.useEffect(() => {
     const el = ref.current
     const hasEl = !!el && 'webkitEnterFullscreen' in el
-    setFullscreenAvailable(
-      (typeof document !== 'undefined' &&
-        typeof document.documentElement.requestFullscreen === 'function') ||
-        hasEl,
-    )
+    setFullscreenAvailable(boxFullscreenSupported() || hasEl)
   }, [url])
 
   // Autoplay fallback: autoPlay tries audible playback (allowed — the
@@ -706,8 +769,13 @@ function ArticleNativeVideo({
         }}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
+        onWaiting={() => onBuffering(true)}
+        onPlaying={() => {
+          onBuffering(false)
+          onPlaying()
+        }}
+        onCanPlay={() => onBuffering(false)}
         onVolumeChange={(e) => setMuted(e.currentTarget.muted)}
-        onPlaying={onPlaying}
         onError={onError}
       />
       <VideoChrome
@@ -733,6 +801,8 @@ export function InlineVideo({ topicId, storyTitle, onClose, initialVideo }: Vide
   const [loading, setLoading] = React.useState(!initialVideo)
   // The player is genuinely rolling → fade the (black + video) overlay in.
   const [playing, setPlaying] = React.useState(false)
+  // The player is fetching more data mid-play — small centered spinner.
+  const [buffering, setBuffering] = React.useState(false)
   // Native <video> playback failed (hotlink protection etc.)
   const [videoError, setVideoError] = React.useState(false)
   // >0 while an automatic retry is in flight.
@@ -740,6 +810,12 @@ export function InlineVideo({ topicId, storyTitle, onClose, initialVideo }: Vide
   // Videos the player rejected (embed-disallowed) — the fetch re-runs
   // with them excluded so the resolver returns the NEXT candidate.
   const [deadIds, setDeadIds] = React.useState<string[]>([])
+  // Opened by the user tapping the Watch square (NOT a preview handoff):
+  // they expect feedback — a loading spinner runs from the tap until
+  // the video is genuinely playing (user: "in the news article when i
+  // click play button it doesn't show a loading animation"). The
+  // handoff path stays seamless (no spinner) by design.
+  const userInitiated = !initialVideo
 
   // ── Fetch the resolved video for this story — with automatic retries ──
   // Skipped entirely when the preview handed us the resolved video.
@@ -844,6 +920,7 @@ export function InlineVideo({ topicId, storyTitle, onClose, initialVideo }: Vide
             startAt={video.startAt}
             onPlaying={() => setPlaying(true)}
             onDead={handleDeadVideo}
+            onBuffering={setBuffering}
           />
         </div>
       ) : ready && video?.kind === 'video' && video.url ? (
@@ -856,12 +933,13 @@ export function InlineVideo({ topicId, storyTitle, onClose, initialVideo }: Vide
             startAt={video.startAt}
             onPlaying={() => setPlaying(true)}
             onError={() => setVideoError(true)}
+            onBuffering={setBuffering}
           />
         </div>
       ) : !ready ? (
-        // Resolving (or auto-retrying) — TRANSPARENT: the photo shows
-        // through; only the close square (below) marks that anything is
-        // happening. No spinner, no shimmer (user spec).
+        // Resolving (or auto-retrying) — transparent so the photo shows
+        // through, with a centered spinner for USER-INITIATED opens (the
+        // tap deserves feedback; the preview handoff stays seamless).
         <div className="absolute inset-0" aria-live="polite">
           <span className="sr-only">
             {retrying > 0 ? 'Retrying video search…' : 'Finding a video…'}
@@ -880,6 +958,29 @@ export function InlineVideo({ topicId, storyTitle, onClose, initialVideo }: Vide
               ? 'It can be re-enabled from the debug panel.'
               : 'Some very fresh stories have no video coverage — try again later.'}
           </div>
+        </div>
+      )}
+
+      {/* ── Loading spinner (user: "in the news article when i click
+              play button it doesn't show a loading animation") ──
+          Runs from the Watch tap until the video is genuinely PLAYING —
+          through resolution AND first-play buffering. The preview
+          handoff path (initialVideo) stays spinner-free: that transition
+          is meant to be seamless. A dead-video swap re-enters the fetch
+          phase and shows it again. */}
+      {!playing && !videoError && !(!loading && !!video && !video.ok) && (loading || userInitiated) && (
+        <div className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center bg-black/25">
+          <div
+            className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/30 border-t-white"
+            role="status"
+            aria-label="Loading video"
+          />
+        </div>
+      )}
+      {/* Mid-play buffering — small spinner over the (visible) video. */}
+      {buffering && playing && (
+        <div className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/30 border-t-white" />
         </div>
       )}
 
