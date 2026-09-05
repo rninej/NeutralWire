@@ -21,11 +21,15 @@
  *      story's video (/api/video with the user's hl=/gl= locale so the
  *      video is in the user's language — UK → English). A two-slot
  *      semaphore keeps a fast scroll from firing a dozen resolutions.
- *   3. LANDSCAPE ONLY: portrait videos (Shorts) never preview (user:
- *      "it has to be a landscape video to be played in a preview
- *      otherwise just don't show a preview"). YouTube videos are gated
- *      by the resolver's measured aspect (≥ 1.1); native RSS videos
- *      are measured from videoWidth/videoHeight after metadata loads.
+ *   3. LANDSCAPE PREFERRED, SHORTS ALLOWED (user spec): the RESOLVER
+ *      ranks landscape candidates strictly ahead of portrait ones (a
+ *      story with any landscape coverage resolves a landscape video —
+ *      "try harder to fetch videos which are in landscape mode"), but
+ *      a portrait short-form video is no longer a rejection: when a
+ *      Short is what the story has, the big card shows it too (user:
+ *      "make it so the big cards show short form videos too"),
+ *      letterboxed inside the image box. No client-side aspect gate
+ *      remains.
  *   4. When the video starts, it plays INSIDE the image with SOUND AT
  *      HALF VOLUME (setVolume 50 / video.volume 0.5). If the browser's
  *      autoplay policy blocks audible autoplay it silently falls back
@@ -33,12 +37,15 @@
  *      preview is audible at a time (audio lease, see the store).
  *   5. Tapping the card opens the article WITH THE VIDEO ALREADY
  *      PLAYING (not the photo + Watch square): while the preview holds
- *      a resolved video, the card's click arms the video handoff and
- *      TopicDetail starts playing it immediately.
+ *      a resolved video, the card's click arms the video handoff
+ *      (carrying the preview's current position — the article
+ *      continues instead of restarting) and TopicDetail starts playing
+ *      it immediately. The card's own player is paused at arm time so
+ *      the two never play on top of each other, and every live preview
+ *      pauses/resumes as the article opens/closes.
  *   6. Scrolling the card off screen UNLOADS the player (no bandwidth
  *      burn); scrolling back re-plays it without re-fetching. A
- *      "no video / not landscape" outcome is remembered for the tab
- *      session.
+ *      "no video" outcome is remembered for the tab session.
  *
  * The whole feature rides behind the videoWatch flag too — /api/video
  * refuses while the master video feature is off.
@@ -53,6 +60,7 @@ import {
   claimPreviewAudio,
   markPreviewPlaying,
   releasePreviewAudio,
+  registerPreviewControls,
   videoLocaleParams,
   waitForPreviewAudio,
   type ResolvedVideo,
@@ -63,14 +71,6 @@ const DWELL_MS = 800
 
 /** User spec: preview sound at half of normal volume. */
 const PREVIEW_VOLUME = 50 // percent (YouTube) — 0.5 for <video>
-
-/**
- * Landscape gate: a preview must be wider than tall (user spec — no
- * Shorts). 1.1 (not 1.0) so a measured 1.0-1.05 "square-ish" thumb
- * can't sneak a near-square video through; 4:3 (1.33) and 16:9 (1.78)
- * pass comfortably.
- */
-const LANDSCAPE_MIN_ASPECT = 1.1
 
 /** sessionStorage key prefix — remembers a known miss for this tab. */
 const MISS_KEY = 'nw:vpreview-miss:'
@@ -143,6 +143,7 @@ function YouTubePreviewPlayer({
             playsinline: 1,
             fs: 0,
             iv_load_policy: 3,
+            disablekb: 1,
             origin: window.location.origin,
           },
           events: {
@@ -210,6 +211,32 @@ function YouTubePreviewPlayer({
         if (!cancelled) onDead(null)
       })
 
+    // Article-open silencing + the handoff's startAt: expose
+    // pause/resume/getTime to the store while this player is alive.
+    const unregister = registerPreviewControls(topicId, {
+      pause: () => {
+        try {
+          playerRef.current?.pauseVideo()
+        } catch {
+          // silent
+        }
+      },
+      resume: () => {
+        try {
+          playerRef.current?.playVideo()
+        } catch {
+          // silent
+        }
+      },
+      getTime: () => {
+        try {
+          return playerRef.current?.getCurrentTime() ?? 0
+        } catch {
+          return 0
+        }
+      },
+    })
+
     // Autoplay-blocked isn't reported by every browser; if we never
     // reach PLAYING shortly after ready, fall back to muted playback.
     const blockProbe = setTimeout(() => {
@@ -229,6 +256,7 @@ function YouTubePreviewPlayer({
     return () => {
       cancelled = true
       clearTimeout(blockProbe)
+      unregister()
       releasePreviewAudio(topicId)
       try {
         playerRef.current?.destroy()
@@ -251,23 +279,23 @@ function YouTubePreviewPlayer({
 
 /** ── Native <video> player (RSS source videos) ──
  *
- * Waits until the browser can play through (buffered enough), checks
- * LANDSCAPE from the real dimensions, then plays at half volume —
- * hidden until the parent fades it in on the `playing` event. */
+ * Waits until the browser can play through (buffered enough), then
+ * plays at half volume — hidden until the parent fades it in on the
+ * `playing` event. Portrait (short-form) videos are fine: the element
+ * letterboxes inside the image box (object-contain) instead of being
+ * cropped or rejected. */
 function NativePreviewPlayer({
   topicId,
   url,
   onPlaying,
   onMutedChange,
   onDead,
-  onIneligible,
 }: {
   topicId: string
   url: string
   onPlaying: (muted: boolean) => void
   onMutedChange: (muted: boolean) => void
   onDead: () => void
-  onIneligible: () => void
 }) {
   const ref = React.useRef<HTMLVideoElement | null>(null)
   const audibleRef = React.useRef(false)
@@ -296,28 +324,49 @@ function NativePreviewPlayer({
     attempt(!audibleRef.current)
   }
 
+  // Article-open silencing + the handoff's startAt.
+  const controlsRef = React.useRef<HTMLVideoElement | null>(null)
+  React.useEffect(() => {
+    const el = controlsRef.current
+    if (!el) return
+    return registerPreviewControls(topicId, {
+      pause: () => el.pause(),
+      resume: () => {
+        el.play().catch(() => {
+          // un-muted resume can be blocked — try muted so the card at
+          // least keeps moving
+          el.muted = true
+          el.play().catch(() => {
+            // dead — the card's own error path takes over
+          })
+        })
+      },
+      getTime: () => el.currentTime || 0,
+    })
+  }, [topicId])
+
   return (
     <video
-      ref={ref}
+      ref={(el) => {
+        ref.current = el
+        controlsRef.current = el
+      }}
       src={url}
       // Preload in the background — invisible until it can truly play.
       preload="auto"
       playsInline
       loop
-      className="absolute inset-0 h-full w-full object-cover"
-      onLoadedMetadata={(e) => {
-        const el = e.currentTarget
-        // Landscape gate (user spec — no portrait/Short previews).
-        if (el.videoHeight > 0 && el.videoWidth / el.videoHeight < LANDSCAPE_MIN_ASPECT) {
-          onIneligible()
-          return
-        }
+      // object-contain: a portrait short letterboxes inside the image
+      // box instead of being center-cropped (user: big cards show
+      // short-form videos too).
+      className="absolute inset-0 h-full w-full object-contain"
+      onLoadedMetadata={() => {
         // "Fully loaded" proxy: enough buffer to play through without
         // stalling → start (still invisible until `playing` fires).
-        el.addEventListener('canplaythrough', startPlayback, { once: true })
+        ref.current?.addEventListener('canplaythrough', startPlayback, { once: true })
         // Some servers never let canplaythrough fire (no length hint) —
         // canplay is the pragmatic floor.
-        el.addEventListener('canplay', startPlayback, { once: true })
+        ref.current?.addEventListener('canplay', startPlayback, { once: true })
       }}
       onPlaying={() => onPlaying(!audibleRef.current)}
       onError={onDead}
@@ -384,13 +433,14 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
           { cache: 'no-store' },
         )
         const data = (await res.json()) as ResolvedVideo & { aspect?: number }
+        // Any aspect is accepted — portrait shorts preview too now
+        // (the resolver ranks landscape ahead, but a Short beats no
+        // preview at all).
         if (
           data?.ok &&
           data.kind === 'youtube' &&
           data.videoId &&
-          !deadIdsRef.current.includes(data.videoId) &&
-          typeof data.aspect === 'number' &&
-          data.aspect >= LANDSCAPE_MIN_ASPECT
+          !deadIdsRef.current.includes(data.videoId)
         ) {
           markPreviewPlaying(topicId, data)
           setVideo(data)
@@ -432,14 +482,10 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
           )
           const data = (await res.json()) as ResolvedVideo & { ok: boolean; reason?: string; aspect?: number }
           if (data?.ok && data.kind) {
-            // Landscape gate for YouTube (native is measured client-side).
-            if (
-              data.kind === 'youtube' &&
-              !(typeof data.aspect === 'number' && data.aspect >= LANDSCAPE_MIN_ASPECT)
-            ) {
-              markMiss(topicId)
-              return
-            }
+            // Any aspect previews now — the RESOLVER already ranks
+            // landscape candidates ahead of portrait ones ("try harder
+            // to fetch videos which are in landscape mode"), and a
+            // short-form video is a valid big-card preview (user spec).
             const resolved: ResolvedVideo = data
             // Tapping this card while the video is previewing opens the
             // article with the video already rolling.
@@ -507,11 +553,6 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
                 onDead={() => {
                   setPlaying(false)
                   setVideo(null)
-                }}
-                onIneligible={() => {
-                  // Portrait source video — no preview (user spec).
-                  setVideo(null)
-                  markMiss(topicId)
                 }}
               />
             ) : null}

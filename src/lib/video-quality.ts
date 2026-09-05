@@ -603,19 +603,23 @@ export function collectSearchCandidates(
  * outlet's own upload in the search results is how the source's video
  * gets played.
  *
- * CONCISE-FIRST + LANGUAGE-FIRST ORDERING (user specs): half-hour
- * broadcast roundups that "cover" the topic by mentioning every story
- * of the day are exactly what the Watch button should NOT play, and a
- * video in a language the user doesn't speak is no better. Candidates
- * are ordered:
- *   1. same-language concise (≤7 min) videos from the story's own outlets
- *   2. same-language concise videos from other channels
- *   3. same-language longer videos from the story's own outlets
- *   4. same-language longer videos from other channels
- *   5-8. the same four bands for foreign-language titles (a video in the
- *      wrong language still beats no video — demoted, never excluded)
- * Longer videos are still eligible (a preference, not a requirement) —
- * they just lose to any qualifying concise video.
+ * CONCISE-FIRST + LANGUAGE-FIRST + LANDSCAPE-FIRST ORDERING (user
+ * specs): half-hour broadcast roundups that "cover" the topic by
+ * mentioning every story of the day are exactly what the Watch button
+ * should NOT play, a video in a language the user doesn't speak is no
+ * better, and a landscape upload beats a portrait Short ("try harder
+ * to fetch videos which are in landscape mode"). Candidates are
+ * ordered by, in priority:
+ *   1. LANGUAGE — same-script titles
+ *   2. LANDSCAPE — a search thumb wider than tall; portrait/unknown
+ *      aspect ranks behind (but is never excluded: short-form videos
+ *      also play in the big cards, user spec)
+ *   3. CONCISION — ≤7 minutes
+ *   4. SOURCE — the story's own outlet
+ * in every combination (a stable sort over 16 bands; result order
+ * breaks ties). Longer videos and portrait Shorts are still eligible
+ * (preferences, not requirements) — they just lose to any qualifying
+ * landscape, same-language, concise candidate.
  *
  * Every candidate — in any band — must be relevant (>=2 shared
  * significant keywords, >=1 for a source match, or >=1 + a news-y
@@ -664,10 +668,14 @@ export async function searchYouTubeForStory(
 
   // Only metadata-bearing candidates can ever pass the gate (duration +
   // channel URL are mandatory hints) — candidates come exclusively from
-  // ytInitialData's videoRenderer entries.
+  // ytInitialData's videoRenderer entries. 20 (not 12): the landscape +
+  // language + concise reordering stacks the best candidates at the
+  // front, so the deeper pool gives the lower bands room to qualify
+  // when several top candidates fail the gate ("try harder to fetch
+  // videos which are in landscape mode").
   const candidates: SearchCandidate[] = []
   const data = extractYtInitialData(html)
-  if (data) collectSearchCandidates(data, candidates, 12)
+  if (data) collectSearchCandidates(data, candidates, 20)
   if (candidates.length === 0) return null
 
   // Videos the player already rejected (embed-disallowed) never come
@@ -687,9 +695,6 @@ export async function searchYouTubeForStory(
     return sourceKeys.some((k) => a.includes(k) || k.includes(a))
   }
 
-  // Source's own uploads first within each band, then plain result order.
-  const preferred = candidates.filter((c) => c.title && matchesSource(c.author))
-  const rest = candidates.filter((c) => !c.title || !matchesSource(c.author))
   // Concise-first: a ≤7-minute video about the story beats a half-hour
   // broadcast compilation that merely mentions it (user spec). Longer
   // videos remain as later candidates — never excluded.
@@ -705,26 +710,46 @@ export async function searchYouTubeForStory(
     const s = dominantScript(c.title)
     return s === 'other' || s === targetScript
   }
-  const ordered = [
-    ...preferred.filter((c) => matchesLang(c) && isConcise(c)),
-    ...rest.filter((c) => matchesLang(c) && isConcise(c)),
-    ...preferred.filter((c) => matchesLang(c) && !isConcise(c)),
-    ...rest.filter((c) => matchesLang(c) && !isConcise(c)),
-    // Wrong-language videos are the LAST resort — a foreign-language
-    // video about the story still beats no video at all.
-    ...preferred.filter((c) => !matchesLang(c) && isConcise(c)),
-    ...rest.filter((c) => !matchesLang(c) && isConcise(c)),
-    ...preferred.filter((c) => !matchesLang(c) && !isConcise(c)),
-    ...rest.filter((c) => !matchesLang(c) && !isConcise(c)),
-  ]
+  // Landscape-first (user spec: "try harder to fetch videos which are in
+  // landscape mode"): the search result's own thumbnail keeps the
+  // video's real proportions — a wide thumb means a landscape video, a
+  // portrait thumb means a Short. Landscape ranks AHEAD of portrait and
+  // unknown-aspect candidates in every band below, so any story with
+  // landscape coverage resolves a landscape video; a Short only wins
+  // when that's genuinely the best the story has (it still plays — user:
+  // "make it so the big cards show short form videos too"). 1.1 (not
+  // 1.0) so a near-square thumb can't count as landscape.
+  const isLandscape = (c: SearchCandidate) =>
+    typeof c.thumbAspect === 'number' && c.thumbAspect >= 1.1
+
+  // Full ordering: language > landscape > concision > the story's own
+  // outlet — a stable numeric-rank sort (result order breaks ties)
+  // replacing the old hand-unrolled band arrays.
+  const rankOf = (c: SearchCandidate): number =>
+    (matchesLang(c) ? 0 : 8) +
+    (isLandscape(c) ? 0 : 4) +
+    (isConcise(c) ? 0 : 2) +
+    (matchesSource(c.author) ? 0 : 1)
+  const ordered = candidates
+    .map((c, i) => ({ c, i, r: c.title ? rankOf(c) : 99 }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((x) => x.c)
 
   let fallback: SearchCandidate | null = null
-  // 12 (not 7): the language + concise-first reordering stacks short
-  // same-language candidates at the front — if several of them fail the
-  // gate, the longer / foreign-language bands still need room in the
-  // window to get their chance.
-  for (const c of ordered.slice(0, 12)) {
-    if (Date.now() > deadline) return null
+  // LANDSCAPE-FIRST at the MEASURED aspect level (user spec: "try harder
+  // to fetch videos which are in landscape mode"). The search-result
+  // thumb hint ranks candidates, but it can LIE: major-outlet Shorts
+  // (NBC/ABC) render 16:9-cropped thumbs in the search results while
+  // their oar2.jpg reveals 1080x1920. So the oar-measured aspect is the
+  // authoritative signal: a portrait winner is only a FALLBACK — the
+  // scan keeps hunting for a candidate that measures landscape, and the
+  // Short is returned only when nothing landscape qualifies.
+  let portraitFallback: QualifiedVideo | null = null
+  // 16 (not 12): the reordering stacks the strongest candidates at the
+  // front — if several of them fail the gate, the lower / foreign /
+  // portrait bands still need room in the window to get their chance.
+  for (const c of ordered.slice(0, 16)) {
+    if (Date.now() > deadline) break // keep whatever qualified already
     if (excluded.has(c.videoId)) continue
     // A declared duration of <=10s (or none — live streams) disqualifies
     // immediately; the lengthText is the ONLY duration source.
@@ -748,7 +773,16 @@ export async function searchYouTubeForStory(
         },
         deadline,
       )
-      if (hit) return withAspect(hit, deadline)
+      if (hit) {
+        const measured = await withAspect(hit, deadline)
+        // LANDSCAPE (or unmeasurable — the thumb hint stands) → winner.
+        if (typeof measured.aspect === 'number' && measured.aspect >= 1.1) {
+          return measured
+        }
+        // Measured portrait → hold as the fallback, keep hunting for a
+        // landscape candidate ("try harder"); first Short wins the slot.
+        if (!portraitFallback) portraitFallback = measured
+      }
     } else if (
       looksLikeNews &&
       (!fallback || (isConcise(c) && !isConcise(fallback)))
@@ -759,7 +793,8 @@ export async function searchYouTubeForStory(
     }
   }
   // Nothing matched by keywords — fall back to a news-y channel result
-  // only if it ALSO passes the full quality gate.
+  // only if it ALSO passes the full quality gate (same landscape-first
+  // treatment: a portrait qualification only fills the fallback slot).
   if (fallback && Date.now() < deadline && !excluded.has(fallback.videoId)) {
     const hit = await checkYouTubeVideo(
       fallback.videoId,
@@ -770,7 +805,16 @@ export async function searchYouTubeForStory(
       },
       deadline,
     )
-    if (hit) return withAspect(hit, deadline)
+    if (hit) {
+      const measured = await withAspect(hit, deadline)
+      if (typeof measured.aspect === 'number' && measured.aspect >= 1.1) {
+        return measured
+      }
+      if (!portraitFallback) portraitFallback = measured
+    }
   }
-  return null
+  // No landscape winner anywhere in the window — a portrait short-form
+  // video still beats no video (user: "big cards show short form videos
+  // too").
+  return portraitFallback
 }

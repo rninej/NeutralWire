@@ -29,6 +29,12 @@
  *     fire a dozen simultaneous /api/video resolutions. A tiny
  *     semaphore (max 2 in flight) keeps the queue sane; each request
  *     waits its turn and always releases.
+ *
+ *  4. ARTICLE-OPEN SILENCING. The article sheet renders over the
+ *     still-mounted feed, so any rolling preview would double up with
+ *     the article's own player — the handoff pauses the tapped card,
+ *     and TopicDetail pauses/resumes every live preview as it
+ *     opens/closes.
  */
 
 /** The resolved-video shape shared between the preview and the player
@@ -43,6 +49,10 @@ export interface ResolvedVideo {
   sourceUrl?: string
   /** w/h of the actual video — 0.5625 for a portrait Short, 1.778 for 16:9. */
   aspect?: number
+  /** Set by the preview→article handoff: WHERE the preview had reached
+   *  (seconds) when the card was tapped — the article continues from
+   *  there instead of restarting the video from zero. */
+  startAt?: number
 }
 
 // ── 1. Video handoff ──
@@ -63,14 +73,66 @@ export function clearPreviewPlaying(topicId: string): void {
   playingByTopic.delete(topicId)
 }
 
+/** Imperative hooks into a mounted preview player (pause/resume/read
+ *  its position) — registered by HeroVideoPreview while its player is
+ *  alive, see the registry below. */
+export interface PreviewControls {
+  pause(): void
+  resume(): void
+  /** The player's current position (seconds) — arms the handoff's startAt. */
+  getTime(): number
+}
+
+/** Live preview players keyed by topicId (one per card, at most). */
+const previewControls = new Map<string, PreviewControls>()
+
+/** Which topics' previews were paused because an ARTICLE opened on top
+ *  of the feed — those resume when the article closes. */
+const pausedByArticle = new Set<string>()
+
+/** Register THIS card's preview player hooks. Returns an unregister
+ *  function that is safe to call after a swap/unmount (token-guarded so
+ *  a stale cleanup can never remove a newer player's registration). */
+export function registerPreviewControls(
+  topicId: string,
+  controls: PreviewControls,
+): () => void {
+  previewControls.set(topicId, controls)
+  return () => {
+    if (previewControls.get(topicId) === controls) {
+      previewControls.delete(topicId)
+    }
+    pausedByArticle.delete(topicId)
+  }
+}
+
 /**
  * Called by the CARD's click handler (synchronously, before
  * onOpenDetail) — if this card's preview is playing, arm the topic so
- * the article opens with the video rolling. Cheap no-op otherwise.
+ * the article opens with the video rolling, carrying the preview's
+ * CURRENT POSITION (the article continues instead of restarting), and
+ * PAUSE the card's player so the two never play audio on top of each
+ * other while the article's player spins up. Cheap no-op otherwise.
  */
 export function armVideoIfPlaying(topicId: string): void {
   const video = playingByTopic.get(topicId)
-  if (video) armedByTopic.set(topicId, video)
+  if (!video) return
+  const controls = previewControls.get(topicId)
+  const startAt = (() => {
+    try {
+      return controls?.getTime() ?? 0
+    } catch {
+      return 0
+    }
+  })()
+  // Only attach a meaningful startAt (a second or less is a restart).
+  armedByTopic.set(topicId, startAt > 1 ? { ...video, startAt } : video)
+  // Silence the card immediately — the article's player takes over.
+  try {
+    controls?.pause()
+  } catch {
+    // player already gone — silent
+  }
 }
 
 /**
@@ -223,7 +285,40 @@ export function acquirePreviewSlot(): Promise<() => void> {
   })
 }
 
-// ── 4. Single audible preview (audio lease) ──
+// ── 4b. Article-open silencing ──
+// The article sheet renders OVER the still-mounted feed — any preview
+// playing underneath would keep looping (audio + bandwidth) behind the
+// sheet while the article's own player runs. TopicDetail pauses EVERY
+// live preview when it opens and resumes them when it closes (the ones
+// that were armed for THIS article stay paused by the handoff until the
+// sheet is gone, then continue right where they left off).
+
+/** Pause every live preview player (called when an article opens). */
+export function pauseAllPreviews(): void {
+  for (const [id, controls] of previewControls) {
+    try {
+      controls.pause()
+      pausedByArticle.add(id)
+    } catch {
+      // a broken player must never block the others
+    }
+  }
+}
+
+/** Resume the previews that pauseAllPreviews() paused (article closed). */
+export function resumeAllPreviews(): void {
+  for (const id of [...pausedByArticle]) {
+    const controls = previewControls.get(id)
+    pausedByArticle.delete(id)
+    try {
+      controls?.resume()
+    } catch {
+      // player already unmounted — nothing to resume
+    }
+  }
+}
+
+// ── 5. Single audible preview (audio lease) ──
 // Every big card can roll a preview now — but two previews playing
 // sound at once would be a wall of noise. ONE topic holds the "sound
 // lease"; every other concurrently playing preview is muted and queued.

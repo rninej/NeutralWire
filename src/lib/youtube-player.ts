@@ -30,6 +30,13 @@ export interface YTPlayer {
   mute(): void
   unMute(): void
   setVolume(volume: number): void
+  /** Jump to a position (used by the preview→article handoff so the
+   *  article continues WHERE the preview left off instead of restarting). */
+  seekTo(seconds: number, allowSeekAhead: boolean): void
+  /** Position in seconds — the handoff reads it when the card is tapped. */
+  getCurrentTime(): number
+  /** Total length in seconds — drives the article player's seek bar. */
+  getDuration(): number
   destroy(): void
 }
 

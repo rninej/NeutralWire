@@ -364,7 +364,7 @@ export default function DebugPage() {
   // Boolean flags stored like the others (Firebase featureFlags/*).
   //   notifLike    (default ON)  → new notifications ship without the Like action when off
   //   videoWatch   (default ON)  → Watch pills vanish on next load + /api/video refuses
-  //   videoPreview (default OFF) → big-card video preview on the home feed (half-volume, landscape-only)
+  //   videoPreview (default OFF) → big-card video preview on the home feed (half-volume, landscape-preferred)
   const [notifLike, setNotifLike] = React.useState<boolean | null>(null)
   const [notifLikeFlipping, setNotifLikeFlipping] = React.useState(false)
   const [notifLikeResult, setNotifLikeResult] = React.useState<string | null>(null)
@@ -1122,13 +1122,14 @@ export default function DebugPage() {
                   Every large news card (the hero cards + the desktop
                   magazine grid) plays a video preview inside its image
                   0.8 seconds after it has been on screen — resolved in
-                  the user's language, landscape videos only (never
-                  Shorts), sound at half volume, and shown only once
-                  fully loaded (no loading box). Tapping a card with a
-                  rolling preview opens the article with the video
-                  already playing. Scroll down — each big card resolves
-                  as it comes into view. Refresh the homepage after
-                  switching to see the change.
+                  the user's language, preferring landscape videos
+                  (short-form videos play too when that's the coverage),
+                  sound at half volume, and shown only once fully loaded
+                  (no loading box). Tapping a card with a rolling
+                  preview opens the article with the video continuing
+                  right where the preview was. Scroll down — each big
+                  card resolves as it comes into view. Refresh the
+                  homepage after switching to see the change.
                 </p>
                 {videoPreviewResult && (
                   <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">

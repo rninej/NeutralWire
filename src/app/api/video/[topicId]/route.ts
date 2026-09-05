@@ -41,26 +41,32 @@ export const maxDuration = 15
  * every YouTube video must run LONGER THAN 10 SECONDS and come from a
  * channel with AT LEAST 10,000 SUBSCRIBERS — videos that fail either
  * check are skipped and the resolver moves to the next candidate. On
- * top of the gate, candidates are ordered CONCISE-FIRST (user spec): a
- * video at or under 7 minutes beats a half-hour broadcast roundup that
- * only mentions the story among the day's every-other-headline. The
- * search prefers uploads from the story's own outlets (the "source's
- * video" preference — a bare YouTube videoId can't be quality-checked
- * directly, but the outlet's own upload about the story normally tops
- * the results). Native RSS source videos enforce the duration rule when
- * the feed declares a media:content duration attribute; the subs rule is
- * a YouTube-channel concept and doesn't apply to a vetted outlet's own
+ * top of the gate, candidates are ordered LANGUAGE-FIRST (user spec:
+ * UK → English) then LANDSCAPE-FIRST (user spec: "try harder to fetch
+ * videos which are in landscape mode") then CONCISE-FIRST (a video at
+ * or under 7 minutes beats a half-hour broadcast roundup that only
+ * mentions the story). Portrait short-form videos are NOT excluded
+ * anymore — they resolve when a story has no landscape coverage, and
+ * the big cards show them too (user: "make it so the big cards show
+ * short form videos too"). The search prefers uploads from the story's
+ * own outlets (the "source's video" preference). Native RSS source
+ * videos enforce the duration rule when the feed declares a
+ * media:content duration attribute; the subs rule is a
+ * YouTube-channel concept and doesn't apply to a vetted outlet's own
  * feed enclosure.
  *
- * Results are cached in Firebase (videos4/<topicId>__<hl> — namespace
- * bumped from videos3 both for the language-aware ranking AND because
- * the cache is now per-language): 24h for a found video, 6h for a "no
- * video" miss. Every resolution is bounded by a ~10.5s budget, and never
- * happens while the videoWatch feature flag is off — /debug can kill the
- * whole feature instantly (this endpoint returns { ok: false, disabled:
- * true } and the UI hides the pill). The preview (HeroVideoPreview)
- * shares this endpoint with the same cache — resolving once for a card
- * also arms the article's Watch button.
+ * Results are cached in Firebase (videos6/<topicId>__<hl> — namespace
+ * bumped from videos4 for the LANDSCAPE-FIRST ranking at the MEASURED
+ * (oar2) aspect level: a portrait winner is only a fallback, the scan
+ * keeps hunting for a landscape candidate. Cached v4 entries predate
+ * the whole language+landscape ordering, so they re-resolve): 24h for a
+ * found video, 6h for a "no video" miss. Every resolution is bounded by a
+ * ~10.5s budget, and never happens while the videoWatch feature flag
+ * is off — /debug can kill the whole feature instantly (this endpoint
+ * returns { ok: false, disabled: true } and the UI hides the pill).
+ * The preview (HeroVideoPreview) shares this endpoint with the same
+ * cache — resolving once for a card also arms the article's Watch
+ * button.
  *
  * Response:
  *   { ok: true, kind: 'youtube', videoId, title, author, sourceUrl, aspect }
@@ -68,9 +74,9 @@ export const maxDuration = 15
  *   { ok: false, reason: 'no-video' | 'disabled' | 'not-found' }
  *
  * `aspect` (w/h, e.g. 0.5625 for 9:16) is measured from the video's
- * original-aspect thumbnail so the popup can match the video's real
- * proportions (portrait Shorts no longer letterbox inside a landscape
- * box).
+ * original-aspect thumbnail — the resolver ranks LANDSCAPE candidates
+ * ahead of portrait ones, and the client letterboxes a portrait Short
+ * inside the 16:9 image box instead of rejecting it.
  *
  * ?retry=1/2 — sent by the player's automatic retry: a CACHED MISS is
  * skipped so the endpoint re-resolves instead of echoing "no video" back
@@ -101,16 +107,17 @@ async function isVideoWatchEnabled(): Promise<boolean> {
   return value
 }
 
-// ── Resolution cache (Firebase videos4/<topicId>__<hl>) ──
-// v4 namespace: language-aware ranking + PER-LANGUAGE keys — a UK
-// user's English hit never serves a Japanese user (and old videos3
-// entries are ignored so everything re-resolves under the new rules).
+// ── Resolution cache (Firebase videos6/<topicId>__<hl>) ──
+// v6 namespace: landscape-first at the MEASURED oar aspect (v5:
+// thumb-hint ranking; v4: language-aware ranking + per-language keys).
+// Old v4/v5 entries are ignored so everything re-resolves once under
+// the new ordering.
 const FOUND_TTL_MS = 24 * 60 * 60 * 1000
 const MISS_TTL_MS = 6 * 60 * 60 * 1000
 
 /** Firestore/RTDB-safe cache key: topic + language. */
 function cacheKey(topicId: string, hl: string): string {
-  return `videos4/${topicId}__${hl}`
+  return `videos6/${topicId}__${hl}`
 }
 
 interface VideoResult {
@@ -198,7 +205,7 @@ export async function GET(
     )
   }
 
-  // 2. Cache (per-topic + language, TTL by outcome). videos4/ — see
+  // 2. Cache (per-topic + language, TTL by outcome). videos6/ — see
   //    header comment. A retry run skips CACHED MISSES only —
   //    re-resolving in case the first pass failed on a transient fetch.
   //    A cached YouTube FOUND entry without an `aspect` predates the

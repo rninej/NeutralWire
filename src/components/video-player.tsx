@@ -18,13 +18,36 @@
  * overlay only fades to black + video once the player reports it is
  * genuinely PLAYING.
  *
+ * NO CHROME AT LOAD (user spec: "when the video is showing it looks
+ * cluttered because for first 2 seconds I see the video progress bar,
+ * the pause/play button, the YouTube settings button and the info popup
+ * about the news channel … fix so it just shows the video when loaded").
+ * The YouTube embed is created with controls=0 — no progress bar, no
+ * pause/play button, no settings gear, no channel info popup, ever.
+ * OUR OWN minimal control layer (VideoChrome below) stays completely
+ * hidden while the video plays and only appears on tap (auto-hiding
+ * 3s later; it stays up while paused): play/pause, a thin seek slider,
+ * mute and fullscreen. The byline chip (who the coverage is from) also
+ * waits ~2.2s before fading in, so the first moments are JUST video.
+ *
+ * PREVIEW HANDOFF (user spec: a less glitchy preview→article
+ * transition): `initialVideo` may carry `startAt` — the position the
+ * home-feed preview had reached when the card was tapped. The article
+ * player seeks there before playing, so the video CONTINUES instead of
+ * visibly restarting from zero; the card's own player is paused at arm
+ * time (see video-preview-store) so the two never double up.
+ *
  * Fetches /api/video/[topicId]?hl=…&gl=… (the user's locale — UK users
  * get English coverage), which resolves:
  *   1. the source's OWN video (RSS video enclosures / YouTube feeds), or
  *   2. a YouTube video about the story from a news outlet.
  * Both paths enforce the quality requirements: the video's channel must
  * have >= 10k subscribers and the video must run longer than 10 seconds
- * (concise, < 7 min, coverage preferred — see video-quality.ts).
+ * (concise, < 7 min, coverage preferred — see video-quality.ts). The
+ * resolver ranks LANDSCAPE candidates ahead of portrait ones; a portrait
+ * short-form video still plays (user: big cards — and articles — show
+ * short-form videos too), letterboxed inside the 16:9 image box
+ * (object-contain).
  *
  * AUTO-RETRY: a failed fetch (network error, or the API's "no video" /
  * "not-found" outcomes) is re-run automatically up to 2 times — a
@@ -34,15 +57,26 @@
  *
  * Rendering:
  *   - kind 'youtube' → IFrame-API player (youtube-nocookie, autoplay,
- *     own control bar incl. fullscreen fs=1; fades in on PLAYING)
- *   - kind 'video'   → native <video controls autoPlay>
+ *     controls=0 + our VideoChrome; fades in on PLAYING)
+ *   - kind 'video'   → native <video> (no native controls — the same
+ *     VideoChrome drives it)
  *   - fetching       → transparent overlay (photo visible), close square
  *   - miss           → compact "no video yet" panel with a close square
  */
 
 import * as React from 'react'
-import { motion } from 'framer-motion'
-import { Play, ExternalLink, AlertCircle, X } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import {
+  Play,
+  Pause,
+  Volume1,
+  VolumeX,
+  Maximize,
+  Minimize,
+  ExternalLink,
+  AlertCircle,
+  X,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { loadYouTubeIframeApi, type YTPlayer } from '@/lib/youtube-player'
 import { videoLocaleParams, type ResolvedVideo } from '@/lib/video-preview-store'
@@ -52,7 +86,8 @@ export interface VideoPlayerProps {
   storyTitle: string
   onClose: () => void
   /** The article was opened from a playing home-feed preview: play THIS
-   *  video immediately (no fetch, no loading state). */
+   *  video immediately (no fetch, no loading state). `startAt` continues
+   *  from where the preview had reached. */
   initialVideo?: ResolvedVideo
 }
 
@@ -65,6 +100,7 @@ interface VideoApiResponse {
   author?: string
   sourceUrl?: string
   aspect?: number
+  startAt?: number
   reason?: string
 }
 
@@ -73,19 +109,288 @@ interface VideoApiResponse {
 const MAX_AUTO_RETRIES = 2
 const RETRY_DELAY_MS = 700
 
+/** Chrome auto-hides this long after a tap while playing (stays up while
+ *  paused). User spec: at load, JUST the video — no clutter. */
+const CHROME_AUTOHIDE_MS = 3000
+
+/** Our persistent corner UI (the byline chip) waits this long (seconds)
+ *  after playback starts before fading in — the load moment is clean. */
+const BYLINE_DELAY_S = 2.2
+
+// ── shared helpers ──
+
+/** "1:23" / "12:05" — compact player time format. */
+function fmtTime(s: number): string {
+  if (!Number.isFinite(s) || s < 0) return '0:00'
+  const m = Math.floor(s / 60)
+  const sec = Math.floor(s % 60)
+  return `${m}:${sec.toString().padStart(2, '0')}`
+}
+
+/** iOS Safari only fullscreens <video> elements (webkitEnterFullscreen);
+ *  everywhere else the whole image box goes fullscreen (the video keeps
+ *  letterboxing inside it). */
+function tryIosVideoFullscreen(video: HTMLVideoElement | null): void {
+  try {
+    const el = video as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null
+    el?.webkitEnterFullscreen?.()
+  } catch {
+    // unsupported — no fullscreen, the video still plays inline
+  }
+}
+
+/** Toggle fullscreen for the video box (falls back to iOS video
+ *  fullscreen when element-fullscreen isn't supported). */
+function toggleBoxFullscreen(
+  box: HTMLElement | null,
+  video: HTMLVideoElement | null,
+): void {
+  try {
+    if (document.fullscreenElement) {
+      if (document.exitFullscreen) void document.exitFullscreen()
+      return
+    }
+    if (box?.requestFullscreen) {
+      box.requestFullscreen().catch(() => tryIosVideoFullscreen(video))
+      return
+    }
+  } catch {
+    // fall through to the iOS path
+  }
+  tryIosVideoFullscreen(video)
+}
+
+// ── VideoChrome — our own control layer ──
+
+/**
+ * The ONLY controls the article video ever shows (user spec: no
+ * YouTube bar / settings / channel-info clutter — "just shows the
+ * video when loaded"). Completely hidden while it plays; a tap on the
+ * video toggles play/pause AND raises the bar, which auto-hides 3s
+ * later (it stays up while paused). Desktop hover raises it too.
+ *
+ * Tap-anywhere-to-pause is the universal video gesture, and every
+ * control (play/pause, seek, mute, fullscreen) drives the player
+ * through the callbacks — the YouTube iframe itself never sees a
+ * pointer, which is what keeps its own chrome from ever appearing.
+ */
+function VideoChrome({
+  playing,
+  muted,
+  time,
+  duration,
+  fullscreen,
+  fullscreenAvailable,
+  onTogglePlay,
+  onSeek,
+  onToggleMute,
+  onToggleFullscreen,
+}: {
+  playing: boolean
+  muted: boolean
+  time: number
+  duration: number
+  fullscreen: boolean
+  fullscreenAvailable: boolean
+  onTogglePlay: () => void
+  onSeek: (seconds: number) => void
+  onToggleMute: () => void
+  onToggleFullscreen: () => void
+}) {
+  const [visible, setVisible] = React.useState(false)
+  const visibleRef = React.useRef(false)
+  const hideTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Local slider value while dragging (null = follow the player).
+  const [drag, setDrag] = React.useState<number | null>(null)
+  const dragRef = React.useRef(false)
+
+  const clearHide = () => {
+    if (hideTimer.current) {
+      clearTimeout(hideTimer.current)
+      hideTimer.current = null
+    }
+  }
+  const show = (autoHide: boolean) => {
+    visibleRef.current = true
+    setVisible(true)
+    clearHide()
+    if (autoHide) {
+      hideTimer.current = setTimeout(() => {
+        visibleRef.current = false
+        setVisible(false)
+      }, CHROME_AUTOHIDE_MS)
+    }
+  }
+
+  // Paused → the bar stays up (the user is mid-decision); playing →
+  // whatever is on screen auto-hides again.
+  React.useEffect(() => {
+    if (!playing) {
+      show(false)
+    } else if (visibleRef.current) {
+      show(true)
+    }
+     
+  }, [playing])
+
+  React.useEffect(() => clearHide, [])
+
+  const commitDrag = () => {
+    if (dragRef.current && drag !== null) {
+      onSeek(drag)
+    }
+    dragRef.current = false
+    setDrag(null)
+  }
+
+  const sliderValue = drag !== null ? drag : Math.min(time, Math.max(duration, 0.1))
+
+  return (
+    <div
+      className="absolute inset-0 z-[3]"
+      onClick={() => {
+        onTogglePlay()
+        show(true)
+      }}
+      onMouseMove={() => show(true)}
+    >
+      {/* Paused → a single centered play affordance (tapping anywhere
+          also resumes). */}
+      {!playing && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/60 backdrop-blur-[2px]">
+            <Play className="h-7 w-7 text-white" fill="currentColor" />
+          </div>
+        </div>
+      )}
+
+      <AnimatePresence>
+        {visible && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/85 via-black/45 to-transparent px-3 pb-2.5 pt-12"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label={playing ? 'Pause' : 'Play'}
+              onClick={(e) => {
+                e.stopPropagation()
+                onTogglePlay()
+                show(true)
+              }}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15 active:bg-white/25"
+            >
+              {playing ? (
+                <Pause className="h-5 w-5" fill="currentColor" />
+              ) : (
+                <Play className="h-5 w-5" fill="currentColor" />
+              )}
+            </button>
+
+            <span className="w-8 shrink-0 text-right text-[10px] font-semibold tabular-nums text-white/85">
+              {fmtTime(drag ?? time)}
+            </span>
+
+            {duration > 1 && (
+              <input
+                type="range"
+                aria-label="Seek"
+                min={0}
+                max={duration}
+                step={0.1}
+                value={sliderValue}
+                onPointerDown={() => {
+                  dragRef.current = true
+                }}
+                onChange={(e) => setDrag(Number(e.target.value))}
+                onPointerUp={commitDrag}
+                onKeyUp={commitDrag}
+                onBlur={commitDrag}
+                className="h-1.5 min-w-0 flex-1 cursor-pointer accent-white"
+              />
+            )}
+
+            <span className="w-8 shrink-0 text-[10px] font-semibold tabular-nums text-white/85">
+              {fmtTime(duration)}
+            </span>
+
+            <button
+              type="button"
+              aria-label={muted ? 'Unmute' : 'Mute'}
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleMute()
+                show(true)
+              }}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15 active:bg-white/25"
+            >
+              {muted ? (
+                <VolumeX className="h-5 w-5" />
+              ) : (
+                <Volume1 className="h-5 w-5" />
+              )}
+            </button>
+
+            {fullscreenAvailable && (
+              <button
+                type="button"
+                aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onToggleFullscreen()
+                  show(true)
+                }}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15 active:bg-white/25"
+              >
+                {fullscreen ? (
+                  <Minimize className="h-5 w-5" />
+                ) : (
+                  <Maximize className="h-5 w-5" />
+                )}
+              </button>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+// ── shared fullscreen state hook ──
+
+/** Tracks whether OUR box is the fullscreen element (icon swap). */
+function useIsFullscreen(): boolean {
+  const [fs, setFs] = React.useState(false)
+  React.useEffect(() => {
+    const onChange = () => setFs(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  }, [])
+  return fs
+}
+
 /** ── YouTube embed via the IFrame API ──
  *
- * controls + fullscreen live on YouTube's own bar; the overlay fades in
- * only on the first PLAYING report (no black loading frame). Falls back
- * to a bare iframe if the API script can't load (rare). */
+ * controls=0 — YouTube's own bar/settings/channel-info popup never
+ * renders (user spec: "just shows the video when loaded"). Our
+ * VideoChrome supplies tap-to-show controls instead. `startAt` seeks to
+ * the preview's position before playing (handoff continuity). Falls
+ * back to a bare controls=0 iframe if the API script can't load (rare)
+ * — YouTube then handles taps itself. */
 function ArticleYouTubePlayer({
   videoId,
   storyTitle,
+  startAt,
   onPlaying,
   onDead,
 }: {
   videoId: string
   storyTitle: string
+  startAt?: number
   onPlaying: () => void
   /** The player rejected this video (embed-disallowed etc.) — the
    *  parent reports it to the resolver and swaps to the next candidate. */
@@ -95,6 +400,12 @@ function ArticleYouTubePlayer({
   const playerRef = React.useRef<YTPlayer | null>(null)
   const [fallbackIframe, setFallbackIframe] = React.useState(false)
   const reportedRef = React.useRef(false)
+  // Chrome state (drives VideoChrome).
+  const [playing, setPlaying] = React.useState(false)
+  const [muted, setMuted] = React.useState(false)
+  const [time, setTime] = React.useState(0)
+  const [duration, setDuration] = React.useState(0)
+  const fullscreen = useIsFullscreen()
 
   React.useEffect(() => {
     let cancelled = false
@@ -111,16 +422,47 @@ function ArticleYouTubePlayer({
             // Sound ON at normal volume — the tap that opened this is a
             // user gesture, so audible autoplay is allowed.
             mute: 0,
+            // User spec: no YouTube chrome — no progress bar, no
+            // pause/play button, no settings gear, no channel info
+            // popup. Our VideoChrome owns the controls.
+            controls: 0,
             rel: 0,
-            fs: 1,
+            fs: 0,
             modestbranding: 1,
             playsinline: 1,
+            iv_load_policy: 3,
+            disablekb: 1,
             origin: window.location.origin,
           },
           events: {
+            onReady: (e) => {
+              if (cancelled) return
+              // Preview handoff: continue WHERE the preview left off
+              // instead of visibly restarting from zero.
+              if (typeof startAt === 'number' && startAt > 1) {
+                try {
+                  e.target.seekTo(startAt, true)
+                } catch {
+                  // fresh start is fine
+                }
+              }
+              e.target.playVideo()
+            },
+            onStateChange: (e) => {
+              if (cancelled) return
+              if (e.data === 1 /* PLAYING */) {
+                if (!reportedRef.current) {
+                  reportedRef.current = true
+                  onPlaying()
+                }
+                setPlaying(true)
+              } else if (e.data === 2 /* PAUSED */) {
+                setPlaying(false)
+              }
+            },
             // The user just tapped — a gesture — so audible autoplay is
-            // permitted; on the rare block, mute + retry so it still plays
-            // (the control bar's speaker re-enables sound).
+            // permitted; on the rare block, mute + retry so it still
+            // plays (the chrome's speaker re-enables sound).
             onAutoplayBlocked: () => {
               try {
                 playerRef.current?.mute()
@@ -128,12 +470,7 @@ function ArticleYouTubePlayer({
               } catch {
                 // silent
               }
-            },
-            onStateChange: (e) => {
-              if (!cancelled && !reportedRef.current && e.data === 1 /* PLAYING */) {
-                reportedRef.current = true
-                onPlaying()
-              }
+              setMuted(true)
             },
             onError: () => {
               // 101/150 = the owner disallows embedding — report the dead
@@ -158,13 +495,31 @@ function ArticleYouTubePlayer({
       playerRef.current = null
     }
      
+  }, [videoId, startAt])
+
+  // Position/duration polling for the seek bar (4Hz; state guards keep
+  // this from re-rendering when nothing moved).
+  React.useEffect(() => {
+    const iv = setInterval(() => {
+      const p = playerRef.current
+      if (!p) return
+      try {
+        const t = p.getCurrentTime()
+        const d = p.getDuration()
+        setTime((prev) => (Math.abs(prev - t) > 0.15 ? t : prev))
+        setDuration((prev) => (prev !== d && Number.isFinite(d) && d > 0 ? d : prev))
+      } catch {
+        // player mid-swap — skip this tick
+      }
+    }, 250)
+    return () => clearInterval(iv)
   }, [videoId])
 
   if (fallbackIframe) {
     return (
       <iframe
         key={videoId}
-        src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&fs=1&modestbranding=1`}
+        src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&controls=0&modestbranding=1&playsinline=1`}
         title={storyTitle}
         className="h-full w-full"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
@@ -173,11 +528,200 @@ function ArticleYouTubePlayer({
       />
     )
   }
+
+  const togglePlay = () => {
+    try {
+      if (playing) playerRef.current?.pauseVideo()
+      else playerRef.current?.playVideo()
+    } catch {
+      // silent
+    }
+  }
+  const seek = (s: number) => {
+    try {
+      playerRef.current?.seekTo(s, true)
+      setTime(s)
+    } catch {
+      // silent
+    }
+  }
+  const toggleMute = () => {
+    try {
+      if (muted) playerRef.current?.unMute()
+      else playerRef.current?.mute()
+      setMuted(!muted)
+    } catch {
+      // silent
+    }
+  }
+  const toggleFullscreen = () => {
+    const box = hostRef.current?.closest('[data-nw-video-box]') ?? null
+    toggleBoxFullscreen(box as HTMLElement | null, null)
+  }
+  const fullscreenAvailable =
+    typeof document !== 'undefined' &&
+    typeof document.documentElement.requestFullscreen === 'function'
+
   return (
-    // The API REPLACES the inner host div with its iframe — sizing
-    // classes live on this stable outer wrapper.
-    <div className="absolute inset-0 [&_iframe]:h-full [&_iframe]:w-full">
-      <div ref={hostRef} />
+    <div className="absolute inset-0">
+      {/* The API REPLACES the inner host div with its iframe — sizing
+          classes live on this stable outer wrapper. */}
+      <div className="absolute inset-0 [&_iframe]:h-full [&_iframe]:w-full">
+        <div ref={hostRef} />
+      </div>
+      <VideoChrome
+        playing={playing}
+        muted={muted}
+        time={time}
+        duration={duration}
+        fullscreen={fullscreen}
+        fullscreenAvailable={fullscreenAvailable}
+        onTogglePlay={togglePlay}
+        onSeek={seek}
+        onToggleMute={toggleMute}
+        onToggleFullscreen={toggleFullscreen}
+      />
+    </div>
+  )
+}
+
+/** ── Native <video> player (RSS source videos) ──
+ *
+ * No native `controls` attribute (user spec — the OS control bar is
+ * exactly the load-time clutter they rejected); our VideoChrome drives
+ * the element instead. object-contain letterboxes a portrait short
+ * inside the 16:9 image box instead of cropping it. */
+function ArticleNativeVideo({
+  url,
+  startAt,
+  onPlaying,
+  onError,
+}: {
+  url: string
+  startAt?: number
+  onPlaying: () => void
+  onError: () => void
+}) {
+  const ref = React.useRef<HTMLVideoElement | null>(null)
+  const [playing, setPlaying] = React.useState(false)
+  const [muted, setMuted] = React.useState(false)
+  const [time, setTime] = React.useState(0)
+  const [duration, setDuration] = React.useState(0)
+  const fullscreen = useIsFullscreen()
+  // Element-fullscreen support (iOS only offers video fullscreen).
+  const [fullscreenAvailable, setFullscreenAvailable] = React.useState(true)
+
+  React.useEffect(() => {
+    const el = ref.current
+    const hasEl = !!el && 'webkitEnterFullscreen' in el
+    setFullscreenAvailable(
+      (typeof document !== 'undefined' &&
+        typeof document.documentElement.requestFullscreen === 'function') ||
+        hasEl,
+    )
+  }, [url])
+
+  // Autoplay fallback: autoPlay tries audible playback (allowed — the
+  // tap that opened this player is a user gesture). If the browser
+  // still blocks it, retry muted after a beat so SOMETHING plays (the
+  // chrome's speaker re-enables sound).
+  React.useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const probe = setTimeout(() => {
+      if (el.paused && el.currentTime === 0) {
+        el.muted = true
+        el.play().catch(() => {
+          // paused with the chrome up — the user can start it manually
+        })
+      }
+    }, 1200)
+    return () => clearTimeout(probe)
+  }, [url])
+
+  const togglePlay = () => {
+    const el = ref.current
+    if (!el) return
+    if (el.paused) el.play().catch(() => {})
+    else el.pause()
+  }
+  const seek = (s: number) => {
+    const el = ref.current
+    if (!el) return
+    try {
+      el.currentTime = s
+      setTime(s)
+    } catch {
+      // seeking unsupported — silent
+    }
+  }
+  const toggleMute = () => {
+    const el = ref.current
+    if (!el) return
+    el.muted = !el.muted
+    setMuted(el.muted)
+  }
+  const toggleFullscreen = () => {
+    const box = ref.current?.closest('[data-nw-video-box]') ?? null
+    toggleBoxFullscreen(box as HTMLElement | null, ref.current)
+  }
+
+  return (
+    <div className="absolute inset-0">
+      <video
+        ref={ref}
+        key={url}
+        src={url}
+        data-nw-video=""
+        // object-contain: a portrait short letterboxes instead of being
+        // center-cropped (user: short-form videos play in big cards /
+        // articles too).
+        className="absolute inset-0 h-full w-full object-contain"
+        autoPlay
+        playsInline
+        onLoadedMetadata={(e) => {
+          const el = e.currentTarget
+          // Preview handoff: continue where the preview left off (only
+          // when the position actually fits the video).
+          if (
+            typeof startAt === 'number' &&
+            startAt > 1 &&
+            Number.isFinite(el.duration) &&
+            startAt < el.duration - 2
+          ) {
+            try {
+              el.currentTime = startAt
+            } catch {
+              // seeking unsupported — fresh start
+            }
+          }
+          if (Number.isFinite(el.duration)) setDuration(el.duration)
+        }}
+        onTimeUpdate={(e) => {
+          const el = e.currentTarget
+          setTime(el.currentTime)
+          if (Number.isFinite(el.duration) && el.duration > 0) {
+            setDuration((prev) => (prev === el.duration ? prev : el.duration))
+          }
+        }}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onVolumeChange={(e) => setMuted(e.currentTarget.muted)}
+        onPlaying={onPlaying}
+        onError={onError}
+      />
+      <VideoChrome
+        playing={playing}
+        muted={muted}
+        time={time}
+        duration={duration}
+        fullscreen={fullscreen}
+        fullscreenAvailable={fullscreenAvailable}
+        onTogglePlay={togglePlay}
+        onSeek={seek}
+        onToggleMute={toggleMute}
+        onToggleFullscreen={toggleFullscreen}
+      />
     </div>
   )
 }
@@ -264,68 +808,56 @@ export function InlineVideo({ topicId, storyTitle, onClose, initialVideo }: Vide
     setDeadIds((prev) => [...prev, deadVideoId])
   }
 
-  // ── Native <video> autoplay fallback ──
-  // The autoPlay attribute tries audible playback (allowed — the tap
-  // that opened this player is a user gesture). If the browser still
-  // blocks it, retry muted after a beat so SOMETHING plays (the control
-  // bar re-enables sound). Deps on the native src so it re-arms when a
-  // native video element actually mounts (or swaps).
-  const nativeRef = React.useRef<HTMLVideoElement | null>(null)
-  React.useEffect(() => {
-    const el = nativeRef.current
-    if (!el) return
-    const probe = setTimeout(() => {
-      if (el.paused && el.currentTime === 0) {
-        el.muted = true
-        el.play().catch(() => {
-          // controls are visible — the user can start it manually
-        })
-      }
-    }, 1200)
-    return () => clearTimeout(probe)
-  }, [video?.url])
-
   const ready = !loading && !!video?.ok
+
+  // The byline link — the video's source (escape hatch to YouTube / the
+  // source's own player, where fullscreen always works).
+  const bylineHref =
+    video?.kind === 'youtube'
+      ? video.sourceUrl ||
+        (video.videoId ? `https://www.youtube.com/watch?v=${video.videoId}` : undefined)
+      : video?.url || undefined
 
   return (
     // Transparent until the player is actually PLAYING (user spec: the
     // news photo keeps showing — never a black loading box). Once
-    // playing, the black backing + video fade in.
+    // playing, the black backing + video fade in. data-nw-video-box is
+    // the fullscreen target for our chrome.
     <div
+      data-nw-video-box=""
       className={cn(
         'absolute inset-0 z-[3] transition-colors duration-200',
         playing ? 'bg-black' : 'bg-transparent',
       )}
     >
-      {/* ── Player area — fills the news image box. The embed's own
-              control bar handles play/pause + fullscreen (fs=1 /
-              <video controls>). Hidden (opacity 0) until PLAYING. */}
+      {/* ── Player area — fills the news image box. Our VideoChrome
+              supplies the controls (no YouTube chrome ever renders).
+              Hidden (opacity 0 + pointer-events off) until PLAYING. */}
       {ready && video?.kind === 'youtube' && video.videoId ? (
         <div
           className="absolute inset-0 transition-opacity duration-200"
-          style={{ opacity: playing ? 1 : 0 }}
+          style={{ opacity: playing ? 1 : 0, pointerEvents: playing ? 'auto' : 'none' }}
         >
           <ArticleYouTubePlayer
             videoId={video.videoId}
             storyTitle={video.title || storyTitle}
+            startAt={video.startAt}
             onPlaying={() => setPlaying(true)}
             onDead={handleDeadVideo}
           />
         </div>
       ) : ready && video?.kind === 'video' && video.url ? (
-        <video
-          ref={nativeRef}
-          key={video.url}
-          src={video.url}
-          data-nw-video=""
-          className="absolute inset-0 h-full w-full object-cover transition-opacity duration-200"
-          style={{ opacity: playing ? 1 : 0 }}
-          controls
-          autoPlay
-          playsInline
-          onPlaying={() => setPlaying(true)}
-          onError={() => setVideoError(true)}
-        />
+        <div
+          className="absolute inset-0 transition-opacity duration-200"
+          style={{ opacity: playing ? 1 : 0, pointerEvents: playing ? 'auto' : 'none' }}
+        >
+          <ArticleNativeVideo
+            url={video.url}
+            startAt={video.startAt}
+            onPlaying={() => setPlaying(true)}
+            onError={() => setVideoError(true)}
+          />
+        </div>
       ) : !ready ? (
         // Resolving (or auto-retrying) — TRANSPARENT: the photo shows
         // through; only the close square (below) marks that anything is
@@ -401,15 +933,28 @@ export function InlineVideo({ topicId, storyTitle, onClose, initialVideo }: Vide
         <X className="h-5 w-5" />
       </motion.button>
 
-      {/* Playing: tiny byline chip (bottom-right, above the NW mark's spot
-          while the video owns the box) — who the coverage is from. */}
-      {playing && video?.ok && (
-        <div className="pointer-events-none absolute bottom-0 right-0 z-[2] flex items-center gap-1.5 bg-black/70 py-1 pl-2 pr-2 backdrop-blur-[2px]">
+      {/* Playing: tiny byline chip (bottom-right) — who the coverage is
+          from. FADES IN ~2s AFTER playback starts (user spec: "just
+          shows the video when loaded, not all the buttons and overlay
+          features for 2 seconds") and doubles as the link out to the
+          source (YouTube's own player has fullscreen everywhere). */}
+      {playing && video?.ok && bylineHref && (
+        <motion.a
+          href={bylineHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: BYLINE_DELAY_S, duration: 0.4 }}
+          className="absolute bottom-0 right-0 z-[2] flex items-center gap-1.5 bg-black/70 py-1 pl-2 pr-2 backdrop-blur-[2px]"
+          title={`Coverage from ${video.author || 'a news outlet'} — opens at the source`}
+        >
           <Play className="h-3 w-3 shrink-0 text-white/70" />
           <span className="max-w-[45vw] truncate text-[10px] font-semibold uppercase leading-none tracking-wide text-white/80">
             {video.author || 'news video'}
           </span>
-        </div>
+        </motion.a>
       )}
     </div>
   )

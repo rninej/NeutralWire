@@ -28,7 +28,12 @@ import { bumpEngagementForTopic } from '@/lib/user-interests'
 import { getRating } from '@/lib/source-ratings'
 import { useVideoWatch } from '@/lib/video-watch'
 import { InlineVideo, WatchPill } from '@/components/video-player'
-import { consumeVideoAutoplay, type ResolvedVideo } from '@/lib/video-preview-store'
+import {
+  consumeVideoAutoplay,
+  pauseAllPreviews,
+  resumeAllPreviews,
+  type ResolvedVideo,
+} from '@/lib/video-preview-store'
 
 interface TopicDetailProps {
   topic: TopicArticle
@@ -89,16 +94,29 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
   // normal image with the play button") — the resolved video was handed
   // over from the card, so the player starts rolling immediately: no
   // fetch, no loading state, no photo+Watch-square interlude. Consumed
-  // once on mount (an effect, so React strict-mode's double-invoked
-  // render can't eat the handoff), and cleared for real when the user
-  // closes the player.
-  const [handedOffVideo, setHandedOffVideo] = React.useState<ResolvedVideo | null>(null)
-  React.useEffect(() => {
-    const handedOff = consumeVideoAutoplay(topic.topicId)
-    if (handedOff) setHandedOffVideo(handedOff)
-     
-  }, [topic.topicId])
+  // during the FIRST render through a lazy ref (an effect would leave a
+  // one-frame photo + Watch-square flash before the video overlay mounts
+  // — the user reads that as a glitchy transition). The ref pattern is
+  // strict-mode-safe: double-invoked renders share it, so the one-shot
+  // handoff is consumed exactly once.
+  const handedOffRef = React.useRef<ResolvedVideo | null | undefined>(undefined)
+  if (handedOffRef.current === undefined) {
+    handedOffRef.current = consumeVideoAutoplay(topic.topicId)
+  }
+  const [handedOffVideo, setHandedOffVideo] = React.useState<ResolvedVideo | null>(
+    handedOffRef.current,
+  )
   const [videoOpen, setVideoOpen] = React.useState(false)
+  // ── Article-open silencing (see video-preview-store) ──
+  // The sheet renders OVER the still-mounted feed — every rolling card
+  // preview pauses while the article is open (otherwise a preview's
+  // audio loops behind the sheet, doubling up with this article's own
+  // player) and resumes where it left off when the sheet closes.
+  React.useEffect(() => {
+    pauseAllPreviews()
+    return () => resumeAllPreviews()
+     
+  }, [])
   // Full topic fetched from /api/topic/[id] — used when the slim feed
   // response (slim=1) strips the articles array. This guarantees the
   // "All Sources" section always has articles to show.
