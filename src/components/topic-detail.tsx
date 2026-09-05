@@ -106,15 +106,13 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
   // scroll the content with your thumb anywhere, and close the sheet by
   // pulling the top bar (or the grabber handle) down. Releasing past the
   // distance/velocity threshold calls onClose; otherwise the sheet
-  // rubber-bands back (dragConstraints + elastic bottom). `dragClosing`
-  // switches the exit animation to a downward sink so a drag-close glides
-  // out in the SAME direction the user was pulling instead of jumping up.
+  // rubber-bands back (dragConstraints + elastic bottom). The exit is a
+  // slide to y:100% for every close path, so a drag-close glides out in
+  // the SAME direction the user was pulling.
   const dragControls = useDragControls()
-  const [dragClosing, setDragClosing] = React.useState(false)
   const handleDragEnd = (_: unknown, info: PanInfo) => {
     // Pull distance past ~100px, or a decisive flick (>550px/s downward).
     if (info.offset.y > 100 || info.velocity.y > 550) {
-      setDragClosing(true)
       onClose()
     }
   }
@@ -560,14 +558,20 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
       role="dialog"
       aria-modal="true"
       aria-label={topic.title}
-      // Smooth fade + subtle slide-up on open; reverse on close. The y
-      // offset is intentionally small (16px) so the transition reads as a
-      // FADE with a hint of motion, not a slide. Duration 0.28s is fast
-      // enough to feel responsive but slow enough to read as "polished".
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={dragClosing ? { opacity: 0, y: 420 } : { opacity: 0, y: 16 }}
-      transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+      // SHEET SLIDE-UP: the article rises over the feed as one opaque
+      // sheet (transform only — never an opacity crossfade). A full-
+      // screen solid div animating opacity 0→1 reads as a screen-wide
+      // flash on phones (mid-transition the whole viewport is a half-
+      // transparent solid), and the backdrop-blur top bar inside a
+      // fading parent compounds the compositing glitch. An opaque
+      // transform slide is the classic mobile article transition and
+      // is glitch-free. Exit mirrors it: the sheet glides back down
+      // (also the natural continuation of a swipe-down close).
+      initial={{ y: '100%' }}
+      animate={{ y: 0 }}
+      exit={{ y: '100%' }}
+      transition={{ duration: 0.34, ease: [0.32, 0.72, 0, 1] }}
+      style={{ willChange: 'transform' }}
       // Swipe-down-to-close: vertical drag is armed but ONLY starts from
       // the top bar (dragListener=false; the bar calls
       // dragControls.start on its own pointerdown). Constraints pin the

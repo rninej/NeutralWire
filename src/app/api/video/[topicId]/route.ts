@@ -31,7 +31,10 @@ export const maxDuration = 15
  * QUALITY REQUIREMENTS (user spec, enforced by lib/video-quality.ts):
  * every YouTube video must run LONGER THAN 10 SECONDS and come from a
  * channel with AT LEAST 10,000 SUBSCRIBERS — videos that fail either
- * check are skipped and the resolver moves to the next candidate. The
+ * check are skipped and the resolver moves to the next candidate. On
+ * top of the gate, candidates are ordered CONCISE-FIRST (user spec): a
+ * video at or under 7 minutes beats a half-hour broadcast roundup that
+ * only mentions the story among the day's every-other-headline. The
  * search prefers uploads from the story's own outlets (the "source's
  * video" preference — a bare YouTube videoId can't be quality-checked
  * directly, but the outlet's own upload about the story normally tops
@@ -40,10 +43,10 @@ export const maxDuration = 15
  * a YouTube-channel concept and doesn't apply to a vetted outlet's own
  * feed enclosure.
  *
- * Results are cached in Firebase (videos2/<topicId> — namespace bumped
- * from "videos" so every entry cached before the requirements are
- * ignored): 24h for a found video, 6h for a "no video" miss. Every
- * resolution is user-initiated, bounded by a ~10.5s budget, and never
+ * Results are cached in Firebase (videos3/<topicId> — namespace bumped
+ * whenever the ranking rules change so every entry cached under the
+ * older rules is ignored): 24h for a found video, 6h for a "no video"
+ * miss. Every resolution is user-initiated, bounded by a ~10.5s budget, and never
  * happens while the videoWatch feature flag is off — /debug can kill the
  * whole feature instantly (this endpoint returns { ok: false, disabled:
  * true } and the UI hides the pill).
@@ -87,9 +90,10 @@ async function isVideoWatchEnabled(): Promise<boolean> {
   return value
 }
 
-// ── Resolution cache (Firebase videos2/<topicId>) ──
-// v2 namespace: bumping it invalidated every pre-requirements entry —
-// cached "found" results may not meet the >=10k-subs / >10s rules.
+// ── Resolution cache (Firebase videos3/<topicId>) ──
+// v3 namespace: bumping it (from v2) invalidated every entry picked
+// before the concise-first (<7 min) preference — cached "found"
+// half-hour roundups re-resolve instead of replaying for 24h.
 const FOUND_TTL_MS = 24 * 60 * 60 * 1000
 const MISS_TTL_MS = 6 * 60 * 60 * 1000
 
@@ -149,11 +153,11 @@ export async function GET(
     )
   }
 
-  // 2. Cache (per-topic, TTL by outcome). videos2/ — see header comment.
+  // 2. Cache (per-topic, TTL by outcome). videos3/ — see header comment.
   //    A retry run skips CACHED MISSES only — re-resolving in case the
   //    first pass failed on a transient fetch.
   try {
-    const cached = await firebaseRead<CachedVideo>(`videos2/${topicId}`)
+    const cached = await firebaseRead<CachedVideo>(`videos3/${topicId}`)
     if (cached?.result && typeof cached.ts === 'number') {
       const ttl = cached.result.ok ? FOUND_TTL_MS : MISS_TTL_MS
       if (Date.now() - cached.ts < ttl) {
@@ -259,7 +263,7 @@ export async function GET(
 
 async function cacheResult(topicId: string, result: VideoResult): Promise<void> {
   try {
-    await firebaseWrite(`videos2/${topicId}`, { ts: Date.now(), result })
+    await firebaseWrite(`videos3/${topicId}`, { ts: Date.now(), result })
   } catch {
     // best-effort — a failed cache write just means we resolve again later
   }

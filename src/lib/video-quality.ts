@@ -28,6 +28,14 @@
 export const MIN_SUBSCRIBERS = 10_000
 export const MIN_DURATION_SECONDS = 10 // must be strictly MORE than 10s
 
+// ── Concise-coverage preference (user spec) ──
+// A topical video should be ABOUT THE STORY, not a channel's half-hour
+// "evening news" compilation that merely mentions it. Videos at or under
+// 7 minutes are tried FIRST in the candidate order (and preferred for the
+// fallback); longer ones still play when nothing concise qualifies — this
+// is a ranking preference, not a requirement.
+export const PREFERRED_MAX_DURATION_SECONDS = 420
+
 // ── Fetch helper ──
 
 const BROWSER_HEADERS: Record<string, string> = {
@@ -498,17 +506,29 @@ export function collectSearchCandidates(
  * videoId, title, channel, channel URL and duration.
  *
  * Candidates whose channel matches one of the story's OWN sources
- * (sourceNames, from the topic's articles) are tried FIRST — that's the
- * "uses the source's video" preference; a YouTube-shaped RSS videoUrl
- * or link can't be quality-checked directly (no keyless duration source
- * for a bare videoId), so finding the outlet's own upload in the search
- * results is how the source's video gets played.
+ * (sourceNames, from the topic's articles) get priority within each
+ * duration band — that's the "uses the source's video" preference; a
+ * YouTube-shaped RSS videoUrl or link can't be quality-checked directly
+ * (no keyless duration source for a bare videoId), so finding the
+ * outlet's own upload in the search results is how the source's video
+ * gets played.
  *
- * Every candidate — preferred or not — must be relevant (>=2 shared
+ * CONCISE-FIRST ORDERING (user spec): half-hour broadcast roundups that
+ * "cover" the topic by mentioning every story of the day are exactly
+ * what the Watch button should NOT play. Candidates are ordered:
+ *   1. concise (≤7 min) videos from the story's own outlets
+ *   2. concise videos from other channels
+ *   3. longer videos from the story's own outlets
+ *   4. longer videos from other channels
+ * Longer videos are still eligible (a preference, not a requirement) —
+ * they just lose to any qualifying concise video.
+ *
+ * Every candidate — in any band — must be relevant (>=2 shared
  * significant keywords, >=1 for a source match, or >=1 + a news-y
  * channel) AND pass the full quality gate (>10s, alive, >=10k subs).
- * A news-y channel is kept as a weaker fallback, but it must pass the
- * same gate — nothing under 10k subs or 10 seconds ever plays.
+ * A news-y channel is kept as a weaker fallback (it prefers a concise
+ * candidate too), but it must pass the same gate — nothing under 10k
+ * subs or 10 seconds ever plays.
  */
 export async function searchYouTubeForStory(
   storyTitle: string,
@@ -545,13 +565,27 @@ export async function searchYouTubeForStory(
     return sourceKeys.some((k) => a.includes(k) || k.includes(a))
   }
 
-  // Source's own uploads first, then plain result order.
+  // Source's own uploads first within each band, then plain result order.
   const preferred = candidates.filter((c) => c.title && matchesSource(c.author))
   const rest = candidates.filter((c) => !c.title || !matchesSource(c.author))
-  const ordered = [...preferred, ...rest]
+  // Concise-first: a ≤7-minute video about the story beats a half-hour
+  // broadcast compilation that merely mentions it (user spec). Longer
+  // videos remain as later candidates — never excluded.
+  const isConcise = (c: SearchCandidate) =>
+    typeof c.durationSec === 'number' &&
+    c.durationSec <= PREFERRED_MAX_DURATION_SECONDS
+  const ordered = [
+    ...preferred.filter(isConcise),
+    ...rest.filter(isConcise),
+    ...preferred.filter((c) => !isConcise(c)),
+    ...rest.filter((c) => !isConcise(c)),
+  ]
 
   let fallback: SearchCandidate | null = null
-  for (const c of ordered.slice(0, 7)) {
+  // 9 (not 7): the concise-first reordering stacks short candidates at
+  // the front — if several of them fail the gate, the longer bands
+  // still need room in the window to get their chance.
+  for (const c of ordered.slice(0, 9)) {
     if (Date.now() > deadline) return null
     // A declared duration of <=10s (or none — live streams) disqualifies
     // immediately; the lengthText is the ONLY duration source.
@@ -572,7 +606,12 @@ export async function searchYouTubeForStory(
         deadline,
       )
       if (hit) return withAspect(hit, deadline)
-    } else if (!fallback && looksLikeNews) {
+    } else if (
+      looksLikeNews &&
+      (!fallback || (isConcise(c) && !isConcise(fallback)))
+    ) {
+      // Fallback prefers a concise candidate when one shows up later in
+      // the list (the first news-y fallback is replaced by a shorter one).
       fallback = c
     }
   }

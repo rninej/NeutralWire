@@ -1443,7 +1443,22 @@ export default function Home({
     }
 
     // ── Seen-topic demotion ──
+    // A topic the user JUST opened (within RECENT_SEEN_MS) keeps its
+    // ranking untouched — the story they were just reading must still be
+    // on screen (no scroll hunt) when they come back out; reading is not
+    // a demotion during the session. OLDER seen topics slide down the
+    // feed, but a read story is NEVER hidden for being read — the
+    // visibility gate below tests the score WITHOUT the seen penalty, so
+    // only genuine dislike signals can remove a topic.
     const seenTopicIds = new Set(Object.keys(seenTopics))
+    const now = Date.now()
+    const RECENT_SEEN_MS = 10 * 60 * 1000
+    const SEEN_DEMOTE = 15
+    const seenPenaltyFor = (topicId: string): number => {
+      const at = seenTopics[topicId]
+      if (!at) return 0
+      return now - at < RECENT_SEEN_MS ? 0 : SEEN_DEMOTE
+    }
 
     // ── Local city detection ──
     // Scan topics for mentions of the user's detected city. These get a
@@ -1523,13 +1538,16 @@ export default function Home({
     // preserves original order for ties (so equal-boost stories keep
     // their aggregator ordering, which already prioritises local + fresh).
     //
-    // Seen topics get a -15 penalty (demoted below unseen stories of
-    // similar coverage).
+    // Seen topics (read >10 min ago) get a -15 penalty (demoted below
+    // unseen stories of similar coverage); ones read within the last
+    // 10 minutes keep their full score (they stay on screen).
     // Local-city topics get a +18 boost (surfaces them above non-local
     // stories of similar coverage, but the cap below limits how many
     // appear in the final feed).
-    // Topics with very negative scores (< -10) are HIDDEN — the user has
-    // strongly disliked this sector, so we don't show them at all.
+    // Topics with very negative BASE scores (< -10, before the seen
+    // penalty) are HIDDEN — the user has strongly disliked this sector.
+    // The seen penalty can demote but never hide: a story is not removed
+    // just because it was read.
     //
     // ── Notification-like ranking signals ──
     // boostScore: the GLOBAL signal — every like on a notification adds
@@ -1552,20 +1570,26 @@ export default function Home({
       }
     }
     const scored = list
-      .map((t) => ({
-        topic: t,
-        score:
-          personalizationBoost(t, interests, engagement) -
-          (seenTopicIds.has(t.topicId) ? 15 : 0) +
+      .map((t) => {
+        const base =
+          personalizationBoost(t, interests, engagement) +
           (isLocalTopic(t) ? LOCAL_BOOST : 0) +
           (t.boostScore || 0) +
-          (likedTopicIds.has(t.topicId) ? LIKED_DIRECT_BOOST : 0),
-        isLocal: isLocalTopic(t),
-      }))
+          (likedTopicIds.has(t.topicId) ? LIKED_DIRECT_BOOST : 0)
+        return {
+          topic: t,
+          base,
+          score: base - seenPenaltyFor(t.topicId),
+          isLocal: isLocalTopic(t),
+        }
+      })
       .sort((a, b) => b.score - a.score)
 
-    // Hide heavily-disliked topics (score < -10)
-    const visible = scored.filter((entry) => entry.score > -10)
+    // Hide heavily-disliked topics (BASE score < -10). The seen penalty
+    // is excluded on purpose: a read story ranks lower but is never
+    // REMOVED for being read — it only disappears if the user actually
+    // disliked its sectors.
+    const visible = scored.filter((entry) => entry.base > -10)
     // If hiding everything would leave nothing, show all (better than empty)
     const finalScored = visible.length > 0 ? visible : scored
 

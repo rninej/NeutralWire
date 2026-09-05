@@ -34,7 +34,11 @@
  * anything else falls back to a pseudo-fullscreen (the dialog card itself
  * goes edge-to-edge). While fullscreen, tapping the screen (top strip,
  * letterbox areas, or any iframe interaction seen via window blur/focus)
- * reveals an exit chip in the top-right corner that un-fullscreens.
+ * reveals an exit chip in the top-right corner that un-fullscreens —
+ * and a second tap on the top strip (or the chip itself, which listens
+ * on POINTERDOWN — far more reliable than click for elements layered
+ * over a cross-origin iframe) exits too, so un-fullscreening never
+ * depends on a single fragile path.
  *
  * Rendering:
  *   - kind 'youtube' → privacy-enhanced iframe embed (youtube-nocookie)
@@ -151,11 +155,13 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
 
   // ── Fullscreen machinery ───────────────────────────────────────────
 
-  /** Reveal the exit-fullscreen chip and restart its idle auto-hide. */
+  /** Reveal the exit-fullscreen chip and restart its idle auto-hide.
+   *  8s — long enough to actually reach for the button before it
+   *  vanishes (a 3s hide made it feel like the exit "doesn't work"). */
   const showFsExit = React.useCallback(() => {
     setFsExitVisible(true)
     if (fsExitTimer.current) clearTimeout(fsExitTimer.current)
-    fsExitTimer.current = setTimeout(() => setFsExitVisible(false), 3000)
+    fsExitTimer.current = setTimeout(() => setFsExitVisible(false), 8000)
   }, [])
 
   const enterFs = React.useCallback(() => {
@@ -197,17 +203,31 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
   }, [])
 
   const exitFs = React.useCallback(() => {
+    // Pseudo-fullscreen always dies here (pure state).
     setPseudoFs(false)
     const doc = document as Document & {
       webkitFullscreenElement?: Element | null
       webkitExitFullscreen?: () => void
+      webkitCancelFullscreen?: () => void
     }
     if (!document.fullscreenElement && !doc.webkitFullscreenElement) return
+    const tryWebkitExit = () => {
+      try {
+        if (doc.webkitExitFullscreen) doc.webkitExitFullscreen()
+        else if (doc.webkitCancelFullscreen) doc.webkitCancelFullscreen()
+      } catch {
+        // last resort — nothing else to try
+      }
+    }
     try {
-      if (document.exitFullscreen) document.exitFullscreen().catch(() => {})
-      else doc.webkitExitFullscreen?.()
+      if (typeof document.exitFullscreen === 'function') {
+        // Returns a promise in modern browsers (undefined in old WebKit).
+        Promise.resolve(document.exitFullscreen()).catch(tryWebkitExit)
+      } else {
+        tryWebkitExit()
+      }
     } catch {
-      doc.webkitExitFullscreen?.()
+      tryWebkitExit()
     }
   }, [])
 
@@ -498,18 +518,22 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
             </div>
           )}
 
-          {/* Tap strip (fullscreen only): tapping the top edge of the
-              screen reveals the exit chip. Taps INSIDE a cross-origin
-              iframe never reach us — the strip, the letterbox areas and
-              the window blur/focus pair cover the "tap the screen"
-              reveal. */}
+          {/* Tap strip (fullscreen only): the whole top edge. First tap
+              reveals the exit chip; a tap while the chip is already
+              showing EXITS fullscreen directly — a large, reliable
+              un-fullscreen target that never depends on the iframe.
+              (Pointerdown, not click: elements layered over a
+              cross-origin iframe get flaky click delivery on some
+              mobile browsers.) */}
           {isFs && (
             <div
-              className="absolute inset-x-0 top-0 z-[2] h-10"
-              onClick={(e) => {
+              className="absolute inset-x-0 top-0 z-[2] h-12"
+              onPointerDown={(e) => {
                 e.stopPropagation()
-                showFsExit()
+                if (fsExitVisible) exitFs()
+                else showFsExit()
               }}
+              onClick={(e) => e.stopPropagation()}
             />
           )}
 
@@ -534,19 +558,26 @@ export function VideoPlayer({ topicId, storyTitle, onClose }: VideoPlayerProps) 
           )}
 
           {/* Exit-fullscreen chip — reveals when the screen is tapped,
-              hides again after a few idle seconds. */}
+              hides again after ~8s idle. Fires on POINTERDOWN (more
+              reliable than click over an iframe) with the click as a
+              backstop; exitFs is idempotent so a double fire is safe. */}
           {isFs && fsExitVisible && (
             <motion.button
               type="button"
               initial={{ opacity: 0, scale: 0.85 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.18, ease: EASE_OUT }}
+              onPointerDown={(e) => {
+                e.stopPropagation()
+                e.preventDefault()
+                exitFs()
+              }}
               onClick={(e) => {
                 e.stopPropagation()
                 e.preventDefault()
                 exitFs()
               }}
-              className="absolute right-3 top-3 z-[4] flex h-11 w-11 items-center justify-center rounded-xl bg-black/85 text-white shadow-lg backdrop-blur-[2px] transition-transform active:scale-95"
+              className="absolute right-3 top-3 z-[4] flex h-12 w-12 items-center justify-center rounded-xl bg-black/90 text-white shadow-lg transition-transform active:scale-95"
               aria-label="Exit fullscreen"
               title="Exit fullscreen"
             >
