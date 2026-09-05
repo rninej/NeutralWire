@@ -48,10 +48,24 @@ function nextMilestone(count: number): number | null {
  *    a friend ("know someone stuck in a bubble?"), which is also the
  *    top-of-funnel for new installs.
  *
- * There is NO donate ask here, ever. The Ko-fi card stays tucked away
- * in Account → Support for those who go looking.
+ * WHY THE ORIGINAL HAD NO DONATE BUTTON (user asked): the popup was
+ * deliberately celebration-only — an ASK at the peak of a happy session
+ * ends it on guilt (peak–end rule), so the Ko-fi card stayed tucked
+ * away in Account → Support for people who go looking. The DONATE MODE
+ * below (user: "make it so it says If you love NeutralWire's free
+ * mission, Please Donate") is now the DEFAULT: same milestone trigger,
+ * but the body carries the donation message and a real Donate-on-Ko-fi
+ * button. Switchable back to the original celebration-only version
+ * from /debug (Firebase featureFlags/milestoneDonate — absent/true =
+ * donate version, explicitly false = original).
  */
-export function MilestoneCelebration() {
+export function MilestoneCelebration({
+  donateMode = true,
+}: {
+  /** true (default) → the donate-message version; false → the original
+   *  celebration-only version. Set site-wide from /debug. */
+  donateMode?: boolean
+}) {
   const [show, setShow] = React.useState(false)
   const [count, setCount] = React.useState(0)
   const [displayCount, setDisplayCount] = React.useState(0)
@@ -226,127 +240,161 @@ export function MilestoneCelebration() {
               </h2>
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
                 Each one shown from the left, the center{' '}
-                <span className="text-blue-500">and</span> the right.
+                <span className="text-blue-500">and</span> the right.{' '}
                 That&rsquo;s {displayCount.toLocaleString()} times you saw
                 through the bubble.
               </p>
 
-              {/* Progress to next milestone */}
-              <div className="mt-5">
-                <div className="mb-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <Sparkles className="h-3 w-3 text-emerald-500" />
-                    next milestone
-                  </span>
-                  <span className="tabular-nums">
-                    {count} / {next}
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-muted">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${progress * 100}%` }}
-                    transition={{ delay: 0.5, duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
-                    className="h-full rounded-full bg-gradient-to-r from-blue-500 via-zinc-400 to-red-500"
-                  />
-                </div>
-              </div>
+              {donateMode ? (
+                /* ── DONATE VERSION (default — user spec: "make it so it
+                    says If you love NeutralWire's free mission, Please
+                    Donate") — the message plus a REAL donate button
+                    (Ko-fi), answering "why doesn't the popup have a
+                    button for donating". Switchable back to the
+                    original celebration below from /debug. */
+                <>
+                  <p className="mt-5 text-lg font-bold leading-snug">
+                    If you love NeutralWire&rsquo;s free mission,{' '}
+                    <span className="text-red-500">Please&nbsp;Donate</span>
+                    .
+                  </p>
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                    Free, ad-free, paywall-free — NeutralWire shows every
+                    side of every story because a few readers chip in. A
+                    coffee on Ko-fi keeps it that way.
+                  </p>
+                  <button
+                    onClick={() =>
+                      window.open('https://ko-fi.com/neutralwire', '_blank')
+                    }
+                    className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-red-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-red-500/25 transition-all hover:bg-red-600 active:scale-95"
+                  >
+                    <Heart className="h-4 w-4 fill-white" />
+                    Donate on Ko-fi
+                  </button>
+                </>
+              ) : (
+                <>
+                  {/* ── ORIGINAL VERSION (switchable from /debug) ── */}
 
-              {/* Community love — one tap, once ever */}
-              <div className="mt-6">
-                {(() => {
-                  const others = Math.max(
-                    0,
-                    (loveCount ?? 0) - (loveSent ? 1 : 0),
-                  )
-                  return (
-                    <p className="mb-2 text-xs text-muted-foreground">
-                      {others === 0 ? (
-                        loveSent ? (
+                  {/* Progress to next milestone */}
+                  <div className="mt-5">
+                    <div className="mb-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Sparkles className="h-3 w-3 text-emerald-500" />
+                        next milestone
+                      </span>
+                      <span className="tabular-nums">
+                        {count} / {next}
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-muted">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${progress * 100}%` }}
+                        transition={{ delay: 0.5, duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
+                        className="h-full rounded-full bg-gradient-to-r from-blue-500 via-zinc-400 to-red-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Community love — one tap, once ever */}
+                  <div className="mt-6">
+                    {(() => {
+                      const others = Math.max(
+                        0,
+                        (loveCount ?? 0) - (loveSent ? 1 : 0),
+                      )
+                      return (
+                        <p className="mb-2 text-xs text-muted-foreground">
+                          {others === 0 ? (
+                            loveSent ? (
+                              <>
+                                You&rsquo;re the first to love balanced news —
+                                others will follow 💙
+                              </>
+                            ) : (
+                              'Be the first to love balanced news'
+                            )
+                          ) : (
+                            <>
+                              You and{' '}
+                              <strong className="text-foreground">
+                                {others.toLocaleString()}
+                              </strong>{' '}
+                              {others === 1 ? 'reader' : 'readers'}{' '}
+                              {others === 1 ? 'loves' : 'love'} balanced news
+                            </>
+                          )}
+                        </p>
+                      )
+                    })()}
+                    <div className="relative inline-block">
+                      <button
+                        onClick={handleLove}
+                        disabled={loveSent}
+                        className={`relative flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold transition-all active:scale-95 ${
+                          loveSent
+                            ? 'bg-red-500/10 text-red-500'
+                            : 'bg-red-500 text-white shadow-lg shadow-red-500/25 hover:bg-red-600'
+                        }`}
+                      >
+                        <Heart
+                          className={`h-4 w-4 ${loveSent ? 'fill-red-500' : 'fill-white'} ${
+                            loveBurst ? 'animate-ping' : ''
+                          }`}
+                        />
+                        {loveSent ? 'Loved' : 'Love NeutralWire'}
+                      </button>
+                      {/* Heart burst on press */}
+                      <AnimatePresence>
+                        {loveBurst && (
                           <>
-                            You&rsquo;re the first to love balanced news —
-                            others will follow 💙
+                            {[0, 1, 2, 3, 4].map((i) => (
+                              <motion.span
+                                key={i}
+                                initial={{ opacity: 1, x: 0, y: 0, scale: 0.5 }}
+                                animate={{
+                                  opacity: 0,
+                                  x: Math.cos((i / 5) * 2 * Math.PI) * 46,
+                                  y: Math.sin((i / 5) * 2 * Math.PI) * 46 - 12,
+                                  scale: 1.1,
+                                }}
+                                exit={{ opacity: 0 }}
+                                transition={{ duration: 0.8, ease: 'easeOut' }}
+                                className="pointer-events-none absolute left-1/2 top-1/2 -ml-2 -mt-2 text-lg"
+                              >
+                                ❤️
+                              </motion.span>
+                            ))}
                           </>
-                        ) : (
-                          'Be the first to love balanced news'
-                        )
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
+
+                  {/* Share the balance (referral — top of the install funnel) */}
+                  <div className="mt-5">
+                    <Button
+                      onClick={handleShare}
+                      variant="outline"
+                      className="h-10 w-full text-sm font-medium"
+                    >
+                      {copied ? (
+                        <>
+                          <Check className="mr-2 h-4 w-4 text-emerald-500" />
+                          Link copied
+                        </>
                       ) : (
                         <>
-                          You and{' '}
-                          <strong className="text-foreground">
-                            {others.toLocaleString()}
-                          </strong>{' '}
-                          {others === 1 ? 'reader' : 'readers'}{' '}
-                          {others === 1 ? 'loves' : 'love'} balanced news
+                          <Share2 className="mr-2 h-4 w-4" />
+                          Know someone in a bubble? Share this
                         </>
                       )}
-                    </p>
-                  )
-                })()}
-                <div className="relative inline-block">
-                  <button
-                    onClick={handleLove}
-                    disabled={loveSent}
-                    className={`relative flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold transition-all active:scale-95 ${
-                      loveSent
-                        ? 'bg-red-500/10 text-red-500'
-                        : 'bg-red-500 text-white shadow-lg shadow-red-500/25 hover:bg-red-600'
-                    }`}
-                  >
-                    <Heart
-                      className={`h-4 w-4 ${loveSent ? 'fill-red-500' : 'fill-white'} ${
-                        loveBurst ? 'animate-ping' : ''
-                      }`}
-                    />
-                    {loveSent ? 'Loved' : 'Love NeutralWire'}
-                  </button>
-                  {/* Heart burst on press */}
-                  <AnimatePresence>
-                    {loveBurst && (
-                      <>
-                        {[0, 1, 2, 3, 4].map((i) => (
-                          <motion.span
-                            key={i}
-                            initial={{ opacity: 1, x: 0, y: 0, scale: 0.5 }}
-                            animate={{
-                              opacity: 0,
-                              x: Math.cos((i / 5) * 2 * Math.PI) * 46,
-                              y: Math.sin((i / 5) * 2 * Math.PI) * 46 - 12,
-                              scale: 1.1,
-                            }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 0.8, ease: 'easeOut' }}
-                            className="pointer-events-none absolute left-1/2 top-1/2 -ml-2 -mt-2 text-lg"
-                          >
-                            ❤️
-                          </motion.span>
-                        ))}
-                      </>
-                    )}
-                  </AnimatePresence>
-                </div>
-              </div>
-
-              {/* Share the balance (referral — top of the install funnel) */}
-              <div className="mt-5">
-                <Button
-                  onClick={handleShare}
-                  variant="outline"
-                  className="h-10 w-full text-sm font-medium"
-                >
-                  {copied ? (
-                    <>
-                      <Check className="mr-2 h-4 w-4 text-emerald-500" />
-                      Link copied
-                    </>
-                  ) : (
-                    <>
-                      <Share2 className="mr-2 h-4 w-4" />
-                      Know someone in a bubble? Share this
-                    </>
-                  )}
-                </Button>
-              </div>
+                    </Button>
+                  </div>
+                </>
+              )}
 
               <button
                 onClick={() => setShow(false)}

@@ -309,15 +309,11 @@ function VideoChrome({
       // play-state flip).
       onMouseMove={() => show(playing)}
     >
-      {/* Paused → a single centered play affordance (tapping anywhere
-          also resumes). */}
-      {!playing && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/60 backdrop-blur-[2px]">
-            <Play className="h-7 w-7 text-white" fill="currentColor" />
-          </div>
-        </div>
-      )}
+      {/* NO centered play/pause button — user spec: "there is another
+          overlay in absolute middle of screen for pause play button, fix
+          it". The only chrome is the bottom bar (and it only appears from
+          a tap), whose play/pause button is the resume affordance while
+          paused; the video surface itself stays completely clean. */}
 
       <AnimatePresence>
         {visible && (

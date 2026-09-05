@@ -40,6 +40,7 @@ import {
   Eraser,
   FlaskConical,
   Play,
+  Heart,
 } from 'lucide-react'
 import { getDeviceId } from '@/lib/referral'
 import { COUNTRY_COORDS, latLngToXY } from '@/lib/country-coords'
@@ -374,6 +375,13 @@ export default function DebugPage() {
   const [videoPreview, setVideoPreview] = React.useState<boolean | null>(null)
   const [videoPreviewFlipping, setVideoPreviewFlipping] = React.useState(false)
   const [videoPreviewResult, setVideoPreviewResult] = React.useState<string | null>(null)
+  // Milestone-popup body flag — the donate message (default) vs the
+  // original celebration-only version (user: "make it so it says If you
+  // love NeutralWire's free mission, Please Donate, which is switchable
+  // to your original version from /debug experimental").
+  const [milestoneDonate, setMilestoneDonate] = React.useState<boolean | null>(null)
+  const [milestoneDonateFlipping, setMilestoneDonateFlipping] = React.useState(false)
+  const [milestoneDonateResult, setMilestoneDonateResult] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     fetch('/api/flags')
@@ -391,6 +399,7 @@ export default function DebugPage() {
         setNotifLike(d?.notifLike !== false)
         setVideoWatch(d?.videoWatch !== false)
         setVideoPreview(d?.videoPreview === true)
+        setMilestoneDonate(d?.milestoneDonate !== false)
       })
       .catch(() => {
         setNavMode('cards')
@@ -398,12 +407,13 @@ export default function DebugPage() {
         setNotifLike(true)
         setVideoWatch(true)
         setVideoPreview(false)
+        setMilestoneDonate(true)
       })
   }, [])
 
   /** POST one boolean flag (shared by the experimental switches). */
   const flipBooleanFlag = async (
-    flag: 'notifLike' | 'videoWatch' | 'videoPreview',
+    flag: 'notifLike' | 'videoWatch' | 'videoPreview' | 'milestoneDonate',
     value: boolean,
   ): Promise<boolean> => {
     if (!passwordRef.current) return false
@@ -923,7 +933,8 @@ export default function DebugPage() {
           </div>
           <p className="mb-4 text-sm text-muted-foreground">
             Like + Watch + the top-story video preview are live for every
-            visitor right now. Each switch applies instantly for new
+            visitor right now, and the milestone popup carries the donate
+            message. Each switch applies instantly for new
             notifications / new page loads — no redeploy needed. Flip them
             back the same way.
           </p>
@@ -1172,6 +1183,90 @@ export default function DebugPage() {
                   'Turn off'
                 ) : (
                   'Turn on'
+                )}
+              </Button>
+            </div>
+
+            {/* ── Milestone popup: donate version vs original ── */}
+            <div
+              className={cn(
+                'flex items-start gap-3 rounded-xl border-2 p-4 transition-colors',
+                milestoneDonate === false ? 'border-border opacity-70' : 'border-border bg-muted/40',
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  milestoneDonate ? 'bg-red-500/15 text-red-500' : 'bg-muted text-muted-foreground',
+                )}
+              >
+                <Heart className="h-4.5 w-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold">Milestone popup: donate version</span>
+                  {milestoneDonate !== null && (
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                        milestoneDonate
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-muted-foreground/20 text-muted-foreground',
+                      )}
+                    >
+                      {milestoneDonate ? 'Donate' : 'Original'}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Inside the installed PWA, the stories-read milestone popup
+                  carries the body <b>"If you love NeutralWire's free
+                  mission, Please Donate"</b> with a real Donate-on-Ko-fi
+                  button (this switch ON — the default). Flip it OFF to
+                  return to the ORIGINAL celebration-only version: next-
+                  milestone progress bar, the community love counter and
+                  the share-the-balance button, with no donation ask
+                  (the behavioral design that never ended a happy reading
+                  session on an ask — the Ko-fi card stayed in Account →
+                  Support). Refresh the PWA after switching; the next
+                  milestone crossed shows the new body.
+                </p>
+                {milestoneDonateResult && (
+                  <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    {milestoneDonateResult}
+                  </p>
+                )}
+              </div>
+              <Button
+                variant={milestoneDonate ? 'destructive' : 'default'}
+                size="sm"
+                disabled={milestoneDonateFlipping || milestoneDonate === null}
+                onClick={async () => {
+                  if (milestoneDonateFlipping || milestoneDonate === null) return
+                  setMilestoneDonateFlipping(true)
+                  setMilestoneDonateResult(null)
+                  const next = !milestoneDonate
+                  const ok = await flipBooleanFlag('milestoneDonate', next)
+                  if (ok) {
+                    setMilestoneDonate(next)
+                    setMilestoneDonateResult(
+                      next
+                        ? '✓ Donate version — the next milestone popup asks for support'
+                        : '✓ Original version — celebration only, no donate ask',
+                    )
+                  } else {
+                    setMilestoneDonateResult('Failed to update (check password)')
+                  }
+                  setMilestoneDonateFlipping(false)
+                }}
+                className="shrink-0"
+              >
+                {milestoneDonateFlipping ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : milestoneDonate ? (
+                  'Use original'
+                ) : (
+                  'Use donate'
                 )}
               </Button>
             </div>

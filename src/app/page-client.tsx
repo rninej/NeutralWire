@@ -272,9 +272,14 @@ type NavVariant =
 export default function Home({
   initialSubtopicNav,
   popupSystem = DEFAULT_POPUP_MODE,
+  milestoneDonate = true,
 }: {
   initialSubtopicNav?: NavVariant
   popupSystem?: PopupMode
+  /** Milestone popup body: donate message (default) vs the original
+   *  celebration-only version — site-wide flag from /debug, read during
+   *  SSR (page.tsx) so the popup opens with the right body. */
+  milestoneDonate?: boolean
 }) {
   // --- Platform detection (Android / Apple / Other) ---
   // Sets body.platform-{android|apple|other} so the CSS glass rules in
@@ -2630,13 +2635,17 @@ export default function Home({
       <PwaOnboarding />
 
       {/* In the PWA: the ORIGINAL mode brings back the classic Ko-fi
-          donation popup; the smart modes celebrate milestones instead
-          (never an ask). The two are mutually exclusive by design — both
-          count stories opened on this surface. */}
+          donation popup; the smart modes celebrate milestones instead —
+          and (milestoneDonate flag, default ON) that celebration body is
+          the user-requested "If you love NeutralWire's free mission,
+          Please Donate" message + a real Donate-on-Ko-fi button,
+          switchable back to the original celebration-only body from
+          /debug. The two systems are mutually exclusive by design —
+          both count stories opened on this surface. */}
       {popupSystem === 'original' ? (
         <DonatePopupLegacy />
       ) : (
-        <MilestoneCelebration />
+        <MilestoneCelebration donateMode={milestoneDonate} />
       )}
 
       {/* User page (account / referral / personalization / themes / support)

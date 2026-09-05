@@ -125,6 +125,30 @@ async function getVideoPreview(): Promise<boolean> {
   }
 }
 
+// ── Server-rendered milestoneDonate flag (popup body version) ──
+// Which body the PWA's milestone popup carries after "N stories read":
+// the user-requested donate message + a real Donate-on-Ko-fi button
+// (default, true) or the ORIGINAL celebration-only version (false).
+// Same SSR pattern as the other flags: read HERE so the first open of
+// the popup already shows the right body — no wrong-message flash. 5s
+// memo; absent flag → true (the donate version is the live default).
+let milestoneDonateFlagMemo: { value: boolean; ts: number } | null = null
+const MILESTONE_FLAG_TTL_MS = 5 * 1000
+
+async function getMilestoneDonate(): Promise<boolean> {
+  if (milestoneDonateFlagMemo && Date.now() - milestoneDonateFlagMemo.ts < MILESTONE_FLAG_TTL_MS) {
+    return milestoneDonateFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<boolean | string>('featureFlags/milestoneDonate')
+    const value = !(stored === false || stored === 'false')
+    milestoneDonateFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return true
+  }
+}
+
 /**
  *  Generate dynamic OG metadata for shared links.
  *
@@ -215,6 +239,10 @@ export default async function Page() {
   // (defaults OFF; flipped on from /debug).
   const videoPreview = await getVideoPreview()
 
+  // Milestone-popup body flag — donate message (default) vs the original
+  // celebration-only version; switched from /debug.
+  const milestoneDonate = await getMilestoneDonate()
+
   // Personal override (Account → Feature Flags → "Your header style"):
   // a cookie, so the server sees it during SSR — the visitor's own pick
   // renders in the very first paint, no flash. Invalid values fall back
@@ -232,7 +260,11 @@ export default async function Page() {
   return (
     <VideoWatchProvider enabled={videoWatch}>
       <VideoPreviewProvider enabled={videoPreview}>
-        <PageClient initialSubtopicNav={initialSubtopicNav} popupSystem={popupSystem} />
+        <PageClient
+          initialSubtopicNav={initialSubtopicNav}
+          popupSystem={popupSystem}
+          milestoneDonate={milestoneDonate}
+        />
       </VideoPreviewProvider>
     </VideoWatchProvider>
   )

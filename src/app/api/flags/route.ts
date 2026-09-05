@@ -16,9 +16,9 @@ export const maxDuration = 15
 /**
  * Server-side feature flags (stored in Firebase under featureFlags/<name>).
  *
- * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, videoWatch, videoPreview }   (public)
+ * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, videoWatch, videoPreview, milestoneDonate }   (public)
  * POST /api/flags   → set flag(s) for ALL users (password-protected)
- *       body: { password, subtopicNav?, popupSystem?, notifLike?, videoWatch?, videoPreview? }
+ *       body: { password, subtopicNav?, popupSystem?, notifLike?, videoWatch?, videoPreview?, milestoneDonate? }
  *       — send one or more.
  *
  * Managed flags:
@@ -65,6 +65,15 @@ export const maxDuration = 15
  *       inside its image ~0.8s after it has been on screen. Flipped on
  *       from /debug → live for every visitor on the next page load.
  *
+ *   - milestoneDonate (boolean, default TRUE): which body the PWA's
+ *       milestone popup carries after "N stories read" — the user-facing
+ *       ask "If you love NeutralWire's free mission, Please Donate" + a
+ *       real Donate-on-Ko-fi button (true, the default), or the ORIGINAL
+ *       celebration-only version (progress bar + community love +
+ *       share; false). Only affects the smart popup modes — the
+ *       'original' popupSystem already brings back the classic Ko-fi
+ *       donate popup.
+ *
  * Flags are flipped from /debug in one click; every client receives the
  * values server-side on load (page.tsx SSR) so a flip propagates on the
  * next page load with no wrong-design flash.
@@ -89,6 +98,7 @@ const POPUP_FLAG_PATH = 'featureFlags/popupSystem'
 const NOTIF_LIKE_FLAG_PATH = 'featureFlags/notifLike'
 const VIDEO_FLAG_PATH = 'featureFlags/videoWatch'
 const VIDEO_PREVIEW_FLAG_PATH = 'featureFlags/videoPreview'
+const MILESTONE_DONATE_FLAG_PATH = 'featureFlags/milestoneDonate'
 
 // Per-instance memos (10s) — bound Firebase reads when many clients hit
 // this endpoint simultaneously on a warm serverless instance.
@@ -97,6 +107,7 @@ let popupMemo: { value: PopupMode; ts: number } | null = null
 let notifLikeMemo: { value: boolean; ts: number } | null = null
 let videoMemo: { value: boolean; ts: number } | null = null
 let videoPreviewMemo: { value: boolean; ts: number } | null = null
+let milestoneDonateMemo: { value: boolean; ts: number } | null = null
 const MEMO_TTL_MS = 10 * 1000
 
 function sha256(s: string): string {
@@ -133,7 +144,7 @@ function normalizeBooleanFlag(v: unknown, fallback: boolean): boolean {
 export async function GET() {
   // All flags are fetched in parallel — one cold instance pays the
   // RTDB reads at most, then all answers are memoized together.
-  const [navResult, popupResult, notifLikeResult, videoResult, videoPreviewResult] = await Promise.allSettled([
+  const [navResult, popupResult, notifLikeResult, videoResult, videoPreviewResult, milestoneDonateResult] = await Promise.allSettled([
     (async () => {
       if (navMemo && Date.now() - navMemo.ts < MEMO_TTL_MS) return navMemo.value
       const stored = await firebaseRead<string>(NAV_FLAG_PATH)
@@ -172,6 +183,15 @@ export async function GET() {
       videoPreviewMemo = { value, ts: Date.now() }
       return value
     })(),
+    (async () => {
+      if (milestoneDonateMemo && Date.now() - milestoneDonateMemo.ts < MEMO_TTL_MS) return milestoneDonateMemo.value
+      const stored = await firebaseRead<boolean>(MILESTONE_DONATE_FLAG_PATH)
+      // DEFAULT ON — the donate message is the live version (user spec);
+      // an explicit false restores the original celebration-only popup.
+      const value = normalizeBooleanFlag(stored, true)
+      milestoneDonateMemo = { value, ts: Date.now() }
+      return value
+    })(),
   ])
 
   // ── CDN cache (Fluid CPU) ──
@@ -195,6 +215,8 @@ export async function GET() {
       videoWatch: videoResult.status === 'fulfilled' ? videoResult.value : true,
       videoPreview:
         videoPreviewResult.status === 'fulfilled' ? videoPreviewResult.value : false,
+      milestoneDonate:
+        milestoneDonateResult.status === 'fulfilled' ? milestoneDonateResult.value : true,
     },
     {
       headers: {
@@ -212,6 +234,7 @@ export async function POST(req: NextRequest) {
     notifLike?: boolean | string
     videoWatch?: boolean | string
     videoPreview?: boolean | string
+    milestoneDonate?: boolean | string
   }
   try {
     body = await req.json()
@@ -228,11 +251,12 @@ export async function POST(req: NextRequest) {
   const wantsNotifLike = body.notifLike !== undefined
   const wantsVideo = body.videoWatch !== undefined
   const wantsVideoPreview = body.videoPreview !== undefined
-  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsVideo && !wantsVideoPreview) {
+  const wantsMilestoneDonate = body.milestoneDonate !== undefined
+  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsVideo && !wantsVideoPreview && !wantsMilestoneDonate) {
     return NextResponse.json(
       {
         error:
-          'Provide subtopicNav, popupSystem, notifLike, videoWatch and/or videoPreview to set',
+          'Provide subtopicNav, popupSystem, notifLike, videoWatch, videoPreview and/or milestoneDonate to set',
       },
       { status: 400 },
     )
@@ -300,6 +324,16 @@ export async function POST(req: NextRequest) {
     console.log(`[flags] videoPreview set to '${videoPreview}' (applies to ALL users)`)
   }
 
+  if (wantsMilestoneDonate) {
+    const milestoneDonate = normalizeBooleanFlag(body.milestoneDonate, true)
+    const ok = await firebaseWrite(MILESTONE_DONATE_FLAG_PATH, milestoneDonate)
+    if (!ok) {
+      return NextResponse.json({ error: 'Firebase write failed (milestoneDonate)' }, { status: 500 })
+    }
+    milestoneDonateMemo = { value: milestoneDonate, ts: Date.now() }
+    console.log(`[flags] milestoneDonate set to '${milestoneDonate}' (applies to ALL users)`)
+  }
+
   return NextResponse.json({
     ok: true,
     ...(wantsNav ? { subtopicNav: body.subtopicNav } : {}),
@@ -307,5 +341,6 @@ export async function POST(req: NextRequest) {
     ...(wantsNotifLike ? { notifLike: normalizeBooleanFlag(body.notifLike, true) } : {}),
     ...(wantsVideo ? { videoWatch: normalizeBooleanFlag(body.videoWatch, true) } : {}),
     ...(wantsVideoPreview ? { videoPreview: normalizeBooleanFlag(body.videoPreview, false) } : {}),
+    ...(wantsMilestoneDonate ? { milestoneDonate: normalizeBooleanFlag(body.milestoneDonate, true) } : {}),
   })
 }

@@ -160,6 +160,11 @@ function YouTubePreviewPlayer({
       try {
         playerRef.current?.unMute()
         playerRef.current?.setVolume(PREVIEW_VOLUME)
+        // iOS keeps the audio pipeline parked after an autoplay block —
+        // unMute() alone sometimes leaves the track silent. Re-asserting
+        // play() inside the gesture nudges the audio live (part of "the
+        // sound button doesn't work well on mobile").
+        playerRef.current?.playVideo()
       } catch {
         // player died — silent
       }
@@ -575,14 +580,24 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
   // session; the server-side dead list persists for everyone else.
   const deadIdsRef = React.useRef<string[]>([])
 
-  // What the sound button DISPLAYED when the user pressed it. The press
-  // itself is a page gesture: the document-level pointerdown listener
-  // (gesture recovery, see the store) can un-mute the preview BETWEEN
-  // the press and the click — the click handler's `muted` prop would
-  // then read the flipped state and toggle the sound straight back OFF,
-  // the exact opposite of the user's intent. Capturing the displayed
-  // state at press time makes the toggle deterministic.
-  const pressedMutedRef = React.useRef(false)
+  // A sound-button press in progress: where it started + what the button
+  // DISPLAYED when pressed. MOBILE-FIRST (user: "the sound button
+  // doesn't work well on mobile"): the toggle now runs at POINTERUP with
+  // tap-vs-swipe detection — a `click` on touch devices can be canceled
+  // by the browser (a slight finger drift makes the tap a scroll →
+  // pointercancel, no click ever fires) which is exactly why the button
+  // felt dead on phones. The press/release pair is immune: a clean tap
+  // always ends in pointerup on the button, and a swipe/scroll (fired
+  // pointercancel, or drifted > 12px) never toggles. The DISPLAYED state
+  // is captured at pointerdown because the press is itself a page
+  // gesture — the store's document-capture gesture recovery may un-mute
+  // the preview between press and release, and the release must still
+  // respect what the user SAW (displayed muted → intent ON).
+  const soundPressRef = React.useRef<{
+    x: number
+    y: number
+    displayedMuted: boolean
+  } | null>(null)
 
   // ── Article-open tracking (reactive — see the store) ──
   React.useEffect(() => {
@@ -804,42 +819,70 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
                 user gesture on the page (user: "i think there is
                 something so only where there is a press registered on a
                 website it can do sound") — the tap IS that gesture, so
-                turning sound on from the button reliably works. Tapping
-                it must NOT open the article: pointer-events-auto over
-                the pass-through container + stopPropagation (the card's
+                turning sound on from the button reliably works. The
+                toggle fires at POINTERUP (tap-vs-swipe aware — see
+                soundPressRef) so it always runs inside the gesture, with
+                no click-delay/click-cancel on mobile. Tapping it must
+                NOT open the article: pointer-events-auto over the
+                pass-through container + stopPropagation (the card's
                 own click handler would also ignore it via the
-                closest('a, button') guard, but we stop it earlier). */}
+                closest('a, button') guard, but we stop it earlier). The
+                generous padding + touch-action: manipulation make it a
+                comfortable thumb target (user: "the sound button
+                doesn't work well on mobile"). */}
             {playing && (
               <button
                 type="button"
                 aria-label={muted ? 'Turn on preview sound' : 'Mute preview sound'}
                 title={muted ? 'Turn on sound' : 'Mute'}
+                style={{ touchAction: 'manipulation' }}
                 onPointerDown={(e) => {
                   // Stop the card's drag/tap machinery from seeing this
                   // press (a swipe must never double as a sound toggle),
-                  // and capture what the button DISPLAYED — the press is
-                  // itself a page gesture, so the store's gesture
-                  // recovery may flip `muted` between here and the click
-                  // (see pressedMutedRef above).
+                  // and capture where + what the button DISPLAYED — the
+                  // store's gesture recovery may flip `muted` between
+                  // here and the release (see soundPressRef).
                   e.stopPropagation()
-                  pressedMutedRef.current = muted
+                  soundPressRef.current = {
+                    x: e.clientX,
+                    y: e.clientY,
+                    displayedMuted: muted,
+                  }
+                }}
+                onPointerUp={(e) => {
+                  // The toggle itself — at release, inside the gesture.
+                  e.stopPropagation()
+                  const p = soundPressRef.current
+                  soundPressRef.current = null
+                  if (!p) return
+                  // A finger that drifted > 12px was a swipe/scroll, not
+                  // a tap — never let it flip the sound.
+                  if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 12)
+                    return
+                  // Displayed-muted → intent is ON; displayed-audible →
+                  // intent is OFF.
+                  setPreviewAudible(topicId, p.displayedMuted)
+                }}
+                onPointerCancel={() => {
+                  // The browser took the gesture over (scroll) — no toggle.
+                  soundPressRef.current = null
                 }}
                 onClick={(e) => {
+                  // The toggle already ran at pointerup; the click is only
+                  // suppressed so it can never reach the card (article
+                  // open) — mobile browsers sometimes cancel the click,
+                  // and desktop always fires it after our pointerup.
                   e.stopPropagation()
                   e.preventDefault()
-                  // Displayed-muted → intent is ON; displayed-audible →
-                  // intent is OFF. The click runs inside the user
-                  // gesture, so the un-mute reliably sticks.
-                  setPreviewAudible(topicId, pressedMutedRef.current)
                 }}
-                className="pointer-events-auto absolute bottom-1.5 left-1.5 z-[2] flex items-center gap-1 rounded-md bg-black/70 py-[3px] pl-1.5 pr-2 backdrop-blur-[2px] transition-transform duration-150 active:scale-95"
+                className="pointer-events-auto absolute bottom-1.5 left-1.5 z-[2] flex select-none items-center gap-1.5 rounded-lg bg-black/70 py-2.5 pl-3 pr-3.5 backdrop-blur-[2px] transition-transform duration-150 active:scale-95"
               >
                 {muted ? (
-                  <VolumeX className="h-3 w-3 text-white/80" />
+                  <VolumeX className="h-4 w-4 text-white/90" />
                 ) : (
-                  <Volume1 className="h-3 w-3 text-white/80" />
+                  <Volume1 className="h-4 w-4 text-white/90" />
                 )}
-                <span className="text-[8px] font-extrabold uppercase leading-none tracking-[0.14em] text-white/90">
+                <span className="text-[10px] font-extrabold uppercase leading-none tracking-[0.12em] text-white/95">
                   Sound
                 </span>
               </button>
