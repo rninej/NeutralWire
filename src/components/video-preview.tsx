@@ -36,8 +36,12 @@
  *   4. When the video starts, it plays INSIDE the image with SOUND AT
  *      HALF VOLUME (setVolume 50 / video.volume 0.5). If the browser's
  *      autoplay policy blocks audible autoplay it silently falls back
- *      to muted (the chip switches to the crossed speaker). Only ONE
- *      preview is audible at a time (audio lease, see the store).
+ *      to muted. Only ONE preview is audible at a time (audio lease,
+ *      see the store). While the preview is PLAYING, a small SOUND
+ *      button replaces the corner chip (user: "only in the preview
+ *      video make it show a sound button which i can press to turn on
+ *      sound" — the press is the user gesture the autoplay policy
+ *      requires, so un-muting from it reliably works).
  *   5. Tapping the card opens the article WITH THE VIDEO ALREADY
  *      PLAYING (not the photo + Watch square): while the preview holds
  *      a resolved video, the card's click arms the video handoff
@@ -52,7 +56,7 @@
  *   7. A small "WATCH" chip sits in the image's bottom-left corner
  *      whenever the preview isn't rolling (user: "ONLY for the large
  *      news cards show the play button in the bottom left corner, so
- *      people know you can watch too") — the PREVIEW chip takes over
+ *      people know you can watch too") — the SOUND button takes over
  *      the corner while the video plays. Known misses drop it.
  *
  * The whole feature rides behind the videoWatch flag too — /api/video
@@ -76,6 +80,7 @@ import {
   onUserGesture,
   releasePreviewAudio,
   registerPreviewControls,
+  setPreviewAudible,
   videoLocaleParams,
   waitForPreviewAudio,
   type ResolvedVideo,
@@ -272,6 +277,10 @@ function YouTubePreviewPlayer({
 
     // Article-open silencing + the handoff's startAt: expose
     // pause/resume/getTime to the store while this player is alive.
+    // setAudible is the preview's SOUND BUTTON path (user: "only in the
+    // preview video make it show a sound button which i can press to
+    // turn on sound") — the press is the user gesture the autoplay
+    // policy needs, so the un-mute reliably sticks.
     const unregister = registerPreviewControls(topicId, {
       pause: () => {
         try {
@@ -292,6 +301,21 @@ function YouTubePreviewPlayer({
           return playerRef.current?.getCurrentTime() ?? 0
         } catch {
           return 0
+        }
+      },
+      setAudible: (on: boolean) => {
+        if (on) {
+          // unMuteNow (no lease re-claim — the store already forced the
+          // lease to THIS topic before calling).
+          unMuteNow()
+        } else {
+          audibleRef.current = false
+          try {
+            playerRef.current?.mute()
+          } catch {
+            // silent
+          }
+          onMutedChange(true)
         }
       },
     })
@@ -438,7 +462,7 @@ function NativePreviewPlayer({
     attempt(!audibleRef.current)
   }
 
-  // Article-open silencing + the handoff's startAt.
+  // Article-open silencing + the handoff's startAt + the sound button.
   const controlsRef = React.useRef<HTMLVideoElement | null>(null)
   React.useEffect(() => {
     const el = controlsRef.current
@@ -456,6 +480,30 @@ function NativePreviewPlayer({
         })
       },
       getTime: () => el.currentTime || 0,
+      // The preview's SOUND BUTTON path — the press is the user gesture
+      // the autoplay policy needs, so audible play() here reliably
+      // sticks (user: "only in the preview video make it show a sound
+      // button which i can press to turn on sound").
+      setAudible: (on: boolean) => {
+        if (on) {
+          el.muted = false
+          el.volume = PREVIEW_VOLUME / 100
+          audibleRef.current = true
+          onMutedChange(false)
+          // If the policy STILL refuses (rare), fall back to muted so
+          // the preview keeps rolling instead of freezing.
+          el.play().catch(() => {
+            el.muted = true
+            audibleRef.current = false
+            onMutedChange(true)
+            el.play().catch(() => {})
+          })
+        } else {
+          el.muted = true
+          audibleRef.current = false
+          onMutedChange(true)
+        }
+      },
     })
   }, [topicId])
 
@@ -526,6 +574,15 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
   // embeddable one ranks). After that the card is a miss for the
   // session; the server-side dead list persists for everyone else.
   const deadIdsRef = React.useRef<string[]>([])
+
+  // What the sound button DISPLAYED when the user pressed it. The press
+  // itself is a page gesture: the document-level pointerdown listener
+  // (gesture recovery, see the store) can un-mute the preview BETWEEN
+  // the press and the click — the click handler's `muted` prop would
+  // then read the flipped state and toggle the sound straight back OFF,
+  // the exact opposite of the user's intent. Capturing the displayed
+  // state at press time makes the toggle deterministic.
+  const pressedMutedRef = React.useRef(false)
 
   // ── Article-open tracking (reactive — see the store) ──
   React.useEffect(() => {
@@ -739,19 +796,53 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
               />
             ) : null}
 
-            {/* Preview chip (bottom-left) — sound state at a glance.
-                Only rendered once the video is actually visible. */}
+            {/* Sound button (bottom-left) — ONLY while the preview is
+                actually playing (user: "ONLY when a video preview is
+                playing only in the preview video make it show a sound
+                button which i can press to turn on sound"). A PRESS, not
+                a hover: the autoplay policy only permits sound after a
+                user gesture on the page (user: "i think there is
+                something so only where there is a press registered on a
+                website it can do sound") — the tap IS that gesture, so
+                turning sound on from the button reliably works. Tapping
+                it must NOT open the article: pointer-events-auto over
+                the pass-through container + stopPropagation (the card's
+                own click handler would also ignore it via the
+                closest('a, button') guard, but we stop it earlier). */}
             {playing && (
-              <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 py-[3px] pl-1.5 pr-2 backdrop-blur-[2px]">
+              <button
+                type="button"
+                aria-label={muted ? 'Turn on preview sound' : 'Mute preview sound'}
+                title={muted ? 'Turn on sound' : 'Mute'}
+                onPointerDown={(e) => {
+                  // Stop the card's drag/tap machinery from seeing this
+                  // press (a swipe must never double as a sound toggle),
+                  // and capture what the button DISPLAYED — the press is
+                  // itself a page gesture, so the store's gesture
+                  // recovery may flip `muted` between here and the click
+                  // (see pressedMutedRef above).
+                  e.stopPropagation()
+                  pressedMutedRef.current = muted
+                }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  // Displayed-muted → intent is ON; displayed-audible →
+                  // intent is OFF. The click runs inside the user
+                  // gesture, so the un-mute reliably sticks.
+                  setPreviewAudible(topicId, pressedMutedRef.current)
+                }}
+                className="pointer-events-auto absolute bottom-1.5 left-1.5 z-[2] flex items-center gap-1 rounded-md bg-black/70 py-[3px] pl-1.5 pr-2 backdrop-blur-[2px] transition-transform duration-150 active:scale-95"
+              >
                 {muted ? (
                   <VolumeX className="h-3 w-3 text-white/80" />
                 ) : (
                   <Volume1 className="h-3 w-3 text-white/80" />
                 )}
                 <span className="text-[8px] font-extrabold uppercase leading-none tracking-[0.14em] text-white/90">
-                  Preview
+                  Sound
                 </span>
-              </div>
+              </button>
             )}
           </motion.div>
         )}

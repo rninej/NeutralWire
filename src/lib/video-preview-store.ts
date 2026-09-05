@@ -103,13 +103,18 @@ export function clearPreviewPlaying(topicId: string): void {
 }
 
 /** Imperative hooks into a mounted preview player (pause/resume/read
- *  its position) — registered by HeroVideoPreview while its player is
- *  alive, see the registry below. */
+ *  its position / sound on-off) — registered by HeroVideoPreview while
+ *  its player is alive, see the registry below. */
 export interface PreviewControls {
   pause(): void
   resume(): void
   /** The player's current position (seconds) — arms the handoff's startAt. */
   getTime(): number
+  /** User pressed THIS preview's sound button (a real user gesture —
+   *  exactly what the autoplay policy needs to permit sound): turn the
+   *  preview's audio on/off at half volume. Optional so older call
+   *  sites keep compiling. */
+  setAudible?(on: boolean): void
 }
 
 /** Live preview players keyed by topicId (one per card, at most). */
@@ -496,6 +501,50 @@ export function releasePreviewAudio(topicId: string): void {
     }
   } else {
     audioLeaseWaiters.delete(topicId)
+  }
+}
+
+/** Force the single-sound lease to THIS topic (user: "only in the preview
+ *  video make it show a sound button which i can press to turn on
+ *  sound"). Pressing a preview's sound button is an explicit user
+ *  intent that outranks the automatic lease grants: the previous holder
+ *  (another audible preview) is muted through its registered controls
+ *  and dropped from the queue, so two previews never talk over each
+ *  other even after a manual claim. */
+function forcePreviewAudio(topicId: string): void {
+  if (audioLeaseHolder === topicId) return
+  const prev = audioLeaseHolder
+  audioLeaseHolder = topicId
+  // This topic's own queue entry (if it was waiting) is now satisfied.
+  audioLeaseWaiters.delete(topicId)
+  if (prev && prev !== topicId) {
+    audioLeaseWaiters.delete(prev)
+    const controls = previewControls.get(prev)
+    try {
+      controls?.setAudible?.(false)
+    } catch {
+      // a broken player must never block the claim
+    }
+  }
+}
+
+/** The preview's sound button: turn THIS preview's sound on or off.
+ *  Turning it ON runs inside the button's click handler — a genuine user
+ *  gesture, so the autoplay policy permits audible playback (user: "i
+ *  think there is something so only where there is a press registered
+ *  on a website it can do sound") — and forces the audio lease to this
+ *  preview (muting any other audible one). Turning it OFF keeps the
+ *  lease parked on this topic so no queued preview suddenly starts
+ *  making noise the user just asked to stop. */
+export function setPreviewAudible(topicId: string, on: boolean): void {
+  if (on) {
+    forcePreviewAudio(topicId)
+  }
+  const controls = previewControls.get(topicId)
+  try {
+    controls?.setAudible?.(on)
+  } catch {
+    // player mid-swap — silent
   }
 }
 

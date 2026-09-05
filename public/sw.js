@@ -1,6 +1,20 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v26: OFFLINE FALSE-POSITIVE FIX — a fresh (uncached) load on a slow
+//      connection could lose the 2.5s navigation race, find no cached
+//      HTML, and show the "Waiting for connection…" offline page while
+//      the user was perfectly online (user: "sometimes when i fresh
+//      load neutralwire it says offline, waiting for connection when i
+//      have connection"). The race is now only the FAST path: when
+//      there IS cached HTML nothing changes (cache serves instantly,
+//      slow fetch refreshes it in the background); when there is NO
+//      cache we keep waiting for the original fetch up to a 20s hard
+//      timeout. A genuinely offline fetch rejects almost immediately,
+//      so the real offline page still appears fast — but a slow first
+//      load now ends on the actual app. The offline page also polls
+//      every 2.5s (was 4s) so a recovered connection reloads sooner.
+//      Cache-name bump v25 → v26 so installed PWAs pick this up.
 // v25: BULLETPROOF NOTIFICATION OPEN — tapping Like (or the notification
 //      body) now ALWAYS raises the app: focus() on an existing window is
 //      VERIFIED (it previously returned/failured silently, so the like
@@ -63,9 +77,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v25'
-const API_CACHE = 'neutralwire-api-v25'
-const IMG_CACHE = 'neutralwire-img-v25'
+const SHELL_CACHE = 'neutralwire-shell-v26'
+const API_CACHE = 'neutralwire-api-v26'
+const IMG_CACHE = 'neutralwire-img-v26'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
@@ -251,7 +265,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-seri
 <div class="status" id="status">Waiting for connection… NeutralWire will load automatically when you're back online.</div>
 <script>
 window.addEventListener('online',function(){window.location.reload()});
-setInterval(function(){fetch('/',{method:'HEAD',cache:'no-store'}).then(function(){window.location.reload()}).catch(function(){})},4000);
+setInterval(function(){fetch('/',{method:'HEAD',cache:'no-store'}).then(function(){window.location.reload()}).catch(function(){})},2500);
 </script>
 </body></html>`
 
@@ -262,16 +276,24 @@ self.addEventListener('fetch', (event) => {
 
   // ── Navigation requests (HTML pages) → network-first w/ TIMEOUT, cache fallback ──
   // Network-first ensures users get fresh HTML after a deploy (avoids
-  // hydration mismatches). NEW in v23: the network attempt is raced
-  // against a 2.5s abort — a slow/hanging connection can no longer stall
-  // the PWA launch forever; we fall back to the cached HTML (fresh enough
-  // for the chunk cache to boot it fully offline) and only show the
-  // branded offline page when there's no cache at all.
+  // hydration mismatches). v23: the network attempt is raced against a
+  // 2.5s abort — a slow/hanging connection can no longer stall the PWA
+  // launch forever; we fall back to the cached HTML (fresh enough for
+  // the chunk cache to boot it fully offline) and only show the branded
+  // offline page when there's no cache at all.
+  // v26: the 2.5s race is only the FAST path. When there is NO cached
+  // HTML (first visit / swept cache), losing the race no longer means
+  // "offline" — the user may just be on a slow connection. We keep
+  // waiting for the ORIGINAL fetch (already in flight — no duplicate
+  // request) up to a 20s hard timeout before declaring offline. A
+  // genuinely offline fetch rejects within milliseconds, so the real
+  // offline page still shows fast; a slow-but-alive one lands the app.
   if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
     event.respondWith(
       (async () => {
         // Kick off the network fetch, raced against a hard timeout.
         const NAV_TIMEOUT_MS = 2500
+        const NAV_HARD_TIMEOUT_MS = 20000
         const networkPromise = fetch(req, { cache: 'no-store' })
         let networkRes = null
         try {
@@ -301,7 +323,29 @@ self.addEventListener('fetch', (event) => {
             .catch(() => {})
           return cached
         }
-        // No cache either — return the minimal offline page.
+        // No cache either — v26: DON'T declare offline yet. The fetch is
+        // still in flight; losing the 2.5s fast-path race on a slow first
+        // load is not an offline condition (user: "it says offline,
+        // waiting for connection when i have connection"). Keep waiting
+        // for the original promise up to the hard timeout. Offline fetches
+        // reject almost instantly, so this adds no delay when offline is
+        // real.
+        try {
+          networkRes = await Promise.race([
+            networkPromise,
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('nav-hard-timeout')), NAV_HARD_TIMEOUT_MS),
+            ),
+          ])
+        } catch {
+          networkRes = null
+        }
+        if (networkRes && networkRes.ok) {
+          putWithEviction(SHELL_CACHE, req, networkRes.clone(), 5)
+          return networkRes
+        }
+        // The network genuinely failed (offline / origin down) — return
+        // the minimal offline page.
         return new Response(OFFLINE_PAGE_HTML, {
           headers: { 'Content-Type': 'text/html' },
         })

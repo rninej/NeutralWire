@@ -112,8 +112,11 @@ interface VideoApiResponse {
 const MAX_AUTO_RETRIES = 2
 const RETRY_DELAY_MS = 700
 
-/** Chrome auto-hides this long after a tap while playing (stays up while
- *  paused). User spec: at load, JUST the video — no clutter. */
+/** Chrome auto-hides this long after a tap while playing (a tap that
+ *  PAUSES keeps it up — the user is mid-decision). User spec: at load,
+ *  JUST the video — no clutter; the bar ONLY ever comes up from a tap
+ *  (user: "please fix so it doesent come... so it only comes if a user
+ *  taps on the video"). */
 const CHROME_AUTOHIDE_MS = 3000
 
 /** Our persistent corner UI (the byline chip) waits this long (seconds)
@@ -207,14 +210,18 @@ function toggleBoxFullscreen(
 /**
  * The ONLY controls the article video ever shows (user spec: no
  * YouTube bar / settings / channel-info clutter — "just shows the
- * video when loaded"). Completely hidden while it plays; a tap on the
- * video toggles play/pause AND raises the bar, which auto-hides 3s
- * later (it stays up while paused). Desktop hover raises it too.
- *
- * Tap-anywhere-to-pause is the universal video gesture, and every
- * control (play/pause, seek, mute, fullscreen) drives the player
- * through the callbacks — the YouTube iframe itself never sees a
- * pointer, which is what keeps its own chrome from ever appearing.
+ * video when loaded"). Completely hidden while it plays AND at load
+ * (user: "when a video loads it shows the progress bar, the pause and
+ * play button, the volume button overlays over the video by default
+ * for like 2 seconds... so it only comes if a user taps on the video")
+ * — the bar NEVER auto-reveals: not on mount, not when playback
+ * starts, not when the video pauses. It appears ONLY from a user tap
+ * on the video (which toggles play/pause AND raises the bar — auto-
+ * hiding 3s later if the result is playing, staying up if paused) or
+ * from desktop mouse movement. Every control (play/pause, seek, mute,
+ * fullscreen) drives the player through the callbacks — the YouTube
+ * iframe itself never sees a pointer, which is what keeps its own
+ * chrome from ever appearing.
  */
 function VideoChrome({
   playing,
@@ -264,16 +271,15 @@ function VideoChrome({
     }
   }
 
-  // Paused → the bar stays up (the user is mid-decision); playing →
-  // whatever is on screen auto-hides again.
-  React.useEffect(() => {
-    if (!playing) {
-      show(false)
-    } else if (visibleRef.current) {
-      show(true)
-    }
-     
-  }, [playing])
+  // NOTE: there is deliberately NO effect on `playing`. The bar must
+  // never appear on its own — not when the player mounts (paused), not
+  // when autoplay starts, not when playback pauses (the old
+  // `!playing → show(false)` auto-reveal was exactly the ~2s of
+  // load-time clutter the user rejected: mount → paused → bar visible
+  // → playback starts → 3s auto-hide countdown, so the progress bar +
+  // pause/play + volume buttons sat over a freshly loaded video).
+  // Reveal paths are user actions ONLY: the tap below, the bar's own
+  // buttons, and desktop mouse movement.
 
   React.useEffect(() => clearHide, [])
 
@@ -291,10 +297,17 @@ function VideoChrome({
     <div
       className="absolute inset-0 z-[3]"
       onClick={() => {
+        // A tap toggles play/pause AND raises the bar. The `playing`
+        // prop is the PRE-toggle state, so `!playing` is what the video
+        // will be doing after this tap: pausing → the bar STAYS up (the
+        // user is mid-decision); resuming → it auto-hides 3s in.
         onTogglePlay()
-        show(true)
+        show(!playing)
       }}
-      onMouseMove={() => show(true)}
+      // Desktop mouse presence: raise the bar — auto-hiding while it
+      // plays, staying up while paused (same rule as the tap, minus the
+      // play-state flip).
+      onMouseMove={() => show(playing)}
     >
       {/* Paused → a single centered play affordance (tapping anywhere
           also resumes). */}
@@ -321,8 +334,10 @@ function VideoChrome({
               aria-label={playing ? 'Pause' : 'Play'}
               onClick={(e) => {
                 e.stopPropagation()
+                // Same rule as the video-surface tap: post-toggle state
+                // decides — pausing keeps the bar up, playing auto-hides.
                 onTogglePlay()
-                show(true)
+                show(!playing)
               }}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15 active:bg-white/25"
             >
@@ -366,7 +381,9 @@ function VideoChrome({
               onClick={(e) => {
                 e.stopPropagation()
                 onToggleMute()
-                show(true)
+                // Mute doesn't change the play state: auto-hide while
+                // playing, stay up while paused.
+                show(playing)
               }}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15 active:bg-white/25"
             >
@@ -384,7 +401,8 @@ function VideoChrome({
                 onClick={(e) => {
                   e.stopPropagation()
                   onToggleFullscreen()
-                  show(true)
+                  // Same as mute: play state unchanged.
+                  show(playing)
                 }}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/15 active:bg-white/25"
               >
