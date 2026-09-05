@@ -6,7 +6,7 @@ import {
   normalizePopupMode,
   type PopupMode,
 } from '@/lib/popup-mode'
-import { VideoWatchProvider } from '@/lib/video-watch'
+import { VideoWatchProvider, VideoPreviewProvider } from '@/lib/video-watch'
 import PageClient from './page-client'
 
 // Force dynamic rendering so metadata is generated per-request (needed for
@@ -105,6 +105,26 @@ async function getVideoWatch(): Promise<boolean> {
   }
 }
 
+// ── Server-rendered videoPreview flag (experimental top-story preview) ──
+// Same SSR pattern: read HERE so the first paint already knows whether
+// the home feed's top card should autoplay a muted video preview. Absent
+// → OFF (this one is a pure experiment; enable it from /debug). 5s memo.
+let videoPreviewFlagMemo: { value: boolean; ts: number } | null = null
+
+async function getVideoPreview(): Promise<boolean> {
+  if (videoPreviewFlagMemo && Date.now() - videoPreviewFlagMemo.ts < VIDEO_FLAG_TTL_MS) {
+    return videoPreviewFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<boolean | string>('featureFlags/videoPreview')
+    const value = stored === true || stored === 'true'
+    videoPreviewFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return false
+  }
+}
+
 /**
  *  Generate dynamic OG metadata for shared links.
  *
@@ -191,6 +211,10 @@ export default async function Page() {
   // HTML already includes (or omits) the Watch pills on card images.
   const videoWatch = await getVideoWatch()
 
+  // Experimental top-story video preview flag — same server-side read
+  // (defaults OFF; flipped on from /debug).
+  const videoPreview = await getVideoPreview()
+
   // Personal override (Account → Feature Flags → "Your header style"):
   // a cookie, so the server sees it during SSR — the visitor's own pick
   // renders in the very first paint, no flash. Invalid values fall back
@@ -207,7 +231,9 @@ export default async function Page() {
 
   return (
     <VideoWatchProvider enabled={videoWatch}>
-      <PageClient initialSubtopicNav={initialSubtopicNav} popupSystem={popupSystem} />
+      <VideoPreviewProvider enabled={videoPreview}>
+        <PageClient initialSubtopicNav={initialSubtopicNav} popupSystem={popupSystem} />
+      </VideoPreviewProvider>
     </VideoWatchProvider>
   )
 }

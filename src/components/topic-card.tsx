@@ -14,6 +14,8 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn, safeImageUrl } from '@/lib/utils'
 import { BiasBar } from '@/components/bias-bar'
+import { HeroVideoPreview } from '@/components/video-preview'
+import { useVideoPreview } from '@/lib/video-watch'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { getDeviceId } from '@/lib/referral'
 import { bumpEngagementForTopic } from '@/lib/user-interests'
@@ -32,6 +34,10 @@ interface TopicCardProps {
   /** Index within its parent list — used to stagger entrance animations.
    *  Capped internally so long lists don't get a giant delay. */
   index?: number
+  /** EXPERIMENTAL (videoPreview flag, /debug): auto-play a muted video
+   *  preview inside this card's image ~0.8s after it's been on screen.
+   *  Passed ONLY to the feed's TOP story card — never a whole grid. */
+  videoPreview?: boolean
 }
 
 // Shared easing curve for card entrances — smooth, slightly fast-out.
@@ -126,7 +132,7 @@ function ImageBadges() {
   )
 }
 
-function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index = 0 }: TopicCardProps) {
+function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index = 0, videoPreview = false }: TopicCardProps) {
   // NOTE: this component is wrapped in React.memo at the bottom of the file.
   // Parent re-renders (search typing, engagement ticks, unrelated state)
   // no longer re-render every card in the feed — topic object identities
@@ -136,6 +142,11 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
   // no transform-ancestor issues, no stuck scroll lock). "Share" sits next
   // to it inside one combined pill button (same design as the header's
   // account|country pill).
+  // The experimental preview only fires when BOTH are true: the layout
+  // marked THIS card as the top story (videoPreview prop) AND the global
+  // videoPreview feature flag is on (SSR context — flipped in /debug).
+  const previewFlagOn = useVideoPreview()
+  const showVideoPreview = videoPreview && previewFlagOn
   const [showSources, setShowSources] = React.useState(false)
   // "Copied" feedback for the share button (clipboard fallback only).
   const [shared, setShared] = React.useState(false)
@@ -539,6 +550,9 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
           <ImageBadges />
+          {/* Experimental top-story preview — muted inline video after
+              0.8s of visibility. Only the feed's first card gets it. */}
+          {showVideoPreview && <HeroVideoPreview topicId={topic.topicId} />}
         </div>
       )}
 
@@ -602,6 +616,9 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
           <ImageBadges />
+          {/* Same experimental preview for the desktop top card (default
+              variant, image below the header). */}
+          {showVideoPreview && <HeroVideoPreview topicId={topic.topicId} />}
         </div>
       )}
 

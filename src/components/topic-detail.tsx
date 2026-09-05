@@ -27,7 +27,7 @@ import { getDeviceId } from '@/lib/referral'
 import { bumpEngagementForTopic } from '@/lib/user-interests'
 import { getRating } from '@/lib/source-ratings'
 import { useVideoWatch } from '@/lib/video-watch'
-import { VideoPlayer, WatchPill } from '@/components/video-player'
+import { InlineVideo, WatchPill } from '@/components/video-player'
 
 interface TopicDetailProps {
   topic: TopicArticle
@@ -79,6 +79,9 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
   // (notification Like tap) — confirms the action landed.
   const [autoLikedToast, setAutoLikedToast] = React.useState(false)
   // ── Experimental Watch button (video feature) ──
+  // The video plays INLINE inside the hero news image (no popup): tapping
+  // the Watch square swaps the photo for the embedded player; the player's
+  // own close square swaps it back.
   const videoWatchOn = useVideoWatch()
   const [videoOpen, setVideoOpen] = React.useState(false)
   // Full topic fetched from /api/topic/[id] — used when the slim feed
@@ -597,7 +600,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           click normally (they never enter the drag). The little grabber
           pill at the top centre is the visual affordance. */}
       <motion.div
-        className="glass sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur"
+        className="glass sticky top-0 z-10 border-b bg-background/95 backdrop-blur"
         style={{ touchAction: 'none', cursor: 'grab' }}
         onPointerDown={(e) => {
           // Don't hijack presses on the bar's own controls.
@@ -605,11 +608,16 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           dragControls.start(e)
         }}
       >
-        {/* Grabber handle — the "pull me down" affordance */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute left-1/2 top-1.5 h-1 w-9 -translate-x-1/2 rounded-full bg-foreground/20"
-        />
+        {/* Grabber strip — the "pull me down" affordance. The pill lives in
+            its OWN 12px row ABOVE the button row (it used to be absolutely
+            positioned at the bar's vertical centre, where the like/dislike
+            group reached the middle on narrow phones and visually collided
+            with it). 12 + 44 = 56px — the same total height the sticky-Ask-AI
+            scroll logic (rect.bottom < 56) expects. */}
+        <div className="flex h-3 items-center justify-center" aria-hidden="true">
+          <div className="h-1 w-9 rounded-full bg-foreground/20" />
+        </div>
+        <div className="flex h-11 items-center gap-2 px-4">
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5 flex-shrink-0">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
@@ -717,6 +725,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
             </span>
           </button>
         </div>
+        </div>
       </motion.div>
 
       <div className="mx-auto max-w-3xl px-4 py-6">
@@ -815,7 +824,17 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
                 NeutralWire
               </span>
             </div>
-            {videoWatchOn && <WatchPill onClick={() => setVideoOpen(true)} />}
+            {videoWatchOn && !videoOpen && <WatchPill onClick={() => setVideoOpen(true)} />}
+            {/* The video plays INSIDE the news image (user request — no
+                popup): the InlineVideo overlay swaps the photo for the
+                embedded player; its close square restores the image. */}
+            {videoWatchOn && videoOpen && (
+              <InlineVideo
+                topicId={topic.topicId}
+                storyTitle={topic.title}
+                onClose={() => setVideoOpen(false)}
+              />
+            )}
           </div>
         )}
 
@@ -1051,17 +1070,6 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           topic={topic}
           summary={summary}
           onClose={() => setAskAiOpen(false)}
-        />
-      )}
-
-      {/* Experimental Watch overlay (video feature) — portaled to
-          document.body inside VideoPlayer, so it escapes this sheet's
-          animated transform and sits above everything. */}
-      {videoOpen && (
-        <VideoPlayer
-          topicId={topic.topicId}
-          storyTitle={topic.title}
-          onClose={() => setVideoOpen(false)}
         />
       )}
     </motion.div>

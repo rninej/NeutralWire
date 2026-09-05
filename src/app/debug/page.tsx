@@ -360,17 +360,20 @@ export default function DebugPage() {
   const [popupFlipResult, setPopupFlipResult] = React.useState<string | null>(null)
   const [popupMemoryCleared, setPopupMemoryCleared] = React.useState(false)
 
-  // ── Experimental features (notification Like button + video Watch) ──
-  // Two boolean flags stored like the others (Firebase featureFlags/*).
-  // Both default ON; the /debug switches remove them instantly-ish:
-  //   notifLike → new notifications ship without the Like action
-  //   videoWatch → Watch pills vanish on next load + /api/video refuses
+  // ── Experimental features (notification Like + video Watch + video preview) ──
+  // Boolean flags stored like the others (Firebase featureFlags/*).
+  //   notifLike    (default ON)  → new notifications ship without the Like action when off
+  //   videoWatch   (default ON)  → Watch pills vanish on next load + /api/video refuses
+  //   videoPreview (default OFF) → top-story muted video preview on the home feed
   const [notifLike, setNotifLike] = React.useState<boolean | null>(null)
   const [notifLikeFlipping, setNotifLikeFlipping] = React.useState(false)
   const [notifLikeResult, setNotifLikeResult] = React.useState<string | null>(null)
   const [videoWatch, setVideoWatch] = React.useState<boolean | null>(null)
   const [videoWatchFlipping, setVideoWatchFlipping] = React.useState(false)
   const [videoWatchResult, setVideoWatchResult] = React.useState<string | null>(null)
+  const [videoPreview, setVideoPreview] = React.useState<boolean | null>(null)
+  const [videoPreviewFlipping, setVideoPreviewFlipping] = React.useState(false)
+  const [videoPreviewResult, setVideoPreviewResult] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     fetch('/api/flags')
@@ -387,18 +390,20 @@ export default function DebugPage() {
         )
         setNotifLike(d?.notifLike !== false)
         setVideoWatch(d?.videoWatch !== false)
+        setVideoPreview(d?.videoPreview === true)
       })
       .catch(() => {
         setNavMode('cards')
         setPopupMode(DEFAULT_POPUP_MODE)
         setNotifLike(true)
         setVideoWatch(true)
+        setVideoPreview(false)
       })
   }, [])
 
-  /** POST one boolean flag (shared by the two experimental switches). */
+  /** POST one boolean flag (shared by the experimental switches). */
   const flipBooleanFlag = async (
-    flag: 'notifLike' | 'videoWatch',
+    flag: 'notifLike' | 'videoWatch' | 'videoPreview',
     value: boolean,
   ): Promise<boolean> => {
     if (!passwordRef.current) return false
@@ -906,8 +911,8 @@ export default function DebugPage() {
 
         {/* ── Feature Toggles ──
             The newer features, each removable in one click if it doesn't earn
-            its place: the notification Like button and the video Watch
-            button. Both default ON; flip a switch to remove the feature. */}
+            its place: the notification Like button, the video Watch button
+            and the top-story video preview. */}
         <Card className="mb-6 p-4 md:p-6">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <FlaskConical className="h-5 w-5 text-muted-foreground" />
@@ -917,9 +922,10 @@ export default function DebugPage() {
             </span>
           </div>
           <p className="mb-4 text-sm text-muted-foreground">
-            Both features are live for every visitor right now. Each switch
-            removes the feature instantly for new notifications / new page
-            loads — no redeploy needed. Flip them back on the same way.
+            Like + Watch + the top-story video preview are live for every
+            visitor right now. Each switch applies instantly for new
+            notifications / new page loads — no redeploy needed. Flip them
+            back the same way.
           </p>
 
           <div className="grid max-w-3xl gap-3">
@@ -1074,6 +1080,84 @@ export default function DebugPage() {
                 {videoWatchFlipping ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : videoWatch ? (
+                  'Turn off'
+                ) : (
+                  'Turn on'
+                )}
+              </Button>
+            </div>
+
+            {/* ── Top story video preview ── */}
+            <div
+              className={cn(
+                'flex items-start gap-3 rounded-xl border-2 p-4 transition-colors',
+                videoPreview ? 'border-border bg-muted/40' : 'border-border opacity-70',
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  videoPreview ? 'bg-blue-500/15 text-blue-500' : 'bg-muted text-muted-foreground',
+                )}
+              >
+                <Play className="h-4.5 w-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold">Top story video preview</span>
+                  {videoPreview !== null && (
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                        videoPreview
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-muted-foreground/20 text-muted-foreground',
+                      )}
+                    >
+                      {videoPreview ? 'Live' : 'Off'}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  The home feed's top news card (the big hero card with the
+                  NW icon) starts playing a muted video preview inside its
+                  image 0.8 seconds after the image has been on screen.
+                  Scrolling the card away pauses it. Refresh the homepage
+                  after switching to see the change.
+                </p>
+                {videoPreviewResult && (
+                  <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    {videoPreviewResult}
+                  </p>
+                )}
+              </div>
+              <Button
+                variant={videoPreview ? 'destructive' : 'default'}
+                size="sm"
+                disabled={videoPreviewFlipping || videoPreview === null}
+                onClick={async () => {
+                  if (videoPreviewFlipping || videoPreview === null) return
+                  setVideoPreviewFlipping(true)
+                  setVideoPreviewResult(null)
+                  const next = !videoPreview
+                  const ok = await flipBooleanFlag('videoPreview', next)
+                  if (ok) {
+                    setVideoPreview(next)
+                    setVideoPreviewResult(
+                      next
+                        ? '✓ On — refresh the homepage to see the preview'
+                        : '✓ Off — refresh and the preview is gone',
+                    )
+                  } else {
+                    setVideoPreviewResult('Failed to update (check password)')
+                  }
+                  setVideoPreviewFlipping(false)
+                }}
+                className="shrink-0"
+              >
+                {videoPreviewFlipping ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : videoPreview ? (
                   'Turn off'
                 ) : (
                   'Turn on'

@@ -3427,6 +3427,9 @@ function SectionedFeed({
                     onOpenDetail={onOpenDetail}
                     onDismiss={handleDismissInSection}
                     index={i}
+                    /* Experimental top-story video preview — the first
+                       section's first card only. */
+                    videoPreview={sectionIdx === 0 && i === 0}
                   />
                 ))}
               </div>
@@ -3441,6 +3444,10 @@ function SectionedFeed({
                       onOpenDetail={onOpenDetail}
                       onDismiss={handleDismissInSection}
                       index={0}
+                      /* Experimental top-story video preview — the FIRST
+                         section's hero only (Top Headlines = the top news
+                         card the user sees first on the home screen). */
+                      videoPreview={sectionIdx === 0}
                     />
                   </div>
                 )}
@@ -3687,6 +3694,8 @@ function MobileTopicLayout({
                   onOpenDetail={onOpenDetail}
                   onDismiss={onDismiss}
                   index={i}
+                  /* Experimental top-story video preview — first card only. */
+                  videoPreview={i === 0}
                 />
               ))}
             </div>
@@ -3701,6 +3710,9 @@ function MobileTopicLayout({
                     onOpenDetail={onOpenDetail}
                     onDismiss={onDismiss}
                     index={0}
+                    /* Experimental top-story video preview — the FIRST
+                       chunk's hero only (the rest are older news). */
+                    videoPreview={chunkIdx === 0}
                   />
                 </div>
               )}

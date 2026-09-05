@@ -16,9 +16,9 @@ export const maxDuration = 15
 /**
  * Server-side feature flags (stored in Firebase under featureFlags/<name>).
  *
- * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, videoWatch }   (public)
+ * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, videoWatch, videoPreview }   (public)
  * POST /api/flags   → set flag(s) for ALL users (password-protected)
- *       body: { password, subtopicNav?, popupSystem?, notifLike?, videoWatch? }
+ *       body: { password, subtopicNav?, popupSystem?, notifLike?, videoWatch?, videoPreview? }
  *       — send one or more.
  *
  * Managed flags:
@@ -53,11 +53,17 @@ export const maxDuration = 15
  *       button (the SW reads the flag from the payload at push time).
  *
  *   - videoWatch (boolean, default TRUE): the experimental Watch button
- *       on article images (cards + article view). Tapping it resolves a
- *       video for the story (the source's own video via RSS enclosures,
- *       else a YouTube search match) and plays it in an overlay. Flipped
- *       off in /debug → the buttons vanish on the next page load AND the
- *       /api/video endpoint refuses to resolve (no CPU spent).
+ *       on article images. Tapping it resolves a video for the story (the
+ *       source's own video via RSS enclosures, else a YouTube search match)
+ *       and plays it INLINE inside the news image. Flipped off in /debug
+ *       → the buttons vanish on the next page load AND the /api/video
+ *       endpoint refuses to resolve (no CPU spent).
+ *
+ *   - videoPreview (boolean, default FALSE): the experimental top-story
+ *       video preview on the home feed — the top news card (the big hero
+ *       card with the NW icon) starts playing a MUTED video preview
+ *       inside its image ~0.8s after it has been on screen. Flipped on
+ *       from /debug → live for every visitor on the next page load.
  *
  * Flags are flipped from /debug in one click; every client receives the
  * values server-side on load (page.tsx SSR) so a flip propagates on the
@@ -82,6 +88,7 @@ const NAV_FLAG_PATH = 'featureFlags/subtopicNav'
 const POPUP_FLAG_PATH = 'featureFlags/popupSystem'
 const NOTIF_LIKE_FLAG_PATH = 'featureFlags/notifLike'
 const VIDEO_FLAG_PATH = 'featureFlags/videoWatch'
+const VIDEO_PREVIEW_FLAG_PATH = 'featureFlags/videoPreview'
 
 // Per-instance memos (10s) — bound Firebase reads when many clients hit
 // this endpoint simultaneously on a warm serverless instance.
@@ -89,6 +96,7 @@ let navMemo: { value: SubtopicNavMode; ts: number } | null = null
 let popupMemo: { value: PopupMode; ts: number } | null = null
 let notifLikeMemo: { value: boolean; ts: number } | null = null
 let videoMemo: { value: boolean; ts: number } | null = null
+let videoPreviewMemo: { value: boolean; ts: number } | null = null
 const MEMO_TTL_MS = 10 * 1000
 
 function sha256(s: string): string {
@@ -123,9 +131,9 @@ function normalizeBooleanFlag(v: unknown, fallback: boolean): boolean {
 }
 
 export async function GET() {
-  // All four flags are fetched in parallel — one cold instance pays four
+  // All flags are fetched in parallel — one cold instance pays the
   // RTDB reads at most, then all answers are memoized together.
-  const [navResult, popupResult, notifLikeResult, videoResult] = await Promise.allSettled([
+  const [navResult, popupResult, notifLikeResult, videoResult, videoPreviewResult] = await Promise.allSettled([
     (async () => {
       if (navMemo && Date.now() - navMemo.ts < MEMO_TTL_MS) return navMemo.value
       const stored = await firebaseRead<string>(NAV_FLAG_PATH)
@@ -156,6 +164,14 @@ export async function GET() {
       videoMemo = { value, ts: Date.now() }
       return value
     })(),
+    (async () => {
+      if (videoPreviewMemo && Date.now() - videoPreviewMemo.ts < MEMO_TTL_MS) return videoPreviewMemo.value
+      const stored = await firebaseRead<boolean>(VIDEO_PREVIEW_FLAG_PATH)
+      // DEFAULT OFF — a pure experiment; only an explicit true turns it on.
+      const value = normalizeBooleanFlag(stored, false)
+      videoPreviewMemo = { value, ts: Date.now() }
+      return value
+    })(),
   ])
 
   // ── CDN cache (Fluid CPU) ──
@@ -177,6 +193,8 @@ export async function GET() {
       notifLike:
         notifLikeResult.status === 'fulfilled' ? notifLikeResult.value : true,
       videoWatch: videoResult.status === 'fulfilled' ? videoResult.value : true,
+      videoPreview:
+        videoPreviewResult.status === 'fulfilled' ? videoPreviewResult.value : false,
     },
     {
       headers: {
@@ -193,6 +211,7 @@ export async function POST(req: NextRequest) {
     popupSystem?: string
     notifLike?: boolean | string
     videoWatch?: boolean | string
+    videoPreview?: boolean | string
   }
   try {
     body = await req.json()
@@ -208,11 +227,12 @@ export async function POST(req: NextRequest) {
   const wantsPopup = body.popupSystem !== undefined
   const wantsNotifLike = body.notifLike !== undefined
   const wantsVideo = body.videoWatch !== undefined
-  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsVideo) {
+  const wantsVideoPreview = body.videoPreview !== undefined
+  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsVideo && !wantsVideoPreview) {
     return NextResponse.json(
       {
         error:
-          'Provide subtopicNav, popupSystem, notifLike and/or videoWatch to set',
+          'Provide subtopicNav, popupSystem, notifLike, videoWatch and/or videoPreview to set',
       },
       { status: 400 },
     )
@@ -270,11 +290,22 @@ export async function POST(req: NextRequest) {
     console.log(`[flags] videoWatch set to '${videoWatch}' (applies to ALL users)`)
   }
 
+  if (wantsVideoPreview) {
+    const videoPreview = normalizeBooleanFlag(body.videoPreview, false)
+    const ok = await firebaseWrite(VIDEO_PREVIEW_FLAG_PATH, videoPreview)
+    if (!ok) {
+      return NextResponse.json({ error: 'Firebase write failed (videoPreview)' }, { status: 500 })
+    }
+    videoPreviewMemo = { value: videoPreview, ts: Date.now() }
+    console.log(`[flags] videoPreview set to '${videoPreview}' (applies to ALL users)`)
+  }
+
   return NextResponse.json({
     ok: true,
     ...(wantsNav ? { subtopicNav: body.subtopicNav } : {}),
     ...(wantsPopup ? { popupSystem: body.popupSystem } : {}),
     ...(wantsNotifLike ? { notifLike: normalizeBooleanFlag(body.notifLike, true) } : {}),
     ...(wantsVideo ? { videoWatch: normalizeBooleanFlag(body.videoWatch, true) } : {}),
+    ...(wantsVideoPreview ? { videoPreview: normalizeBooleanFlag(body.videoPreview, false) } : {}),
   })
 }

@@ -1,6 +1,15 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v25: BULLETPROOF NOTIFICATION OPEN — tapping Like (or the notification
+//      body) now ALWAYS raises the app: focus() on an existing window is
+//      VERIFIED (it previously returned/failured silently, so the like
+//      only dismissed the notification), failures fall through to
+//      openWindow(url), which itself falls back to openWindow('/').
+//      Tracking fetches stay fire-and-forget so they can never burn the
+//      notification's transient user activation before the window opens.
+//      Cache-name bump v24 → v25 so installed PWAs pick up the new click
+//      logic on their next launch.
 // v24: NOTIFICATION LIKE BUTTON —
 //      1. Push notifications now carry a [Like | Not Interested] action
 //         pair (gated by the payload's likeButton flag, set from the
@@ -54,9 +63,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v24'
-const API_CACHE = 'neutralwire-api-v24'
-const IMG_CACHE = 'neutralwire-img-v24'
+const SHELL_CACHE = 'neutralwire-shell-v25'
+const API_CACHE = 'neutralwire-api-v25'
+const IMG_CACHE = 'neutralwire-img-v25'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
@@ -622,6 +631,11 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil((async () => {
     const trackHeaders = { 'Content-Type': 'application/json' }
+    // Tracking fetches — FIRE-AND-FORGET, never awaited before the window
+    // opens: a network await between the tap and focus()/openWindow() can
+    // burn through the notification's transient user activation, after
+    // which the browser silently refuses to raise a window (the "Like
+    // dismisses the notification but the app never opens" bug).
     if (isNotInterested) {
       fetch('/api/notification/feedback', {
         method: 'POST',
@@ -666,36 +680,59 @@ self.addEventListener('notificationclick', (event) => {
       }
     }
 
+    // ── Path A: an existing window — focus it and tell the app to open the
+    // article. matchAll is local + fast, so the notification's user
+    // activation is still fresh. CRITICAL: if focus() FAILS (some browsers
+    // refuse it for windows the SW doesn't control, or when the activation
+    // was consumed), we do NOT bail out — we fall through to opening a
+    // fresh window. The old code returned unconditionally here, which is
+    // exactly why tapping Like sometimes only dismissed the notification.
     if (targetClient) {
+      let focused = false
       try {
-        // autoLike: true tells the already-open app to press the like
-        // button when the article opens (the &like=1 URL param covers the
-        // cold-start case — this message covers the warm-app case).
-        targetClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
+        const focusedClient = await targetClient.focus()
+        focused = !!focusedClient
       } catch {
-        // silent
+        focused = false
       }
-      try {
-        await targetClient.focus()
-      } catch {
-        // focus can fail on some browsers
+      if (focused) {
+        try {
+          // autoLike: true tells the already-open app to press the like
+          // button when the article opens (the &like=1 URL param covers the
+          // cold-start case — this message covers the warm-app case).
+          targetClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
+        } catch {
+          // silent
+        }
+        return
       }
-      return
+      // focus failed → fall through and open a NEW window below.
     }
 
+    // ── Path B: no window (or focusing it failed) — open one. If the topic
+    // URL is rejected, retry with the plain root so the app AT LEAST comes
+    // up instead of nothing.
+    let openedClient = null
     try {
-      const newClient = await self.clients.openWindow(url)
-      if (newClient && topicId) {
-        setTimeout(() => {
-          try {
-            newClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
-          } catch {
-            // silent
-          }
-        }, 1500)
-      }
+      openedClient = await self.clients.openWindow(url)
     } catch {
       // openWindow can fail if popups are blocked
+    }
+    if (!openedClient && url !== '/' && url !== '') {
+      try {
+        openedClient = await self.clients.openWindow('/')
+      } catch {
+        // nothing left to try
+      }
+    }
+    if (openedClient && topicId) {
+      setTimeout(() => {
+        try {
+          openedClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
+        } catch {
+          // silent
+        }
+      }, 1500)
     }
   })())
 })
