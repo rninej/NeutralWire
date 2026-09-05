@@ -3427,9 +3427,10 @@ function SectionedFeed({
                     onOpenDetail={onOpenDetail}
                     onDismiss={handleDismissInSection}
                     index={i}
-                    /* Experimental top-story video preview — the first
-                       section's first card only. */
-                    videoPreview={sectionIdx === 0 && i === 0}
+                    /* Experimental video preview — every desktop magazine
+                       card has a large image, so every one arms (on scroll,
+                       throttled by the resolution semaphore). */
+                    videoPreview
                   />
                 ))}
               </div>
@@ -3444,10 +3445,10 @@ function SectionedFeed({
                       onOpenDetail={onOpenDetail}
                       onDismiss={handleDismissInSection}
                       index={0}
-                      /* Experimental top-story video preview — the FIRST
-                         section's hero only (Top Headlines = the top news
-                         card the user sees first on the home screen). */
-                      videoPreview={sectionIdx === 0}
+                      /* Experimental video preview — the hero card of
+                         EVERY section (user: every big card loads on
+                         scroll, not just the top one). */
+                      videoPreview
                     />
                   </div>
                 )}
@@ -3565,6 +3566,9 @@ function BlindspotSectionedFeed({
                     onOpenDetail={onOpenDetail}
                     onDismiss={onDismiss}
                     index={i}
+                    /* Experimental video preview — every desktop
+                       magazine card (large image). */
+                    videoPreview
                   />
                 ))}
               </div>
@@ -3579,6 +3583,9 @@ function BlindspotSectionedFeed({
                       onOpenDetail={onOpenDetail}
                       onDismiss={onDismiss}
                       index={0}
+                      /* Experimental video preview — the hero of every
+                         blindspot section too. */
+                      videoPreview
                     />
                   </div>
                 )}
@@ -3694,8 +3701,9 @@ function MobileTopicLayout({
                   onOpenDetail={onOpenDetail}
                   onDismiss={onDismiss}
                   index={i}
-                  /* Experimental top-story video preview — first card only. */
-                  videoPreview={i === 0}
+                  /* Experimental video preview — every desktop magazine
+                     card has a large image, so every one arms. */
+                  videoPreview
                 />
               ))}
             </div>
@@ -3710,9 +3718,10 @@ function MobileTopicLayout({
                     onOpenDetail={onOpenDetail}
                     onDismiss={onDismiss}
                     index={0}
-                    /* Experimental top-story video preview — the FIRST
-                       chunk's hero only (the rest are older news). */
-                    videoPreview={chunkIdx === 0}
+                    /* Experimental video preview — EVERY chunk's hero
+                       (user: every big card loads on scroll, not just
+                       the top one). */
+                    videoPreview
                   />
                 </div>
               )}

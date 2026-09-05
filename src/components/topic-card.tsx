@@ -16,6 +16,7 @@ import { cn, safeImageUrl } from '@/lib/utils'
 import { BiasBar } from '@/components/bias-bar'
 import { HeroVideoPreview } from '@/components/video-preview'
 import { useVideoPreview } from '@/lib/video-watch'
+import { armVideoIfPlaying } from '@/lib/video-preview-store'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { getDeviceId } from '@/lib/referral'
 import { bumpEngagementForTopic } from '@/lib/user-interests'
@@ -34,9 +35,11 @@ interface TopicCardProps {
   /** Index within its parent list — used to stagger entrance animations.
    *  Capped internally so long lists don't get a giant delay. */
   index?: number
-  /** EXPERIMENTAL (videoPreview flag, /debug): auto-play a muted video
-   *  preview inside this card's image ~0.8s after it's been on screen.
-   *  Passed ONLY to the feed's TOP story card — never a whole grid. */
+  /** EXPERIMENTAL (videoPreview flag, /debug): auto-play a half-volume
+   *  video preview inside this card's image ~0.8s after it's been on
+   *  screen (landscape videos only — never Shorts). Passed to EVERY
+   *  card with a large image (hero + desktop magazine grid) — each one
+   * arms on scroll, throttled by a 2-slot resolution semaphore. */
   videoPreview?: boolean
 }
 
@@ -276,6 +279,11 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
       e.stopPropagation()
       return
     }
+    // If THIS card's video preview resolved (it's playing/about to), arm
+    // the handoff BEFORE opening — the article then starts with the video
+    // already rolling instead of the photo + Watch square (user spec).
+    // Synchronous so it lands before any state update flushes.
+    if (showVideoPreview) armVideoIfPlaying(topic.topicId)
     onOpenDetail?.(topic)
   }
 
@@ -550,8 +558,8 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
           <ImageBadges />
-          {/* Experimental top-story preview — muted inline video after
-              0.8s of visibility. Only the feed's first card gets it. */}
+          {/* Experimental video preview — half-volume inline video
+              0.8s after the image is viewed (landscape only). */}
           {showVideoPreview && <HeroVideoPreview topicId={topic.topicId} />}
         </div>
       )}
@@ -616,8 +624,8 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
             onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
           />
           <ImageBadges />
-          {/* Same experimental preview for the desktop top card (default
-              variant, image below the header). */}
+          {/* Same experimental preview for non-hero cards with a large
+              image (desktop magazine grid). */}
           {showVideoPreview && <HeroVideoPreview topicId={topic.topicId} />}
         </div>
       )}

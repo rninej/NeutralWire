@@ -48,6 +48,7 @@ const BROWSER_HEADERS: Record<string, string> = {
 export async function fetchText(
   url: string,
   timeoutMs: number,
+  acceptLanguage = 'en-GB,en;q=0.9',
 ): Promise<string | null> {
   try {
     const controller = new AbortController()
@@ -56,7 +57,7 @@ export async function fetchText(
       const res = await fetch(url, {
         signal: controller.signal,
         cache: 'no-store',
-        headers: BROWSER_HEADERS,
+        headers: { ...BROWSER_HEADERS, 'Accept-Language': acceptLanguage },
       })
       if (!res.ok) return null
       return await res.text()
@@ -268,7 +269,10 @@ export async function fetchYouTubeAspectRatio(
   return null
 }
 
-/** Attach the measured aspect ratio to a winning video (deadline-aware). */
+/** Attach the measured aspect ratio to a winning video (deadline-aware).
+ *  The oar2.jpg measurement is the PRECISE source; the search-result
+ *  thumb hint (aspectHint) is the fallback — between the two, virtually
+ *  every resolved video ships an aspect (only null when both fail). */
 async function withAspect(
   hit: QualifiedVideo,
   deadline: number,
@@ -298,6 +302,7 @@ export async function checkYouTubeVideo(
   opts: {
     channelUrlHint?: string | null
     durationHint?: number | null
+    aspectHint?: number | null
   } | null,
   deadline: number,
 ): Promise<QualifiedVideo | null> {
@@ -316,7 +321,71 @@ export async function checkYouTubeVideo(
   const subs = await getChannelSubscribers(o.channelUrlHint)
   if (subs === null || subs < MIN_SUBSCRIBERS) return null
 
-  return { videoId, title: embed.title, author: embed.author }
+  return {
+    videoId,
+    title: embed.title,
+    author: embed.author,
+    // Search-thumb aspect (may be refined by withAspect's oar measurement).
+    aspect: typeof o.aspectHint === 'number' ? o.aspectHint : null,
+  }
+}
+
+// ── Script / language matching (user spec: "the videos should be in
+//    the language you are in — UK → English") ──
+// A search for a story about e.g. Hideki Shirakawa surfaces Japanese TV
+// uploads at the top even for a UK user. hl=/gl= + Accept-Language bias
+// the ranking, and this script check demotes whatever still slips
+// through: a video whose TITLE is written in a script the target
+// language doesn't use is moved behind same-language candidates (never
+// excluded — a foreign-language video still beats no video). ──
+
+export type WritingScript =
+  | 'latin' | 'cjk' | 'hangul' | 'cyrillic' | 'arabic' | 'thai'
+  | 'devanagari' | 'greek' | 'hebrew' | 'other'
+
+/** The script a string is predominantly written in (letter votes). */
+export function dominantScript(s: string): WritingScript {
+  const counts: Record<string, number> = {}
+  for (const ch of s) {
+    const c = ch.codePointAt(0) || 0
+    let script: string | null = null
+    if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) script = 'latin' // A-Z a-z
+    else if (c >= 0xc0 && c <= 0x24f) script = 'latin' // Latin extended (é ü å …)
+    else if (c >= 0x370 && c <= 0x3ff) script = 'greek'
+    else if (c >= 0x400 && c <= 0x4ff) script = 'cyrillic'
+    else if (c >= 0x590 && c <= 0x5ff) script = 'hebrew'
+    else if (c >= 0x600 && c <= 0x6ff) script = 'arabic'
+    else if (c >= 0x900 && c <= 0x97f) script = 'devanagari'
+    else if (c >= 0xe00 && c <= 0xe7f) script = 'thai'
+    else if (c >= 0x3040 && c <= 0x30ff) script = 'cjk' // kana
+    else if (c >= 0x4e00 && c <= 0x9fff) script = 'cjk' // CJK unified
+    else if (c >= 0xac00 && c <= 0xd7af) script = 'hangul'
+    if (script) counts[script] = (counts[script] || 0) + 1
+  }
+  let best: WritingScript = 'other'
+  let bestN = 0
+  for (const [k, n] of Object.entries(counts)) {
+    if (n > bestN) {
+      bestN = n
+      best = k as WritingScript
+    }
+  }
+  return best
+}
+
+/** The script an hl= language code is written in. */
+export function scriptForLanguage(hl: string): WritingScript {
+  const map: Record<string, WritingScript> = {
+    en: 'latin', fr: 'latin', de: 'latin', es: 'latin', it: 'latin',
+    nl: 'latin', sv: 'latin', pl: 'latin', tr: 'latin', id: 'latin',
+    ms: 'latin', pt: 'latin', vi: 'latin', cs: 'latin', ro: 'latin',
+    hu: 'latin', fi: 'latin', da: 'latin', no: 'latin', tl: 'latin',
+    ja: 'cjk', zh: 'cjk', ko: 'hangul', ru: 'cyrillic', uk: 'cyrillic',
+    be: 'cyrillic', ar: 'arabic', fa: 'arabic', ur: 'arabic',
+    he: 'hebrew', hi: 'devanagari', bn: 'devanagari', th: 'thai',
+    el: 'greek',
+  }
+  return map[hl] || 'latin'
 }
 
 // ── Relevance (search) ──
@@ -358,6 +427,10 @@ export interface SearchCandidate {
   author: string
   channelUrl: string | null
   durationSec: number | null
+  /** w/h from the search result's OWN thumbnail (720x404 → 1.78).
+   *  Landscape vs portrait for free, no extra fetch — the fallback when
+   *  the oar2.jpg measurement fails (oar thumbs 404 for many videos). */
+  thumbAspect: number | null
 }
 
 // ── ytInitialData parsing ──
@@ -467,7 +540,24 @@ export function candidateFromVideoRenderer(
     typeof lengthText?.simpleText === 'string'
       ? parseClockToSeconds(lengthText.simpleText as string)
       : null
-  return { videoId, title, author, channelUrl, durationSec }
+  // Aspect hint from the result's own thumbnails (largest one wins).
+  // videoRenderer thumbs keep the video's real proportions (720x404 for
+  // 16:9, 480x360 for 4:3, portrait for Shorts) — a free landscape/Short
+  // signal that the resolver forwards to the client preview.
+  let thumbAspect: number | null = null
+  const thumbNode = r.thumbnail as Record<string, unknown> | undefined
+  const thumbs = Array.isArray(thumbNode?.thumbnails) ? (thumbNode.thumbnails as Array<Record<string, unknown>>) : []
+  let bestArea = 0
+  for (const t of thumbs) {
+    const w = typeof t.width === 'number' ? (t.width as number) : 0
+    const h = typeof t.height === 'number' ? (t.height as number) : 0
+    if (w > 0 && h > 0 && w * h > bestArea) {
+      bestArea = w * h
+      const ratio = w / h
+      if (ratio >= 0.4 && ratio <= 2.6) thumbAspect = Math.round(ratio * 10000) / 10000
+    }
+  }
+  return { videoId, title, author, channelUrl, durationSec, thumbAspect }
 }
 
 /** Depth-limited walk collecting videoRenderer objects in result order. */
@@ -513,13 +603,17 @@ export function collectSearchCandidates(
  * outlet's own upload in the search results is how the source's video
  * gets played.
  *
- * CONCISE-FIRST ORDERING (user spec): half-hour broadcast roundups that
- * "cover" the topic by mentioning every story of the day are exactly
- * what the Watch button should NOT play. Candidates are ordered:
- *   1. concise (≤7 min) videos from the story's own outlets
- *   2. concise videos from other channels
- *   3. longer videos from the story's own outlets
- *   4. longer videos from other channels
+ * CONCISE-FIRST + LANGUAGE-FIRST ORDERING (user specs): half-hour
+ * broadcast roundups that "cover" the topic by mentioning every story
+ * of the day are exactly what the Watch button should NOT play, and a
+ * video in a language the user doesn't speak is no better. Candidates
+ * are ordered:
+ *   1. same-language concise (≤7 min) videos from the story's own outlets
+ *   2. same-language concise videos from other channels
+ *   3. same-language longer videos from the story's own outlets
+ *   4. same-language longer videos from other channels
+ *   5-8. the same four bands for foreign-language titles (a video in the
+ *      wrong language still beats no video — demoted, never excluded)
  * Longer videos are still eligible (a preference, not a requirement) —
  * they just lose to any qualifying concise video.
  *
@@ -530,17 +624,41 @@ export function collectSearchCandidates(
  * candidate too), but it must pass the same gate — nothing under 10k
  * subs or 10 seconds ever plays.
  */
+
+/** Locale for the YouTube search (user's country/language). */
+export interface SearchLocale {
+  /** YouTube hl= param — UI/region bias of the results page. */
+  hl?: string
+  /** YouTube gl= param — geolocation bias of the results page. */
+  gl?: string
+  /** Accept-Language header for the search fetch. */
+  acceptLanguage?: string
+}
+
 export async function searchYouTubeForStory(
   storyTitle: string,
   deadline: number,
   sourceNames: string[] = [],
+  locale: SearchLocale = {},
+  /** Videos the PLAYER rejected (embed-disallowed — YouTube error 101/150;
+   *  oEmbed can't detect these, so the client reports them back). */
+  excludeVideoIds: string[] = [],
 ): Promise<QualifiedVideo | null> {
   const query = storyTitle.replace(/["?&/\\]/g, ' ').slice(0, 70).trim() + ' news'
   if (!query.trim()) return null
 
+  // Locale (user spec: "the videos should be in the language you are
+  // in — UK → English"). hl + gl bias YouTube's ranking toward the
+  // user's language/region; Accept-Language reinforces it; the script
+  // check below demotes whatever still slips through.
+  const hl = /^[a-z]{2}(-[A-Za-z]{2,4})?$/.test(locale.hl || '') ? locale.hl! : 'en'
+  const gl = /^[A-Za-z]{2}$/.test(locale.gl || '') ? locale.gl!.toUpperCase() : ''
+  const geo = gl ? `&gl=${gl}` : ''
+
   const html = await fetchText(
-    `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&hl=en`,
+    `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&hl=${hl}${geo}`,
     8000,
+    locale.acceptLanguage || (gl ? `${hl}-${gl},${hl};q=0.9,en;q=0.8` : `${hl},en;q=0.8`),
   )
   if (!html) return null
 
@@ -551,6 +669,10 @@ export async function searchYouTubeForStory(
   const data = extractYtInitialData(html)
   if (data) collectSearchCandidates(data, candidates, 12)
   if (candidates.length === 0) return null
+
+  // Videos the player already rejected (embed-disallowed) never come
+  // back — the resolver moves down the list instead of looping.
+  const excluded = new Set(excludeVideoIds.filter((id) => /^[\w-]{11}$/.test(id)))
 
   // Source matching: normalized containment either way ("ABC News" vs
   // "ABC News (Australia)", "BBC" vs "BBC News"). Keys shorter than 3
@@ -574,19 +696,36 @@ export async function searchYouTubeForStory(
   const isConcise = (c: SearchCandidate) =>
     typeof c.durationSec === 'number' &&
     c.durationSec <= PREFERRED_MAX_DURATION_SECONDS
+  // Language-first (user spec): a title written in the target language's
+  // script beats a foreign-script title — Japanese uploads about a
+  // Japanese person never beat English coverage for a UK user. Titles
+  // with no strong script (numbers/punctuation) count as matches.
+  const targetScript = scriptForLanguage(hl)
+  const matchesLang = (c: SearchCandidate) => {
+    const s = dominantScript(c.title)
+    return s === 'other' || s === targetScript
+  }
   const ordered = [
-    ...preferred.filter(isConcise),
-    ...rest.filter(isConcise),
-    ...preferred.filter((c) => !isConcise(c)),
-    ...rest.filter((c) => !isConcise(c)),
+    ...preferred.filter((c) => matchesLang(c) && isConcise(c)),
+    ...rest.filter((c) => matchesLang(c) && isConcise(c)),
+    ...preferred.filter((c) => matchesLang(c) && !isConcise(c)),
+    ...rest.filter((c) => matchesLang(c) && !isConcise(c)),
+    // Wrong-language videos are the LAST resort — a foreign-language
+    // video about the story still beats no video at all.
+    ...preferred.filter((c) => !matchesLang(c) && isConcise(c)),
+    ...rest.filter((c) => !matchesLang(c) && isConcise(c)),
+    ...preferred.filter((c) => !matchesLang(c) && !isConcise(c)),
+    ...rest.filter((c) => !matchesLang(c) && !isConcise(c)),
   ]
 
   let fallback: SearchCandidate | null = null
-  // 9 (not 7): the concise-first reordering stacks short candidates at
-  // the front — if several of them fail the gate, the longer bands
-  // still need room in the window to get their chance.
-  for (const c of ordered.slice(0, 9)) {
+  // 12 (not 7): the language + concise-first reordering stacks short
+  // same-language candidates at the front — if several of them fail the
+  // gate, the longer / foreign-language bands still need room in the
+  // window to get their chance.
+  for (const c of ordered.slice(0, 12)) {
     if (Date.now() > deadline) return null
+    if (excluded.has(c.videoId)) continue
     // A declared duration of <=10s (or none — live streams) disqualifies
     // immediately; the lengthText is the ONLY duration source.
     if (c.durationSec === null || !(c.durationSec > MIN_DURATION_SECONDS)) {
@@ -602,7 +741,11 @@ export async function searchYouTubeForStory(
     if ((isSource && shared >= 1) || shared >= 2 || (shared >= 1 && looksLikeNews)) {
       const hit = await checkYouTubeVideo(
         c.videoId,
-        { channelUrlHint: c.channelUrl, durationHint: c.durationSec },
+        {
+          channelUrlHint: c.channelUrl,
+          durationHint: c.durationSec,
+          aspectHint: c.thumbAspect,
+        },
         deadline,
       )
       if (hit) return withAspect(hit, deadline)
@@ -617,10 +760,14 @@ export async function searchYouTubeForStory(
   }
   // Nothing matched by keywords — fall back to a news-y channel result
   // only if it ALSO passes the full quality gate.
-  if (fallback && Date.now() < deadline) {
+  if (fallback && Date.now() < deadline && !excluded.has(fallback.videoId)) {
     const hit = await checkYouTubeVideo(
       fallback.videoId,
-      { channelUrlHint: fallback.channelUrl, durationHint: fallback.durationSec },
+      {
+        channelUrlHint: fallback.channelUrl,
+        durationHint: fallback.durationSec,
+        aspectHint: fallback.thumbAspect,
+      },
       deadline,
     )
     if (hit) return withAspect(hit, deadline)

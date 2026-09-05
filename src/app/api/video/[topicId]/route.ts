@@ -28,6 +28,15 @@ export const maxDuration = 15
  *      the headline (server-side, no API key), relevance-checked so we
  *      return a video actually about the story.
  *
+ * LANGUAGE (user spec: "the videos should be in the language you are
+ * in — UK → English, e.g. the Hideki Shirakawa story"): the client
+ * sends ?hl=<lang>&gl=<country> (from the picked language + country,
+ * see lib/video-preview-store). The search page is fetched with that
+ * hl=/gl= + a matching Accept-Language, and candidates whose TITLE is
+ * written in a foreign script are demoted behind same-language ones
+ * (never excluded). Resolution results are cached PER LANGUAGE, so a
+ * Japanese user and a UK user never share a video.
+ *
  * QUALITY REQUIREMENTS (user spec, enforced by lib/video-quality.ts):
  * every YouTube video must run LONGER THAN 10 SECONDS and come from a
  * channel with AT LEAST 10,000 SUBSCRIBERS — videos that fail either
@@ -43,13 +52,15 @@ export const maxDuration = 15
  * a YouTube-channel concept and doesn't apply to a vetted outlet's own
  * feed enclosure.
  *
- * Results are cached in Firebase (videos3/<topicId> — namespace bumped
- * whenever the ranking rules change so every entry cached under the
- * older rules is ignored): 24h for a found video, 6h for a "no video"
- * miss. Every resolution is user-initiated, bounded by a ~10.5s budget, and never
+ * Results are cached in Firebase (videos4/<topicId>__<hl> — namespace
+ * bumped from videos3 both for the language-aware ranking AND because
+ * the cache is now per-language): 24h for a found video, 6h for a "no
+ * video" miss. Every resolution is bounded by a ~10.5s budget, and never
  * happens while the videoWatch feature flag is off — /debug can kill the
  * whole feature instantly (this endpoint returns { ok: false, disabled:
- * true } and the UI hides the pill).
+ * true } and the UI hides the pill). The preview (HeroVideoPreview)
+ * shares this endpoint with the same cache — resolving once for a card
+ * also arms the article's Watch button.
  *
  * Response:
  *   { ok: true, kind: 'youtube', videoId, title, author, sourceUrl, aspect }
@@ -90,12 +101,17 @@ async function isVideoWatchEnabled(): Promise<boolean> {
   return value
 }
 
-// ── Resolution cache (Firebase videos3/<topicId>) ──
-// v3 namespace: bumping it (from v2) invalidated every entry picked
-// before the concise-first (<7 min) preference — cached "found"
-// half-hour roundups re-resolve instead of replaying for 24h.
+// ── Resolution cache (Firebase videos4/<topicId>__<hl>) ──
+// v4 namespace: language-aware ranking + PER-LANGUAGE keys — a UK
+// user's English hit never serves a Japanese user (and old videos3
+// entries are ignored so everything re-resolves under the new rules).
 const FOUND_TTL_MS = 24 * 60 * 60 * 1000
 const MISS_TTL_MS = 6 * 60 * 60 * 1000
+
+/** Firestore/RTDB-safe cache key: topic + language. */
+function cacheKey(topicId: string, hl: string): string {
+  return `videos4/${topicId}__${hl}`
+}
 
 interface VideoResult {
   ok: boolean
@@ -113,6 +129,10 @@ interface VideoResult {
 interface CachedVideo {
   ts: number
   result: VideoResult
+  /** Videos the player rejected (embed-disallowed) — accumulated per
+   *  story+language so future resolutions skip them for the cache's
+   *  lifetime. */
+  dead?: string[]
 }
 
 interface TopicForVideo {
@@ -143,6 +163,31 @@ export async function GET(
   const isRetry = req.nextUrl.searchParams.get('retry') === '1' ||
     req.nextUrl.searchParams.get('retry') === '2'
 
+  // ── User locale (user spec: the video should be in the user's
+  //    language — UK → English). Validated tightly: hl's primary subtag
+  //    (2 letters) and gl (2 letters). Defaults keep the old behaviour.
+  const hlRaw = (req.nextUrl.searchParams.get('hl') || 'en').toLowerCase()
+  const hlMatch = hlRaw.match(/^([a-z]{2})(?:-[a-z]{2,4})?$/)
+  const hl = hlMatch ? hlMatch[1] : 'en'
+  const glRaw = req.nextUrl.searchParams.get('gl') || ''
+  const gl = /^[a-z]{2}$/i.test(glRaw) ? glRaw.toUpperCase() : ''
+  const acceptLanguage = gl
+    ? `${hl}-${gl},${hl};q=0.9,en;q=0.8`
+    : `${hl},en;q=0.8`
+
+  // ── Dead-video report (client saw YouTube error 101/150 — the owner
+  //    disallows embedding; oEmbed can't detect this, so the player
+  //    reports it back). Accepts MULTIPLE ids (?dead=id1,id2) — the
+  //    resolver re-runs, skipping every reported video, and the cached
+  //    entry remembers them all so future resolutions skip them too.
+  const deadRaw = req.nextUrl.searchParams.get('dead') || ''
+  const deadIds = deadRaw
+    .split(',')
+    .map((x) => x.trim())
+    .filter((x) => /^[\w-]{11}$/.test(x))
+    .slice(0, 8)
+  let excludeDead: string[] = []
+
   // 1. Feature flag — /debug can kill the feature instantly (no resolving
   //    CPU is spent while it's off; the UI also hides the pill).
   const enabled = await isVideoWatchEnabled()
@@ -153,15 +198,39 @@ export async function GET(
     )
   }
 
-  // 2. Cache (per-topic, TTL by outcome). videos3/ — see header comment.
-  //    A retry run skips CACHED MISSES only — re-resolving in case the
-  //    first pass failed on a transient fetch.
+  // 2. Cache (per-topic + language, TTL by outcome). videos4/ — see
+  //    header comment. A retry run skips CACHED MISSES only —
+  //    re-resolving in case the first pass failed on a transient fetch.
+  //    A cached YouTube FOUND entry without an `aspect` predates the
+  //    aspect measurement (the preview's landscape gate needs it) —
+  //    re-resolve so it gains one. A dead-video report forces a live
+  //    re-resolution with the reported video(s) excluded.
   try {
-    const cached = await firebaseRead<CachedVideo>(`videos3/${topicId}`)
-    if (cached?.result && typeof cached.ts === 'number') {
-      const ttl = cached.result.ok ? FOUND_TTL_MS : MISS_TTL_MS
-      if (Date.now() - cached.ts < ttl) {
-        if (cached.result.ok || !isRetry) {
+    const cached = await firebaseRead<CachedVideo>(cacheKey(topicId, hl))
+    const cachedDead = Array.isArray(cached?.dead)
+      ? cached.dead.filter((x) => /^[\w-]{11}$/.test(x))
+      : []
+    if (deadIds.length > 0) {
+      excludeDead = [...new Set([...cachedDead, ...deadIds])]
+    } else {
+      if (cached?.result && typeof cached.ts === 'number') {
+        // The cached video itself was reported dead earlier — resolve
+        // live rather than echoing a video the player rejects.
+        const cachedIsDead =
+          cached.result.ok &&
+          !!cached.result.videoId &&
+          cachedDead.includes(cached.result.videoId!)
+        const staleAspect =
+          cached.result.ok &&
+          cached.result.kind === 'youtube' &&
+          typeof cached.result.aspect !== 'number'
+        const ttl = cached.result.ok ? FOUND_TTL_MS : MISS_TTL_MS
+        if (
+          Date.now() - cached.ts < ttl &&
+          !staleAspect &&
+          !cachedIsDead &&
+          (cached.result.ok || !isRetry)
+        ) {
           return NextResponse.json(cached.result, {
             headers: { 'Cache-Control': 'no-store' },
           })
@@ -181,7 +250,7 @@ export async function GET(
   }
   if (!topic?.title) {
     const miss: VideoResult = { ok: false, reason: 'not-found' }
-    void cacheResult(topicId, miss)
+    void cacheResult(topicId, hl, miss)
     return NextResponse.json(miss, { headers: { 'Cache-Control': 'no-store' } })
   }
 
@@ -214,7 +283,7 @@ export async function GET(
         title: topic.title,
         author: a?.sourceName || 'Source video',
       }
-      void cacheResult(topicId, found)
+      void cacheResult(topicId, hl, found)
       return NextResponse.json(found, {
         headers: { 'Cache-Control': 'no-store' },
       })
@@ -223,7 +292,8 @@ export async function GET(
 
   // 5. YouTube search — a video about the story from a news outlet that
   //    meets the requirements (alive, >10s, >=10k subs), preferring
-  //    uploads from the story's own outlets.
+  //    uploads from the story's own outlets AND the user's language
+  //    (hl/gl + Accept-Language + script demotion).
   if (Date.now() < deadline) {
     const sourceNames = [
       ...new Set(
@@ -236,6 +306,8 @@ export async function GET(
       topic.title,
       deadline,
       sourceNames,
+      { hl, gl, acceptLanguage },
+      excludeDead,
     )
     if (searchHit) {
       const found: VideoResult = {
@@ -247,7 +319,7 @@ export async function GET(
         sourceUrl: `https://www.youtube.com/watch?v=${searchHit.videoId}`,
         aspect: searchHit.aspect ?? undefined,
       }
-      void cacheResult(topicId, found)
+      void cacheResult(topicId, hl, found, excludeDead)
       return NextResponse.json(found, {
         headers: { 'Cache-Control': 'no-store' },
       })
@@ -257,13 +329,22 @@ export async function GET(
   // 6. Nothing found — cache the miss (short TTL) so repeat taps on the
   //    same story don't re-scrape.
   const miss: VideoResult = { ok: false, reason: 'no-video' }
-  void cacheResult(topicId, miss)
+  void cacheResult(topicId, hl, miss, excludeDead)
   return NextResponse.json(miss, { headers: { 'Cache-Control': 'no-store' } })
 }
 
-async function cacheResult(topicId: string, result: VideoResult): Promise<void> {
+async function cacheResult(
+  topicId: string,
+  hl: string,
+  result: VideoResult,
+  dead: string[] = [],
+): Promise<void> {
   try {
-    await firebaseWrite(`videos3/${topicId}`, { ts: Date.now(), result })
+    await firebaseWrite(cacheKey(topicId, hl), {
+      ts: Date.now(),
+      result,
+      ...(dead.length > 0 ? { dead } : {}),
+    })
   } catch {
     // best-effort — a failed cache write just means we resolve again later
   }

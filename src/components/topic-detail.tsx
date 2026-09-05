@@ -28,6 +28,7 @@ import { bumpEngagementForTopic } from '@/lib/user-interests'
 import { getRating } from '@/lib/source-ratings'
 import { useVideoWatch } from '@/lib/video-watch'
 import { InlineVideo, WatchPill } from '@/components/video-player'
+import { consumeVideoAutoplay, type ResolvedVideo } from '@/lib/video-preview-store'
 
 interface TopicDetailProps {
   topic: TopicArticle
@@ -83,6 +84,20 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
   // the Watch square swaps the photo for the embedded player; the player's
   // own close square swaps it back.
   const videoWatchOn = useVideoWatch()
+  // Opened from a playing home-feed preview (user: "when I click on the
+  // preview it should open the article with the video playing, not the
+  // normal image with the play button") — the resolved video was handed
+  // over from the card, so the player starts rolling immediately: no
+  // fetch, no loading state, no photo+Watch-square interlude. Consumed
+  // once on mount (an effect, so React strict-mode's double-invoked
+  // render can't eat the handoff), and cleared for real when the user
+  // closes the player.
+  const [handedOffVideo, setHandedOffVideo] = React.useState<ResolvedVideo | null>(null)
+  React.useEffect(() => {
+    const handedOff = consumeVideoAutoplay(topic.topicId)
+    if (handedOff) setHandedOffVideo(handedOff)
+     
+  }, [topic.topicId])
   const [videoOpen, setVideoOpen] = React.useState(false)
   // Full topic fetched from /api/topic/[id] — used when the slim feed
   // response (slim=1) strips the articles array. This guarantees the
@@ -824,15 +839,24 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
                 NeutralWire
               </span>
             </div>
-            {videoWatchOn && !videoOpen && <WatchPill onClick={() => setVideoOpen(true)} />}
+            {videoWatchOn && !videoOpen && !handedOffVideo && <WatchPill onClick={() => setVideoOpen(true)} />}
             {/* The video plays INSIDE the news image (user request — no
                 popup): the InlineVideo overlay swaps the photo for the
-                embedded player; its close square restores the image. */}
-            {videoWatchOn && videoOpen && (
+                embedded player; its close square restores the image.
+                Opened from a preview click → the handed-off video starts
+                playing immediately (autoplay, no fetch/loading state). */}
+            {videoWatchOn && (videoOpen || handedOffVideo) && (
               <InlineVideo
                 topicId={topic.topicId}
                 storyTitle={topic.title}
-                onClose={() => setVideoOpen(false)}
+                initialVideo={handedOffVideo ?? undefined}
+                onClose={() => {
+                  // The handoff is one-shot: closing the player must
+                  // really close it — dropping the handed-off video (and
+                  // videoOpen) lets the Watch square come back.
+                  setVideoOpen(false)
+                  setHandedOffVideo(null)
+                }}
               />
             )}
           </div>
