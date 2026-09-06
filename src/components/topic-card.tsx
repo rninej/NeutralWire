@@ -15,6 +15,7 @@ import { Card } from '@/components/ui/card'
 import { cn, safeImageUrl } from '@/lib/utils'
 import { BiasBar } from '@/components/bias-bar'
 import { HeroVideoPreview } from '@/components/video-preview'
+import { CardContextBar } from '@/components/card-context-bar'
 import { useVideoPreview } from '@/lib/video-watch'
 import { armVideoIfPlaying } from '@/lib/video-preview-store'
 import type { TopicArticle } from '@/lib/news-aggregator'
@@ -153,6 +154,8 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
   const [showSources, setShowSources] = React.useState(false)
   // "Copied" feedback for the share button (clipboard fallback only).
   const [shared, setShared] = React.useState(false)
+  // ── Long-press → bottom context app bar (Share/Open/Like/Dislike/Report) ──
+  const [contextBarOpen, setContextBarOpen] = React.useState(false)
   const imageUrl = pickImage(topic)
   // Key the imgError state to the imageUrl so it auto-resets when the image changes.
   // This avoids stale error state from a previous render.
@@ -271,6 +274,14 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
     // Don't open detail if the user clicked a link or button inside the card.
     const target = e.target as HTMLElement
     if (target.closest('a, button')) return
+    // Don't open detail if this click came right after a LONG-PRESS — the
+    // press opened the context app bar; the trailing click must not also
+    // open the article (same suppression pattern as the swipe below).
+    if (pressHappenedRef.current) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     // Don't open detail if this click came right after a drag (swipe).
     // The browser fires a click event after pointerup even when the user
     // was dragging — we suppress it so a swipe doesn't also open the detail.
@@ -287,8 +298,75 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
     onOpenDetail?.(topic)
   }
 
+  // ── Long-press detection (450ms hold) ──
+  // Press-and-hold anywhere on the card surface opens the context app bar.
+  // Cancelled by: pointer move >10px (scroll/swipe intent), pointerup/
+  // pointercancel (tap), or framer's drag starting. The click that fires
+  // after a completed long-press is suppressed by pressHappenedRef (same
+  // pattern the swipe uses). Buttons/links inside the card never start a
+  // press (their taps/holds keep their own meaning).
+  const pressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pressPosRef = React.useRef<{ x: number; y: number } | null>(null)
+  const pressHappenedRef = React.useRef(false)
+
+  const clearPressTimer = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current)
+      pressTimerRef.current = null
+    }
+    pressPosRef.current = null
+  }
+
+  const handlePressStart = (e: React.PointerEvent) => {
+    // Mouse: only primary button. Touch/pen: always.
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    // Don't start a press on interactive children (they own their taps).
+    const target = e.target as HTMLElement
+    if (target.closest('a, button, input, textarea, [role="button"]')) return
+    pressPosRef.current = { x: e.clientX, y: e.clientY }
+    clearPressTimer()
+    pressTimerRef.current = setTimeout(() => {
+      pressHappenedRef.current = true
+      pressPosRef.current = null
+      setContextBarOpen(true)
+      try {
+        navigator.vibrate?.(12)
+      } catch {}
+      // Suppress the trailing click (pointerup → click fires right after).
+      setTimeout(() => {
+        pressHappenedRef.current = false
+      }, 500)
+    }, 450)
+  }
+
+  const handlePressMove = (e: React.PointerEvent) => {
+    if (!pressPosRef.current) return
+    const dx = e.clientX - pressPosRef.current.x
+    const dy = e.clientY - pressPosRef.current.y
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) clearPressTimer()
+  }
+
+  const handlePressEnd = () => clearPressTimer()
+
+  // Suppress the Android long-press context menu while a press is being
+  // measured (desktop right-click keeps working — it never starts a press).
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (pressTimerRef.current || pressHappenedRef.current) e.preventDefault()
+  }
+
+  const longPressHandlers = {
+    onPointerDown: handlePressStart,
+    onPointerMove: handlePressMove,
+    onPointerUp: handlePressEnd,
+    onPointerCancel: handlePressEnd,
+    onContextMenu: handleContextMenu,
+  }
+
   const handleDragStart = () => {
     dragHappenedRef.current = true
+    // A drag means the user is swiping, not holding — kill any pending
+    // long-press before framer's pointer capture eats our move events.
+    clearPressTimer()
     // Measure the card width NOW (lazily) so the threshold is based on the
     // actual rendered width, not a hardcoded guess. This matters because
     // cards have different widths (mini vs hero vs featured).
@@ -483,8 +561,9 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
     if (variant === 'mini') {
       return wrapWithSwipe(
       <Card
+        {...longPressHandlers}
         className={cn(
-          'card-glass h-full overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
+          'card-glass nw-noselect h-full overflow-hidden p-0 gap-0 flex flex-row items-stretch min-h-[96px]',
           !showImage && 'border-l-4 border-l-foreground/20',
           onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
         )}
@@ -538,8 +617,9 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
 
   return wrapWithSwipe(
     <Card
+      {...longPressHandlers}
       className={cn(
-        'card-glass h-full overflow-hidden p-0 gap-0 flex flex-col',
+        'card-glass nw-noselect h-full overflow-hidden p-0 gap-0 flex flex-col',
         onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
       )}
       onClick={handleCardClick}
@@ -662,9 +742,10 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
     )
   }
 
-  // Render the card + sources popup (portaled to document.body so no
-  // transformed ancestor can trap the fixed positioning, and so the
-  // AnimatePresence exit animation always runs).
+  // Render the card + sources popup + long-press context bar (both
+  // portaled to document.body so no transformed ancestor can trap the
+  // fixed positioning, and so the AnimatePresence exit animations
+  // always run).
   return (
     <>
       {renderCard()}
@@ -673,6 +754,13 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
           <AnimatePresence>
             {showSources && (
               <SourcesPopup topic={topic} onClose={() => setShowSources(false)} />
+            )}
+            {contextBarOpen && (
+              <CardContextBar
+                topic={topic}
+                onOpen={(t) => onOpenDetail?.(t)}
+                onClose={() => setContextBarOpen(false)}
+              />
             )}
           </AnimatePresence>,
           document.body,

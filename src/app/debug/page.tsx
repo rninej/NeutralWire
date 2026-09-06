@@ -41,6 +41,7 @@ import {
   FlaskConical,
   Play,
   Heart,
+  Bug,
 } from 'lucide-react'
 import { getDeviceId } from '@/lib/referral'
 import { COUNTRY_COORDS, latLngToXY } from '@/lib/country-coords'
@@ -205,6 +206,94 @@ export default function DebugPage() {
       fetchPwaStats()
     }
   }, [authed, range, fetchAnalytics, fetchPwaStats])
+
+  // ── User bug reports (long-press a news card → Report a bug) ──
+  // Each report arrives with the full article snapshot. "Make AI Fix"
+  // sends it to /api/debug/ai-fix, where the AI rewrites the title /
+  // summary, re-finds the photo, kills the video, or audits the sources
+  // — and writes the fix into every store the story lives in.
+  interface BugReportUi {
+    id: string
+    type: string
+    note: string
+    deviceId: string
+    createdAt: number
+    status: 'open' | 'fixed' | 'dismissed'
+    topic: { topicId: string; title: string; coverage: number }
+    fixedAt?: number
+    aiNote?: string
+    aiModel?: string
+  }
+  const [bugReports, setBugReports] = React.useState<BugReportUi[]>([])
+  const [bugReportsLoading, setBugReportsLoading] = React.useState(false)
+  const [fixingReportId, setFixingReportId] = React.useState<string | null>(null)
+  const [fixNotes, setFixNotes] = React.useState<Record<string, string>>({})
+
+  const fetchBugReports = React.useCallback(async () => {
+    if (!passwordRef.current) return
+    setBugReportsLoading(true)
+    try {
+      const res = await fetch(
+        `/api/report?password=${encodeURIComponent(passwordRef.current)}`,
+      )
+      if (res.ok) {
+        const json = await res.json()
+        setBugReports(json.reports || [])
+      }
+    } catch {
+      // silent — the refresh button retries
+    } finally {
+      setBugReportsLoading(false)
+    }
+  }, [])
+
+  const makeAiFix = async (reportId: string) => {
+    if (fixingReportId || !passwordRef.current) return
+    setFixingReportId(reportId)
+    try {
+      // Can take 10-60s (AI + image pipeline + cache rewrites) — no
+      // client timeout so long fixes complete.
+      const res = await fetch('/api/debug/ai-fix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportId, password: passwordRef.current }),
+      })
+      const json = await res.json()
+      if (res.ok && json.ok) {
+        setFixNotes((n) => ({ ...n, [reportId]: json.aiNote }))
+        setBugReports((rs) =>
+          rs.map((r) =>
+            r.id === reportId
+              ? { ...r, status: 'fixed', aiNote: json.aiNote, aiModel: json.aiModel }
+              : r,
+          ),
+        )
+      } else {
+        setFixNotes((n) => ({ ...n, [reportId]: `✗ ${json.error || 'Fix failed'}` }))
+      }
+    } catch {
+      setFixNotes((n) => ({ ...n, [reportId]: '✗ Network error — try again' }))
+    } finally {
+      setFixingReportId(null)
+    }
+  }
+
+  const dismissReport = async (reportId: string) => {
+    try {
+      await fetch('/api/report', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportId, password: passwordRef.current }),
+      })
+      setBugReports((rs) => rs.filter((r) => r.id !== reportId))
+    } catch {
+      // silent
+    }
+  }
+
+  React.useEffect(() => {
+    if (authed && passwordRef.current) fetchBugReports()
+  }, [authed, fetchBugReports])
 
   // ── Push diagnostics (existing debug page content) ──
   const [deviceId, setDeviceId] = React.useState('')
@@ -1273,6 +1362,62 @@ export default function DebugPage() {
           </div>
         </Card>
 
+        {/* ── User Bug Reports + Make AI Fix ──
+            Every long-press "Report a bug" on a news card lands here with
+            the full article snapshot. Make AI Fix dispatches the report to
+            the AI, which rewrites/regenerates/replaces the broken part and
+            writes the fix everywhere (live cache, archive, summaries,
+            title-rewrites, video caches, search index). */}
+        <Card className="mb-6 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Bug className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-bold">User Bug Reports</h2>
+            <span className="ml-auto flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {bugReports.filter((r) => r.status === 'open').length} open ·{' '}
+                {bugReports.length} total
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={fetchBugReports}
+                disabled={bugReportsLoading}
+              >
+                {bugReportsLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+              </Button>
+            </span>
+          </div>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Hold any news card → <b>Report</b> to file one. Each report ships
+            with the story. <b>Make AI Fix</b> gives the AI full write access
+            to that story everywhere it lives — headline, summary, photo,
+            video and sources.
+          </p>
+
+          {bugReports.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+              No open reports. Long-press a news card → Report a bug to file one.
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {bugReports.map((r) => (
+                <ReportRow
+                  key={r.id}
+                  report={r}
+                  fixing={fixingReportId === r.id}
+                  fixNote={fixNotes[r.id]}
+                  onFix={() => makeAiFix(r.id)}
+                  onDismiss={() => dismissReport(r.id)}
+                />
+              ))}
+            </div>
+          )}
+        </Card>
+
         {error && (
           <Card className="mb-6 border-red-500/30 p-4">
             <div className="flex items-center gap-2 text-red-500">
@@ -1490,6 +1635,145 @@ function KPICard({ icon, label, value, color }: {
       </div>
       <div className="text-2xl md:text-3xl font-bold">{value.toLocaleString()}</div>
     </Card>
+  )
+}
+
+// ── Bug report row (User Bug Reports card) ──
+const REPORT_TYPE_META: Record<string, { label: string; cls: string }> = {
+  photo: { label: 'Incorrect photo', cls: 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400' },
+  title: { label: 'Incorrect title', cls: 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400' },
+  summary: { label: 'Incorrect summary', cls: 'border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400' },
+  sources: { label: 'Incorrect sources', cls: 'border-purple-500/30 bg-purple-500/10 text-purple-600 dark:text-purple-400' },
+  video: { label: 'Incorrect video', cls: 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400' },
+  'summary-missing': { label: 'Summary missing', cls: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400' },
+  other: { label: 'Other', cls: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400' },
+}
+
+function timeAgo(ms: number): string {
+  const s = Math.max(1, Math.floor((Date.now() - (ms || 0)) / 1000))
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+function ReportRow({
+  report,
+  fixing,
+  fixNote,
+  onFix,
+  onDismiss,
+}: {
+  report: {
+    id: string
+    type: string
+    note: string
+    createdAt: number
+    status: 'open' | 'fixed' | 'dismissed'
+    topic: { topicId: string; title: string; coverage: number }
+    aiNote?: string
+    aiModel?: string
+  }
+  fixing: boolean
+  fixNote?: string
+  onFix: () => void
+  onDismiss: () => void
+}) {
+  const meta = REPORT_TYPE_META[report.type] || REPORT_TYPE_META.other
+  const isFixed = report.status === 'fixed'
+  const aiNote = fixNote || report.aiNote
+  const noteIsError = aiNote?.startsWith('✗')
+
+  return (
+    <div
+      className={cn(
+        'rounded-xl border-2 p-4 transition-colors',
+        isFixed ? 'border-emerald-500/25 bg-emerald-500/[0.04]' : 'border-border bg-muted/40',
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className={cn('text-[10px] font-semibold', meta.cls)}>
+          {meta.label}
+        </Badge>
+        {isFixed ? (
+          <span className="rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+            Fixed
+          </span>
+        ) : (
+          <span className="rounded-full bg-red-500/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+            Open
+          </span>
+        )}
+        <span className="ml-auto text-[11px] text-muted-foreground">
+          {timeAgo(report.createdAt)} · {report.topic?.coverage ?? 1} src
+        </span>
+      </div>
+
+      <div className="mt-2 line-clamp-2 text-sm font-bold leading-snug">
+        {report.topic?.title || '(untitled story)'}
+      </div>
+      {report.note && (
+        <div className="mt-1 line-clamp-2 text-xs italic text-muted-foreground">
+          “{report.note}”
+        </div>
+      )}
+
+      {(aiNote || fixing) && (
+        <div
+          className={cn(
+            'mt-3 rounded-lg border p-3 text-xs leading-relaxed',
+            noteIsError
+              ? 'border-red-500/30 bg-red-500/5 text-red-600 dark:text-red-400'
+              : 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300',
+          )}
+        >
+          {fixing ? (
+            <span className="flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              AI is fixing this report — rewriting the story data everywhere
+              it lives. This can take up to a minute…
+            </span>
+          ) : (
+            <>
+              <Sparkles className="mr-1 inline h-3.5 w-3.5" />
+              {aiNote}
+              {report.aiModel && (
+                <span className="ml-1 opacity-60">({report.aiModel})</span>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {!isFixed && (
+          <Button
+            size="sm"
+            onClick={onFix}
+            disabled={fixing}
+            className="gap-1.5"
+          >
+            {fixing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            {fixing ? 'AI is fixing…' : 'Make AI Fix'}
+          </Button>
+        )}
+        {isFixed && (
+          <Button size="sm" variant="outline" onClick={onFix} disabled={fixing} className="gap-1.5">
+            {fixing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            Re-run AI fix
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={onDismiss} disabled={fixing}>
+          Dismiss
+        </Button>
+      </div>
+    </div>
   )
 }
 

@@ -1481,6 +1481,17 @@ function wordCount(s: string): number {
 }
 
 /**
+ * A headline is BROKEN when it's too short to be informative — e.g. the
+ * one-word "How" a truncated AI rewrite once produced (it passed the old
+ * `wordCount <= 15` check because 1 word IS ≤ 15). Broken titles are
+ * replaced by the topic's best article headline by fixBrokenTitles().
+ */
+function isBrokenTitle(title: string): boolean {
+  const t = (title || '').trim()
+  return wordCount(t) < 4 || t.length < 16
+}
+
+/**
  * Check if a title needs shortening (>15 words OR >140 characters).
  * GDELT titles can be very long, so the character check catches verbose
  * headlines that have few words but many characters.
@@ -1537,9 +1548,12 @@ export async function shortenLongTitles(topics: TopicArticle[]): Promise<void> {
           return
         }
 
-        // Check Firebase cache
+        // Check Firebase cache — VALIDATED before applying: the cache may
+        // hold legacy garbage (the one-word "How" title a truncation once
+        // produced). A broken cached rewrite is ignored (and replaced by a
+        // fresh, valid rewrite right below).
         const fbCached = rewriteMap.get(topic.topicId)
-        if (fbCached) {
+        if (fbCached && !isBrokenTitle(fbCached)) {
           topic.title = fbCached
           TITLE_REWRITE_CACHE.set(topic.topicId, fbCached)
           TITLE_REWRITE_CACHE_TS.set(topic.topicId, Date.now())
@@ -1566,8 +1580,18 @@ Shorten to 6-12 words:`,
             maxTokens: 60,
           })
 
-          if (shortened && wordCount(shortened) <= 15 && shortened.length < topic.title.length) {
-            topic.title = shortened.trim().replace(/^["']|["']$/g, '')
+          // Validation — a rewrite is only accepted when it is a REAL,
+          // informative headline: 4+ words, 16+ chars, ≤15 words, shorter
+          // than the original, and no leading label junk. The old check
+          // (`wordCount <= 15 && shorter`) accepted a truncated "How".
+          const candidate = (shortened || '').trim().replace(/^["']|["']$/g, '')
+          if (
+            candidate &&
+            !isBrokenTitle(candidate) &&
+            wordCount(candidate) <= 15 &&
+            candidate.length < topic.title.length
+          ) {
+            topic.title = candidate
             TITLE_REWRITE_CACHE.set(topic.topicId, topic.title)
             TITLE_REWRITE_CACHE_TS.set(topic.topicId, Date.now())
             newlyRewritten.push({ topicId: topic.topicId, title: topic.title })
@@ -1590,6 +1614,76 @@ Shorten to 6-12 words:`,
       console.log(`[title-rewrite] Rewrote ${newlyRewritten.length} titles + persisted to Firebase`)
     } catch {
       // silent — best-effort
+    }
+  }
+
+  // ── Final safety net: repair any BROKEN titles ──
+  // Runs after shortening (and on every call site) so a bad Firebase
+  // rewrite, a bad AI answer, or a junk RSS title can NEVER survive into
+  // the served feed — there is ALWAYS a proper, informative headline.
+  fixBrokenTitles(topics)
+}
+
+/**
+ * Repair broken topics titles IN PLACE.
+ *
+ * A title is broken when it's under 4 words / 16 chars (e.g. "How"). For
+ * each broken topic we pick the best article headline from its OWN
+ * articles (BBC → center → best length, same preference as clustering),
+ * cleaned through makeConciseTitle. If no article headline is usable,
+ * the title is rebuilt from the summary's first sentence. Topics without
+ * articles or summary keep their title (nothing better exists) but are
+ * logged so the bad cases are visible.
+ */
+function fixBrokenTitles(topics: TopicArticle[]): void {
+  for (const topic of topics) {
+    if (!isBrokenTitle(topic.title)) continue
+
+    const articles = topic.articles || []
+    const titleScore = (s: string): number => {
+      const wc = wordCount(s)
+      if (wc < 4 || s.length < 16) return -100
+      if (wc <= 20) return 100 - Math.abs(wc - 10) * 2
+      return 50
+    }
+
+    // Same preference chain as clustering: BBC → center → any.
+    const candidates: Array<{ title: string; score: number }> = []
+    for (const a of articles) {
+      const score = titleScore(a.title || '')
+      if (score <= 0) continue
+      const weight = a.sourceId === 'bbc' ? 1000 : a.leaning === 'center' ? 500 : 0
+      candidates.push({ title: a.title, score: score + weight })
+    }
+    candidates.sort((a, b) => b.score - a.score)
+
+    let replacement: string | null = null
+    if (candidates.length > 0) {
+      const cleaned = makeConciseTitle(candidates[0].title)
+      if (!isBrokenTitle(cleaned)) replacement = cleaned
+    }
+
+    // Last resort: first sentence of the summary, trimmed to a headline.
+    if (!replacement && topic.summary) {
+      const first = topic.summary.split(/(?<=[.!?])\s/)[0] || ''
+      const trimmed = first.length > 120 ? `${first.slice(0, 117).trimEnd()}…` : first
+      if (!isBrokenTitle(trimmed)) replacement = trimmed
+    }
+
+    if (replacement) {
+      console.warn(
+        `[title-repair] "${topic.title}" was broken → "${replacement}"`,
+      )
+      topic.title = replacement
+      // Overwrite any bad Firebase rewrite so every future refresh of
+      // this topic serves the repaired headline too.
+      try {
+        void firebasePatch('title-rewrites', { [topic.topicId]: replacement })
+      } catch {
+        // best-effort
+      }
+    } else {
+      console.warn(`[title-repair] "${topic.title}" is broken but no replacement exists`)
     }
   }
 }
@@ -1996,7 +2090,7 @@ export interface ImageVerifyContext {
   pending: Record<string, number>
 }
 
-async function createImageVerifyContext(): Promise<ImageVerifyContext> {
+export async function createImageVerifyContext(): Promise<ImageVerifyContext> {
   const fb = await firebaseRead<Record<string, number>>('image-verdicts')
   const map = new Map<string, number>()
   if (fb) {
@@ -2005,7 +2099,7 @@ async function createImageVerifyContext(): Promise<ImageVerifyContext> {
   return { fbVerdicts: map, pending: {} }
 }
 
-async function flushImageVerdicts(ctx: ImageVerifyContext): Promise<void> {
+export async function flushImageVerdicts(ctx: ImageVerifyContext): Promise<void> {
   const keys = Object.keys(ctx.pending)
   if (keys.length === 0) return
   try {
@@ -2127,7 +2221,7 @@ async function verifyImageContent(
  *
  * Tries up to `maxAttempts` articles for OG images.
  */
-async function findImageForTopic(
+export async function findImageForTopic(
   topic: TopicArticle,
   maxAttempts = 5,
   verifyCtx?: ImageVerifyContext,

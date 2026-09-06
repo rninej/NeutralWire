@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
+import { writeSearchIndexEntry } from '@/lib/search-index'
 import type { TopicArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
@@ -64,6 +65,10 @@ export async function POST(req: NextRequest) {
       ...topicToArchive,
       archivedAt: Date.now(),
     })
+
+    // 5. Searchable instantly — write the compact searchIndex entry too
+    // (this is what /api/search scans for "every article ever" lookups).
+    void writeSearchIndexEntry(topicToArchive)
 
     return NextResponse.json({ ok: true, archived: true, topicId })
   } catch (err) {

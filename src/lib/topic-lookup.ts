@@ -24,6 +24,7 @@
  */
 
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { writeSearchIndexEntry } from '@/lib/search-index'
 import type { TopicArticle } from '@/lib/news-aggregator'
 
 const DB_URL =
@@ -180,7 +181,12 @@ async function archiveTopic(topic: TopicArticle): Promise<void> {
       articles: topic.articles ?? [],
       archivedAt: Date.now(),
     })
-    if (ok) archivedKnown.add(id)
+    if (ok) {
+      archivedKnown.add(id)
+      // Searchable instantly — keep the compact searchIndex in step with
+      // the archive (searches then cover every story EVER).
+      void writeSearchIndexEntry(topic)
+    }
   } catch {
     // archival is best-effort — never fail a lookup because of it
   }

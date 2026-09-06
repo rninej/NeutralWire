@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import { AnimatePresence, motion, useDragControls, type PanInfo } from 'framer-motion'
 import {
   X,
@@ -1253,9 +1254,25 @@ function AskAiPanel({
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/20" onClick={onClose}>
-      <div className="flex max-h-[50vh] w-full max-w-2xl flex-col rounded-t-2xl border-t-2 bg-background shadow-2xl" onClick={(e) => e.stopPropagation()}>
+  // ── Render ──
+  // PORTALED to document.body. The panel used to render inside the
+  // topic detail's root motion.div, whose slide-up TRANSFORM makes every
+  // `position: fixed` child anchor to that (scrolling) sheet instead of
+  // the viewport — so the popup sat at the sheet's top and scrolled away
+  // instead of sticking to the middle of the screen (the reported bug).
+  // A portal puts it back in the real viewport. Centered dialog on all
+  // screen sizes, sticking to the screen's middle while the article
+  // scrolls behind it.
+  if (typeof document === 'undefined') return null
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/30 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-2xl border bg-background shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center gap-2 border-b p-4 pb-3">
             <MessageCircle className="h-4 w-4" />
             <span className="text-sm font-bold">Ask AI about this story</span>
@@ -1435,7 +1452,8 @@ function AskAiPanel({
         </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

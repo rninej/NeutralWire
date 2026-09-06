@@ -255,9 +255,12 @@ interface SearchResponse {
     article: TopicArticle['articles'][number]
     matchedField: 'title' | 'summary' | 'source'
     snippet: string
+    fromArchive?: boolean
   }>
   total: number
   categoriesSearched: number
+  archiveSearched?: number
+  indexedNow?: number
   ms: number
 }
 
@@ -1700,25 +1703,35 @@ export default function Home({
     return result
   }, [topics, debouncedSearch, interests, engagement, seenTopics, country, category, myCountryTopics, countryNewsCount])
 
-  // Track whether local search yielded no results — triggers API search.
+  // Track whether local search yielded no results — swaps the whole view
+  // to the full-catalog SearchResults grid (otherwise archive hits render
+  // as a "More from the archive" section under the local grid).
   useEffect(() => {
     if (debouncedSearch && filteredTopics.length === 0 && topics.length > 0) {
       setLocalSearchAttempted(true)
     } else if (debouncedSearch && filteredTopics.length > 0) {
-      setApiSearchResult(null)
       setLocalSearchAttempted(false)
     }
   }, [debouncedSearch, filteredTopics.length, topics.length])
 
-  // --- API search fallback (when local search yields nothing) ---
+  // --- Full-catalog API search (ALWAYS on while searching) ---
+  // Searches EVERY NeutralWire article ever — the live cache categories
+  // plus the permanent archive (as old as the site). Runs for every
+  // query, not only as a zero-local-results fallback, so archive matches
+  // can augment the local grid below. Case never matters — both layers
+  // lowercase the query and the text.
+  const lastApiQueryRef = React.useRef('')
   useEffect(() => {
-    if (!localSearchAttempted || !debouncedSearch) return
+    const q = debouncedSearch.trim()
+    if (q.length < 2) return
+    if (lastApiQueryRef.current === q) return // already fetched this query
+    lastApiQueryRef.current = q
     let cancelled = false
     setApiSearchLoading(true)
     ;(async () => {
       try {
         const res = await fetch(
-          `/api/search?q=${encodeURIComponent(debouncedSearch)}&limit=30`,
+          `/api/search?q=${encodeURIComponent(q)}&limit=30`,
           { cache: 'no-store' },
         )
         const json: SearchResponse = await res.json()
@@ -1732,7 +1745,7 @@ export default function Home({
     return () => {
       cancelled = true
     }
-  }, [localSearchAttempted, debouncedSearch])
+  }, [debouncedSearch])
 
   // --- Fetch news (cache-first from Firebase) ---
   // SILENT REFETCH (v24): when re-fetching the SAME category while the
@@ -2035,7 +2048,21 @@ export default function Home({
     setDebouncedSearch('')
     setApiSearchResult(null)
     setLocalSearchAttempted(false)
+    lastApiQueryRef.current = ''
   }
+
+  /** Open the search bar from ANY search button. The input lives in the
+   *  sticky header — when the user taps a section-header Search button
+   * mid-scroll on mobile, we smooth-scroll back to the top so the input
+   * is actually visible and focused, instead of opening it off-screen. */
+  const openSearch = React.useCallback(() => {
+    setShowSearch(true)
+    try {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } catch {
+      window.scrollTo(0, 0)
+    }
+  }, [])
 
   const featured = filteredTopics[0]
   const rest = filteredTopics.slice(1)
@@ -2210,7 +2237,7 @@ export default function Home({
                   Visible on desktop (lg+) next to Sports. */}
               <button
                 type="button"
-                onClick={() => setShowSearch(true)}
+                onClick={openSearch}
                 className="hidden lg:inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-xs font-medium"
                 aria-label="Search"
                 title="Search news"
@@ -2234,7 +2261,7 @@ export default function Home({
                   would wrap onto a third). */}
               <button
                 type="button"
-                onClick={() => setShowSearch(true)}
+                onClick={openSearch}
                 className="hidden xl:inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-3.5 py-2 text-foreground/80 hover:bg-muted/80 transition-colors text-sm font-medium"
                 aria-label="Search"
                 title="Search news"
@@ -2302,7 +2329,7 @@ export default function Home({
                   Visible on desktop (lg+) at the end of the nav row. */}
               <button
                 type="button"
-                onClick={() => setShowSearch(true)}
+                onClick={openSearch}
                 className="hidden lg:inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-3.5 py-2 text-foreground/80 hover:bg-muted/80 transition-colors text-sm font-medium"
                 aria-label="Search"
                 title="Search news"
@@ -2349,7 +2376,7 @@ export default function Home({
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search all cached articles across the spectrum…"
+                placeholder="Search every NeutralWire story ever…"
                 className="pl-8 pr-8"
                 autoFocus
               />
@@ -2459,7 +2486,7 @@ export default function Home({
                 </motion.div>
                 <div>
                   {debouncedSearch
-                    ? `No topics match "${debouncedSearch}" — searching full catalog…`
+                    ? `No feed stories match "${debouncedSearch}" — searching every archived story…`
                     : 'No topics found. Try a different category or lower the minimum coverage filter.'}
                 </div>
               </Card>
@@ -2486,7 +2513,7 @@ export default function Home({
                         interests={interests}
                         engagement={engagement}
                         myCountryTopics={myCountryTopics}
-                        onSearchClick={() => setShowSearch(true)}
+                        onSearchClick={openSearch}
                       />
                     ) : category === 'blindspots' ? (
                       /* Blindspots: per-category sections showing top blindspot stories */
@@ -2494,7 +2521,7 @@ export default function Home({
                         sections={blindspotSections}
                         onOpenDetail={handleOpenDetail}
                         onDismiss={handleDismissTopic}
-                        onSearchClick={() => setShowSearch(true)}
+                        onSearchClick={openSearch}
                       />
                     ) : (
                       <MobileTopicLayout
@@ -2503,7 +2530,7 @@ export default function Home({
                         onOpenDetail={handleOpenDetail}
                         onDismiss={handleDismissTopic}
                         label={CATEGORY_LABELS[category] || category}
-                        onSearchClick={() => setShowSearch(true)}
+                        onSearchClick={openSearch}
                       />
                     )}
                   </>
@@ -2539,6 +2566,24 @@ export default function Home({
                       />
                     ))}
                   </div>
+                )}
+
+                {/* ── More from the archive (search only) ──
+                    While searching, the full-catalog API search also scans
+                    the PERMANENT archive (every story ever, as old as the
+                    site). Archive hits that aren't already in the local
+                    grid above render here so a search truly covers the
+                    whole catalog, not just today's feed. */}
+                {debouncedSearch && filteredTopics.length > 0 && (
+                  <SearchResults
+                    query={debouncedSearch}
+                    loading={apiSearchLoading}
+                    result={apiSearchResult}
+                    onOpenTopic={handleOpenDetail}
+                    excludeTopicIds={filteredTopics.map((t) => t.topicId)}
+                    heading="More from the archive"
+                    hiddenIfEmpty
+                  />
                 )}
 
                 {/* Infinite scroll sentinel + loading animation */}
@@ -2597,7 +2642,7 @@ export default function Home({
             category={category}
             onSelect={(c) => setCategory(c)}
             country={country}
-            onSearch={() => setShowSearch(true)}
+            onSearch={openSearch}
           />
           <div className="h-[84px]" aria-hidden="true" />
         </>

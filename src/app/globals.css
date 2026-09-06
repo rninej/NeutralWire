@@ -1607,3 +1607,16 @@ html.nw-settled #nw-app-root {
 @media (prefers-reduced-motion: reduce) {
   html.nw-release #nw-app-root { animation: none; }
 }
+
+/* ── Long-press support on news cards ──
+   Cards are tap-and-HOLD targets (hold → context app bar). Long-presses
+   on text/images would otherwise trigger the mobile text-selection
+   loupe (iOS) or image callout (Android) BEFORE our 450ms timer fires,
+   and the selection highlight lingers after the bar opens. Killing
+   selection + callout on the card surface only keeps the press clean;
+   desktop right-click is unaffected (it never starts a press). */
+.nw-noselect {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}

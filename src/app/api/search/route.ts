@@ -1,16 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead } from '@/lib/firebase-server'
+import {
+  backfillSearchIndex,
+  readSearchIndex,
+  type SearchIndexEntry,
+} from '@/lib/search-index'
 import type { CategoryCachePayload, TopicArticle, FeedArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+// Generous ceiling: the archive index backfill (first searches after
+// deploy) reads up to 80 archived topics in batches before searching.
+export const maxDuration = 60
 
 interface SearchHit {
   topic: TopicArticle
   article: FeedArticle
   matchedField: 'title' | 'summary' | 'source'
   snippet: string
+  /** true when the hit comes from the permanent archive (older story). */
+  fromArchive?: boolean
 }
 
 interface SearchResponse {
@@ -18,38 +28,50 @@ interface SearchResponse {
   hits: SearchHit[]
   total: number
   categoriesSearched: number
+  /** Number of permanently-archived stories scanned (the "ever" catalog). */
+  archiveSearched: number
+  /** How many archive entries were newly indexed by this request. */
+  indexedNow: number
   ms: number
 }
 
-const ROOT = 'newsCache'
-
 /**
- * Server-side search across ALL cached news articles in Firebase.
+ * Server-side search across EVERY NeutralWire article ever.
  *
- * Reads every category node under newsCache/ and iterates through every
- * article in every topic. Returns matching articles grouped by topic.
+ * Two layers, both case-insensitive (query + text are lowercased):
+ *   1. LIVE cache — every category node under newsCache/ (the last ~48h).
+ *   2. PERMANENT ARCHIVE — the searchIndex over archive/<topicId> (every
+ *      story ever archived, as old as the site). The index is backfilled
+ *      lazily here, so the first few searches after deploy converge the
+ *      historical backlog.
  *
  * This is what the client falls back to when the in-page client-side
- * search (which only filters currently-displayed topics) yields no results.
+ * search (which only filters currently-displayed topics) yields no
+ * results — and it also feeds the "More from the archive" section when
+ * local results exist.
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const q = (sp.get('q') || '').trim().toLowerCase()
-  const maxHits = Math.min(50, Math.max(5, Number(sp.get('limit') || '20')))
+  const maxHits = Math.min(60, Math.max(5, Number(sp.get('limit') || '20')))
 
   const t0 = Date.now()
 
   if (!q || q.length < 2) {
+    // Useless query — still nudge the index toward convergence.
+    void backfillSearchIndex(40).catch(() => {})
     return NextResponse.json({
       query: q,
       hits: [],
       total: 0,
       categoriesSearched: 0,
+      archiveSearched: 0,
+      indexedNow: 0,
       ms: Date.now() - t0,
     } satisfies SearchResponse)
   }
 
-  // ── EMERGENCY: Read each category SEPARATELY instead of the entire newsCache root ──
+  // ── Read each live category SEPARATELY instead of the entire newsCache root ──
   // Reading the entire newsCache node downloads ALL categories at once —
   // with 60 topics × 10+ categories × full article arrays, this was 17MB!
   // Now we read each category individually and only search the most common ones.
@@ -61,9 +83,10 @@ export async function GET(req: NextRequest) {
   ]
 
   const hits: SearchHit[] = []
-  const seenArticleIds = new Set<string>()
+  const seenTopicIds = new Set<string>()
   let categoriesSearched = 0
 
+  // ── Layer 1: live cache ──
   for (const catKey of searchCategories) {
     let payload: CategoryCachePayload | null
     try {
@@ -77,44 +100,25 @@ export async function GET(req: NextRequest) {
 
     for (const topic of payload.topics) {
       if (!topic) continue
-      // Check topic title + summary
-      const titleMatch = topic.title.toLowerCase().includes(q)
-      const summaryMatch = (topic.summary || '').toLowerCase().includes(q)
-      if (titleMatch || summaryMatch) {
-        hits.push({
-          topic: { ...topic, articles: [] },
-          article: {
-            id: topic.topicId,
-            title: topic.title,
-            link: '',
-            description: topic.summary || '',
-            pubDate: null,
-            iso: topic.latestSeen || 0,
-            imageUrl: topic.imageUrl,
-            sourceId: '',
-            sourceName: '',
-            sourceHomepage: '',
-            leaning: 'center',
-            country: '',
-            category: catKey,
-          },
-          matchedField: titleMatch ? 'title' : 'summary',
-          snippet: titleMatch
-            ? topic.title
-            : (topic.summary || '').slice(0, 200),
-        })
-        if (hits.length >= maxHits) break
-      }
+      collectLiveHit(topic, catKey)
+      if (hits.length >= maxHits) break
+    }
+    if (hits.length >= maxHits) break
+  }
 
-      // Also search articles within the topic
+  function collectLiveHit(topic: TopicArticle, catKey: string) {
+    if (seenTopicIds.has(topic.topicId)) return
+    const titleMatch = topic.title.toLowerCase().includes(q)
+    const summaryMatch = (topic.summary || '').toLowerCase().includes(q)
+    if (!titleMatch && !summaryMatch) {
+      // Search articles within the topic
       if (topic.articles) {
         for (const article of topic.articles) {
-          if (seenArticleIds.has(article.id)) continue
           const artTitleMatch = article.title.toLowerCase().includes(q)
           const artDescMatch = (article.description || '').toLowerCase().includes(q)
           const sourceMatch = (article.sourceName || '').toLowerCase().includes(q)
           if (artTitleMatch || artDescMatch || sourceMatch) {
-            seenArticleIds.add(article.id)
+            seenTopicIds.add(topic.topicId)
             hits.push({
               topic: { ...topic, articles: [] },
               article,
@@ -123,18 +127,104 @@ export async function GET(req: NextRequest) {
                 ? article.title
                 : sourceMatch
                   ? article.sourceName
-                  : (article.description || '').slice(0, 200),
+                  : makeSnippet(article.description || '', q),
+              fromArchive: false,
             })
-            if (hits.length >= maxHits) break
+            return
           }
         }
       }
-      if (hits.length >= maxHits) break
+      return
     }
-    if (hits.length >= maxHits) break
+    seenTopicIds.add(topic.topicId)
+    hits.push({
+      topic: { ...topic, articles: [] },
+      article: {
+        id: topic.topicId,
+        title: topic.title,
+        link: '',
+        description: topic.summary || '',
+        pubDate: null,
+        iso: topic.latestSeen || 0,
+        imageUrl: topic.imageUrl,
+        sourceId: '',
+        sourceName: '',
+        sourceHomepage: '',
+        leaning: 'center',
+        country: '',
+        category: catKey,
+      },
+      matchedField: titleMatch ? 'title' : 'summary',
+      snippet: titleMatch ? topic.title : makeSnippet(topic.summary || '', q),
+      fromArchive: false,
+    })
   }
 
-  // (old per-category loop removed — replaced by the per-category reads above)
+  // ── Layer 2: permanent archive (every story EVER) ──
+  // Backfill missing entries first (usually 0, instant), then scan the
+  // flat index. Live-cache hits win duplicates (fresher copy).
+  let archiveSearched = 0
+  let indexedNow = 0
+  try {
+    indexedNow = await backfillSearchIndex(80)
+    const index = await readSearchIndex()
+    for (const [topicId, entry] of Object.entries(index)) {
+        if (!entry || !entry.t) continue // tombstones / junk
+        archiveSearched++
+        if (seenTopicIds.has(topicId)) continue // already found live
+        const t = entry.t.toLowerCase()
+        const s = (entry.s || '').toLowerCase()
+        const articleTitles = entry.at || []
+        const titleMatch = t.includes(q)
+        const summaryMatch = s.includes(q)
+        const articleTitleMatch = !titleMatch && !summaryMatch &&
+          articleTitles.some((at) => at.toLowerCase().includes(q))
+        if (!titleMatch && !summaryMatch && !articleTitleMatch) continue
+
+        seenTopicIds.add(topicId)
+        const archiveTopic: TopicArticle = {
+          topicId,
+          title: entry.t,
+          summary: entry.s || '',
+          imageUrl: entry.i ?? null,
+          coverage: entry.c || 1,
+          leanLeft: entry.ll || 0,
+          leanCenter: entry.lc || 0,
+          leanRight: entry.lr || 0,
+          firstSeen: entry.d || 0,
+          latestSeen: entry.d || 0,
+          articles: [],
+        }
+        hits.push({
+          topic: archiveTopic,
+          article: {
+            id: topicId,
+            title: entry.t,
+            link: '',
+            description: entry.s || '',
+            pubDate: null,
+            iso: entry.d || 0,
+            imageUrl: entry.i ?? null,
+            sourceId: '',
+            sourceName: '',
+            sourceHomepage: '',
+            leaning: 'center',
+            country: '',
+            category: 'archive',
+          },
+          matchedField: titleMatch || articleTitleMatch ? 'title' : 'summary',
+          snippet: titleMatch
+            ? entry.t
+            : articleTitleMatch
+              ? articleTitles.find((at) => at.toLowerCase().includes(q)) || entry.t
+              : makeSnippet(entry.s || '', q),
+          fromArchive: true,
+        })
+        if (hits.length >= maxHits) break
+    }
+  } catch {
+    // archive layer is best-effort — live results still return
+  }
 
   // Sort: title matches first, then by recency.
   hits.sort((a, b) => {
@@ -148,6 +238,8 @@ export async function GET(req: NextRequest) {
     hits: hits.slice(0, maxHits),
     total: hits.length,
     categoriesSearched,
+    archiveSearched,
+    indexedNow,
     ms: Date.now() - t0,
   } satisfies SearchResponse)
 }
