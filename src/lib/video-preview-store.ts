@@ -137,6 +137,7 @@ export function registerPreviewControls(
       previewControls.delete(topicId)
     }
     pausedByArticle.delete(topicId)
+    userPausedTopics.delete(topicId)
   }
 }
 
@@ -429,13 +430,18 @@ export function pauseAllPreviews(): void {
   }
 }
 
-/** Resume the previews that pauseAllPreviews() paused (article closed). */
+/** Resume the previews that pauseAllPreviews() paused (article closed).
+ *  A preview the USER paused by tapping the video stays paused — the
+ *  frozen frame waits for their next tap (see pausePreviewNow). */
 export function resumeAllPreviews(): void {
   articleOpenState = false
   notifyArticleOpen(false)
   for (const id of [...pausedByArticle]) {
-    const controls = previewControls.get(id)
     pausedByArticle.delete(id)
+    // The USER paused this one by tapping the video — the article close
+    // must not un-pause it behind their back.
+    if (userPausedTopics.has(id)) continue
+    const controls = previewControls.get(id)
     try {
       controls?.resume()
     } catch {
@@ -444,81 +450,66 @@ export function resumeAllPreviews(): void {
   }
 }
 
+// ── 4c. User tap-to-pause (preview video is its own tap target) ──
+// The video preview is a TAP TARGET of its own (user: "click/pause/
+// unpause the video preview without opening the article — only the
+// banner under it opens the article"). pausePreviewNow/resumePreviewNow
+// route the tap to the mounted player; a topic the USER paused is
+// remembered so the article-close flow (resumeAllPreviews) never
+// un-pauses it behind their back.
+
+/** Topics the USER paused by tapping the preview video. */
+const userPausedTopics = new Set<string>()
+
+/** Pause this topic's preview (the user tapped the video surface). */
+export function pausePreviewNow(topicId: string): void {
+  userPausedTopics.add(topicId)
+  const controls = previewControls.get(topicId)
+  try {
+    controls?.pause()
+  } catch {
+    // player mid-swap — the flag still sticks for the flow below
+  }
+}
+
+/** Resume this topic's preview (the user tapped the paused video). */
+export function resumePreviewNow(topicId: string): void {
+  userPausedTopics.delete(topicId)
+  const controls = previewControls.get(topicId)
+  try {
+    controls?.resume()
+  } catch {
+    // player already unmounted — nothing to resume
+  }
+}
+
 // ── 5. Single audible preview (audio lease) ──
-// Every big card can roll a preview now — but two previews playing
-// sound at once would be a wall of noise. ONE topic holds the "sound
-// lease"; every other concurrently playing preview is muted and queued.
-// When the audible one unloads (scrolled off), the longest-queued
-// preview is granted the lease and un-mutes (still at half volume).
+// The previews are MUTED BY DEFAULT (user spec) — sound only ever comes
+// from the preview's SOUND button press. The lease guarantees that
+// button is the only audible preview at any moment: pressing it forces
+// the lease to that topic and mutes the previously audible one through
+// its registered controls, so two previews never talk over each other.
 
 let audioLeaseHolder: string | null = null
-const audioLeaseWaiters = new Map<string, () => void>()
 
-/**
- * Claim the single audible-preview slot (topicId-keyed). Returns true
- * when the caller now owns the lease (play sound at half volume);
- * false when someone else is audible — the caller should start muted.
- * If granted, the caller MUST releasePreviewAudio(topicId) when it
- * unloads.
- */
-export function claimPreviewAudio(topicId: string): boolean {
-  if (audioLeaseHolder === null) {
-    audioLeaseHolder = topicId
-    return true
-  }
-  return audioLeaseHolder === topicId
-}
-
-/**
- * Queue for the audio lease: called by previews that started muted
- * because another card was audible. The callback fires (synchronously,
- * at most once) when THIS preview is granted the lease — the player
- * should then un-mute at half volume.
- */
-export function waitForPreviewAudio(topicId: string, onGrant: () => void): void {
-  if (claimPreviewAudio(topicId)) {
-    onGrant()
-    return
-  }
-  audioLeaseWaiters.set(topicId, onGrant)
-}
-
-/** Release the lease (and wake the next waiter) / drop a queue entry. */
+/** Release the lease (the audible preview unmounted — sound off path). */
 export function releasePreviewAudio(topicId: string): void {
   if (audioLeaseHolder === topicId) {
     audioLeaseHolder = null
-    const next = audioLeaseWaiters.entries().next()
-    if (!next.done) {
-      const [id, cb] = next.value
-      audioLeaseWaiters.delete(id)
-      audioLeaseHolder = id
-      try {
-        cb()
-      } catch {
-        // a broken callback must never wedge the lease
-        audioLeaseHolder = null
-      }
-    }
-  } else {
-    audioLeaseWaiters.delete(topicId)
   }
 }
 
 /** Force the single-sound lease to THIS topic (user: "only in the preview
  *  video make it show a sound button which i can press to turn on
  *  sound"). Pressing a preview's sound button is an explicit user
- *  intent that outranks the automatic lease grants: the previous holder
- *  (another audible preview) is muted through its registered controls
- *  and dropped from the queue, so two previews never talk over each
- *  other even after a manual claim. */
+ *  intent that outranks any other state: the previous holder (another
+ *  audible preview) is muted through its registered controls, so two
+ *  previews never talk over each other even after a manual claim. */
 function forcePreviewAudio(topicId: string): void {
   if (audioLeaseHolder === topicId) return
   const prev = audioLeaseHolder
   audioLeaseHolder = topicId
-  // This topic's own queue entry (if it was waiting) is now satisfied.
-  audioLeaseWaiters.delete(topicId)
   if (prev && prev !== topicId) {
-    audioLeaseWaiters.delete(prev)
     const controls = previewControls.get(prev)
     try {
       controls?.setAudible?.(false)
@@ -546,64 +537,4 @@ export function setPreviewAudible(topicId: string, on: boolean): void {
   } catch {
     // player mid-swap — silent
   }
-}
-
-// ── 6. User-gesture tracking (audible autoplay recovery) ──
-// Browsers refuse AUDIBLE autoplay until the user has interacted with
-// the page (a tap/keypress — scrolling does NOT count). A preview that
-// started before the first gesture therefore falls back to muted — but
-// that used to be PERMANENT for the player's lifetime, so the feed
-// stayed silent even after the user had tapped around (user: "sometimes
-// the sound is muted on home screen and only activates in article").
-// Muted previews now recover: the first pointerdown/keydown anywhere
-// un-mutes them (Chrome/Firefox honour sticky interaction; a still-
-// refusing browser just pauses, which the user's next tap resumes).
-
-let userGestured = false
-const gestureWaiters: Array<() => void> = []
-
-if (typeof document !== 'undefined') {
-  const markGesture = () => {
-    userGestured = true
-    const waiters = gestureWaiters.splice(0)
-    for (const w of waiters) {
-      try {
-        w()
-      } catch {
-        // a broken waiter must never block the others
-      }
-    }
-  }
-  // once:true — the FIRST interaction is all the autoplay policy needs.
-  document.addEventListener('pointerdown', markGesture, {
-    capture: true,
-    once: true,
-    passive: true,
-  })
-  document.addEventListener('keydown', markGesture, {
-    capture: true,
-    once: true,
-    passive: true,
-  })
-}
-
-/** Whether the user has interacted with the page at least once — from
- *  then on, browsers allow audible playback attempts. */
-export function hasUserGestured(): boolean {
-  return userGestured
-}
-
-/** Run cb once the user has interacted (immediately if they already
- *  have). Un-muting outside a gesture is what gets videos paused by
- *  the autoplay policy, so lease grants check this first. */
-export function onUserGesture(cb: () => void): void {
-  if (userGestured) {
-    try {
-      cb()
-    } catch {
-      // listener's own failure is not our problem
-    }
-    return
-  }
-  gestureWaiters.push(cb)
 }

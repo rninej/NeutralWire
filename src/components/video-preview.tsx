@@ -33,23 +33,23 @@
  *      "make it so the big cards show short form videos too"),
  *      letterboxed inside the image box. No client-side aspect gate
  *      remains.
- *   4. When the video starts, it plays INSIDE the image with SOUND AT
- *      HALF VOLUME (setVolume 50 / video.volume 0.5). If the browser's
- *      autoplay policy blocks audible autoplay it silently falls back
- *      to muted. Only ONE preview is audible at a time (audio lease,
- *      see the store). While the preview is PLAYING, a small SOUND
- *      button replaces the corner chip (user: "only in the preview
- *      video make it show a sound button which i can press to turn on
- *      sound" — the press is the user gesture the autoplay policy
- *      requires, so un-muting from it reliably works).
- *   5. Tapping the card opens the article WITH THE VIDEO ALREADY
- *      PLAYING (not the photo + Watch square): while the preview holds
- *      a resolved video, the card's click arms the video handoff
- *      (carrying the preview's current position — the article
- *      continues instead of restarting) and TopicDetail starts playing
- *      it immediately. The card's own player is paused at arm time so
- *      the two never play on top of each other, and every live preview
- *      pauses/resumes as the article opens/closes.
+ *   4. When the video starts, it plays INSIDE the image MUTED BY
+ *      DEFAULT (user spec: "make it so the video previews it is mute by
+ *      default") — muted autoplay is never policy-blocked. The ONLY path
+ *      to sound is the corner SOUND button (its press is the user
+ *      gesture the policy requires), and only one preview is audible
+ *      at a time (audio lease, see the store).
+ *   5. TAPPING THE VIDEO pauses/unpauses the PREVIEW — it never opens
+ *      the article (user: "click/pause/unpause the video preview without
+ *      opening the article"). The overlay takes the whole image while
+ *      the video rolls; only the BANNER under it (the card's text) opens
+ *      the article, WITH THE VIDEO ALREADY PLAYING: that tap arms the
+ *      handoff (carrying the preview's current position) and TopicDetail
+ *      starts playing it immediately. The card's own player is paused
+ *      at arm time, and every live preview pauses/resumes as the
+ *      article opens/closes. Cards WITHOUT a rolling preview (flag off,
+ *      known miss, or still resolving) keep the classic behaviour: any
+ *      click on the card or its image opens the article.
  *   6. Scrolling the card off screen UNLOADS the player (no bandwidth
  *      burn); scrolling back re-plays it without re-fetching. A
  *      "no video" outcome is remembered for the tab session.
@@ -70,19 +70,17 @@ import { loadYouTubeIframeApi, type YTPlayer } from '@/lib/youtube-player'
 import {
   acquirePreviewSlot,
   armLateIfRequested,
-  claimPreviewAudio,
-  hasUserGestured,
   isArticleSheetOpen,
   markPreviewFetchPending,
   markPreviewFetchSettled,
   markPreviewPlaying,
   onArticleOpenChange,
-  onUserGesture,
+  pausePreviewNow,
   releasePreviewAudio,
   registerPreviewControls,
+  resumePreviewNow,
   setPreviewAudible,
   videoLocaleParams,
-  waitForPreviewAudio,
   type ResolvedVideo,
 } from '@/lib/video-preview-store'
 
@@ -119,11 +117,11 @@ const EASE_OUT = [0.16, 1, 0.3, 1] as const
 /** ── YouTube player (via the official IFrame API) ──
  *
  * Mounts hidden; the parent fades the whole overlay in only when this
- * reports PLAYING. Half-volume, unmuted, with an autoplay-block
- * fallback to muted — and the muted state is RECOVERABLE: the first
- * user interaction with the page un-mutes it (the fallback used to be
- * permanent, which read as "sound is muted on home and only activates
- * in article" — see the store's gesture tracking). */
+ * reports PLAYING. MUTED BY DEFAULT (user spec) — muted autoplay is
+ * never policy-blocked, so there is no audible-autoplay fallback path
+ * at all. The ONLY way sound ever comes on is the preview's SOUND
+ * button (see the store's setPreviewAudible — the button press is the
+ * user gesture the autoplay policy requires). */
 function YouTubePreviewPlayer({
   topicId,
   videoId,
@@ -141,53 +139,13 @@ function YouTubePreviewPlayer({
 }) {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
   const playerRef = React.useRef<YTPlayer | null>(null)
-  // Whether the browser blocked audible autoplay → muted fallback.
-  const blockedRef = React.useRef(false)
-  // Whether the lease granted us sound.
+  // Whether the SOUND button made this preview audible (the only path
+  // to sound — previews start muted, always).
   const audibleRef = React.useRef(false)
 
   React.useEffect(() => {
     let cancelled = false
     let reported = false
-
-    // ── Audible recovery (un-mute paths, all gesture-gated) ──
-    // Browsers pause a video you un-mute outside a user gesture, so
-    // every un-mute first ensures the user has interacted.
-    const unMuteNow = () => {
-      if (cancelled) return
-      blockedRef.current = false
-      audibleRef.current = true
-      try {
-        playerRef.current?.unMute()
-        playerRef.current?.setVolume(PREVIEW_VOLUME)
-        // iOS keeps the audio pipeline parked after an autoplay block —
-        // unMute() alone sometimes leaves the track silent. Re-asserting
-        // play() inside the gesture nudges the audio live (part of "the
-        // sound button doesn't work well on mobile").
-        playerRef.current?.playVideo()
-      } catch {
-        // player died — silent
-      }
-      onMutedChange(false)
-    }
-    const tryUnmute = () => {
-      if (cancelled) return
-      if (claimPreviewAudio(topicId)) {
-        unMuteNow()
-        return
-      }
-      // Someone else is audible — queue (fires when they scroll off).
-      waitForPreviewAudio(topicId, () => {
-        if (cancelled) return
-        if (!hasUserGestured()) {
-          // Un-muting now would just get the video paused by policy —
-          // drop the lease; the gesture handler re-claims later.
-          releasePreviewAudio(topicId)
-          return
-        }
-        unMuteNow()
-      })
-    }
 
     loadYouTubeIframeApi()
       .then((YT) => {
@@ -199,7 +157,9 @@ function YouTubePreviewPlayer({
           height: '100%',
           playerVars: {
             autoplay: 1,
-            mute: 0,
+            // MUTED BY DEFAULT (user spec) — the Sound button is the
+            // only path to preview audio.
+            mute: 1,
             controls: 0,
             loop: 1,
             playlist: videoId,
@@ -214,29 +174,12 @@ function YouTubePreviewPlayer({
           events: {
             onReady: (e) => {
               if (cancelled) return
-              // Audible preview requires the single-sound lease; without
-              // it we start muted so two cards never talk over each
-              // other.
-              audibleRef.current = claimPreviewAudio(topicId)
-              if (audibleRef.current) {
-                e.target.setVolume(PREVIEW_VOLUME)
-              } else {
-                e.target.mute()
-                onMutedChange(true)
-                // Queue for the lease — granted when the audible card
-                // scrolls away.
-                waitForPreviewAudio(topicId, () => {
-                  if (cancelled) return
-                  if (!hasUserGestured()) {
-                    // Un-muting now would just get the video paused by
-                    // policy — drop the lease; the gesture handler
-                    // re-claims later.
-                    releasePreviewAudio(topicId)
-                    return
-                  }
-                  unMuteNow()
-                })
-              }
+              // MUTED BY DEFAULT (user spec: "make it so the video
+              // previews it is mute by default") — no audio lease, no
+              // audible-autoplay gamble: muted playback always works,
+              // and the corner SOUND button (a real user gesture) is
+              // the only thing that ever turns sound on.
+              e.target.mute()
               e.target.playVideo()
             },
             onStateChange: (e) => {
@@ -244,27 +187,20 @@ function YouTubePreviewPlayer({
               if (e.data === 1 /* PLAYING */) {
                 if (!reported) {
                   reported = true
-                  onPlaying(!audibleRef.current || blockedRef.current)
+                  onPlaying(!audibleRef.current)
                 }
               }
             },
             onAutoplayBlocked: () => {
-              // Browser refused audible autoplay — retry muted so the
-              // preview still plays (and free the sound lease).
+              // Muted autoplay is essentially never blocked — but if a
+              // browser still reports it, keep retrying muted.
               if (cancelled) return
-              blockedRef.current = true
-              releasePreviewAudio(topicId)
-              audibleRef.current = false
-              onMutedChange(true)
               try {
                 playerRef.current?.mute()
                 playerRef.current?.playVideo()
               } catch {
                 // silent
               }
-              // Recover as soon as the user interacts with the page —
-              // from then on audible playback is allowed.
-              onUserGesture(tryUnmute)
             },
             onError: () => {
               // 101/150 = the owner disallows embedding — the parent
@@ -280,12 +216,10 @@ function YouTubePreviewPlayer({
         if (!cancelled) onDead(null)
       })
 
-    // Article-open silencing + the handoff's startAt: expose
-    // pause/resume/getTime to the store while this player is alive.
-    // setAudible is the preview's SOUND BUTTON path (user: "only in the
-    // preview video make it show a sound button which i can press to
-    // turn on sound") — the press is the user gesture the autoplay
-    // policy needs, so the un-mute reliably sticks.
+    // Article-open silencing, the handoff's startAt, the tap-to-pause
+    // toggle (pausePreviewNow/resumePreviewNow) and the SOUND BUTTON all
+    // route through the store's registered controls while this player
+    // is alive.
     const unregister = registerPreviewControls(topicId, {
       pause: () => {
         try {
@@ -308,11 +242,25 @@ function YouTubePreviewPlayer({
           return 0
         }
       },
+      // The SOUND BUTTON path (user: "only in the preview video make it
+      // show a sound button which i can press to turn on sound") — the
+      // press is the user gesture the autoplay policy needs, so the
+      // un-mute reliably sticks.
       setAudible: (on: boolean) => {
         if (on) {
-          // unMuteNow (no lease re-claim — the store already forced the
-          // lease to THIS topic before calling).
-          unMuteNow()
+          // The store already forced the audio lease to THIS topic
+          // before calling — no claim needed, just un-mute at half
+          // volume (re-asserting play() nudges iOS's parked audio
+          // pipeline live inside the gesture).
+          audibleRef.current = true
+          try {
+            playerRef.current?.unMute()
+            playerRef.current?.setVolume(PREVIEW_VOLUME)
+            playerRef.current?.playVideo()
+          } catch {
+            // player died — silent
+          }
+          onMutedChange(false)
         } else {
           audibleRef.current = false
           try {
@@ -325,27 +273,8 @@ function YouTubePreviewPlayer({
       },
     })
 
-    // Autoplay-blocked isn't reported by every browser; if we never
-    // reach PLAYING shortly after ready, fall back to muted playback.
-    const blockProbe = setTimeout(() => {
-      if (cancelled || reported || blockedRef.current) return
-      blockedRef.current = true
-      releasePreviewAudio(topicId)
-      audibleRef.current = false
-      onMutedChange(true)
-      try {
-        playerRef.current?.mute()
-        playerRef.current?.playVideo()
-      } catch {
-        // silent
-      }
-      // Recover the sound as soon as the user interacts (see the store).
-      onUserGesture(tryUnmute)
-    }, 3500)
-
     return () => {
       cancelled = true
-      clearTimeout(blockProbe)
       unregister()
       releasePreviewAudio(topicId)
       try {
@@ -370,10 +299,11 @@ function YouTubePreviewPlayer({
 /** ── Native <video> player (RSS source videos) ──
  *
  * Waits until the browser can play through (buffered enough), then
- * plays at half volume — hidden until the parent fades it in on the
- * `playing` event. Portrait (short-form) videos are fine: the element
- * letterboxes inside the image box (object-contain) instead of being
- * cropped or rejected. */
+ * plays MUTED BY DEFAULT — hidden until the parent fades it in on the
+ * `playing` event (the corner SOUND button is the only path to audio,
+ * exactly like the YouTube player). Portrait (short-form) videos are
+ * fine: the element letterboxes inside the image box (object-contain)
+ * instead of being cropped or rejected. */
 function NativePreviewPlayer({
   topicId,
   url,
@@ -395,79 +325,20 @@ function NativePreviewPlayer({
     const el = ref.current
     if (!el || startedRef.current) return
     startedRef.current = true
-    audibleRef.current = claimPreviewAudio(topicId)
-    const attempt = (muted: boolean) => {
-      el.muted = muted
-      if (!muted) el.volume = PREVIEW_VOLUME / 100
-      el.play().catch(() => {
-        if (muted) {
-          onDead() // even muted failed — hotlink protection etc.
-          return
-        }
-        // Autoplay policy — retry muted, free the sound lease, and
-        // recover the sound at the first user gesture (the fallback
-        // used to be permanent: "sound is muted on home screen and
-        // only activates in article" — see the store's gesture
-        // tracking).
-        releasePreviewAudio(topicId)
-        audibleRef.current = false
-        onMutedChange(true)
-        attempt(true)
-        onUserGesture(() => {
-          const el2 = ref.current
-          if (!el2 || startedRef.current !== true) return
-          if (claimPreviewAudio(topicId)) {
-            el2.muted = false
-            el2.volume = PREVIEW_VOLUME / 100
-            audibleRef.current = true
-            el2.play().catch(() => {
-              // policy still blocks — revert to muted
-              el2.muted = true
-              releasePreviewAudio(topicId)
-              audibleRef.current = false
-              el2.play().catch(() => {})
-            })
-            onMutedChange(false)
-            return
-          }
-          // Someone else is audible — queue for the lease; un-mute only
-          // once the user has interacted (policy pauses otherwise).
-          waitForPreviewAudio(topicId, () => {
-            const el3 = ref.current
-            if (!el3) return
-            if (!hasUserGestured()) {
-              releasePreviewAudio(topicId)
-              return
-            }
-            el3.muted = false
-            el3.volume = PREVIEW_VOLUME / 100
-            audibleRef.current = true
-            onMutedChange(false)
-          })
-        })
-      })
-    }
-    if (!audibleRef.current) {
-      // No lease — start muted and queue; un-mute on grant, but only
-      // after the user has interacted (un-muting earlier gets the
-      // video paused by the autoplay policy).
-      waitForPreviewAudio(topicId, () => {
-        const el2 = ref.current
-        if (!el2) return
-        if (!hasUserGestured()) {
-          releasePreviewAudio(topicId)
-          return
-        }
-        el2.muted = false
-        el2.volume = PREVIEW_VOLUME / 100
-        audibleRef.current = true
-        onMutedChange(false)
-      })
-    }
-    attempt(!audibleRef.current)
+    // MUTED BY DEFAULT (user spec: "make it so the video previews it is
+    // mute by default") — no lease, no audible-autoplay gamble: muted
+    // playback always works, and the corner SOUND button (a real user
+    // gesture) is the only thing that ever turns sound on.
+    el.muted = true
+    el.play().catch(() => {
+      // even muted failed — hotlink protection etc.
+      onDead()
+    })
   }
 
-  // Article-open silencing + the handoff's startAt + the sound button.
+  // Article-open silencing, the handoff's startAt, the tap-to-pause
+  // toggle (pausePreviewNow/resumePreviewNow) and the SOUND BUTTON all
+  // route through the store's registered controls.
   const controlsRef = React.useRef<HTMLVideoElement | null>(null)
   React.useEffect(() => {
     const el = controlsRef.current
@@ -553,8 +424,14 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
   const [video, setVideo] = React.useState<ResolvedVideo | null>(null)
   // The player is genuinely PLAYING → fade the overlay in.
   const [playing, setPlaying] = React.useState(false)
-  // Muted state (lease lost or autoplay blocked) — chip icon only.
-  const [muted, setMuted] = React.useState(false)
+  // Muted state — previews are MUTED BY DEFAULT (user spec) until the
+  // corner SOUND button turns them on (chip icon only).
+  const [muted, setMuted] = React.useState(true)
+  // The USER paused the preview by tapping the video (user: "click/
+  // pause/unpause the video preview without opening the article").
+  // `playing` stays true (the overlay + frozen frame stay visible) —
+  // this only swaps the corner chip to Play and the next tap resumes.
+  const [userPaused, setUserPaused] = React.useState(false)
   // A miss (no video for this story) — hides the Watch affordance too.
   const [missed, setMissed] = React.useState(false)
   // An article sheet is open — no NEW preview player mounts (a video
@@ -589,14 +466,24 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
   // felt dead on phones. The press/release pair is immune: a clean tap
   // always ends in pointerup on the button, and a swipe/scroll (fired
   // pointercancel, or drifted > 12px) never toggles. The DISPLAYED state
-  // is captured at pointerdown because the press is itself a page
-  // gesture — the store's document-capture gesture recovery may un-mute
-  // the preview between press and release, and the release must still
-  // respect what the user SAW (displayed muted → intent ON).
+  // is captured at pointerdown so the release respects what the user
+  // SAW (displayed muted → intent ON).
   const soundPressRef = React.useRef<{
     x: number
     y: number
     displayedMuted: boolean
+  } | null>(null)
+
+  // A video-surface tap in progress (tap-to-pause/unpause): where + when
+  // it started. Same mobile-first discipline as the sound button — the
+  // toggle runs at POINTERUP with tap-vs-swipe (> 12px drift) and
+  // tap-vs-hold (> 400ms = the card's long-press, which opens the
+  // context app bar instead) detection, so a scroll, a swipe-dismiss or
+  // a hold NEVER toggles the video — only a clean tap does.
+  const tapPressRef = React.useRef<{
+    x: number
+    y: number
+    t: number
   } | null>(null)
 
   // ── Article-open tracking (reactive — see the store) ──
@@ -634,6 +521,7 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
   //    times); exhausted or a miss response → mark the card a miss. ──
   const handleDead = (deadVideoId: string | null) => {
     setPlaying(false)
+    setUserPaused(false)
     if (!deadVideoId || deadIdsRef.current.includes(deadVideoId) || deadIdsRef.current.length >= 3) {
       setVideo(null)
       markMiss(topicId)
@@ -680,7 +568,10 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
   React.useEffect(() => {
     if (!visible) {
       setPlaying(false)
-      setMuted(false)
+      // The remounted player starts MUTED again (default) and
+      // auto-rolls — the manual pause does not survive a scroll-away.
+      setMuted(true)
+      setUserPaused(false)
     }
   }, [visible])
 
@@ -806,23 +697,97 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
                 onMutedChange={setMuted}
                 onDead={() => {
                   setPlaying(false)
+                  setUserPaused(false)
                   setVideo(null)
                 }}
               />
             ) : null}
 
+            {/* ── Tap-to-pause/unpause surface (user: "click/pause/unpause
+                the video preview without opening the article — only the
+                banner under it opens the article"). Covers the whole
+                video while it is on screen (a user-pause keeps `playing`
+                true, so the frozen frame + this surface stay up for the
+                resume tap). Pointer events PROPAGATE on purpose: a
+                swipe still dismisses the card and a hold still opens the
+                long-press context app bar. Only the trailing CLICK is
+                stopped — it must NEVER reach the card (that would open
+                the article). The toggle itself fires at POINTERUP with
+                tap-vs-swipe (> 12px drift) and tap-vs-hold (> 400ms —
+                the card's long-press) detection, so scrolls, swipes and
+                holds never toggle the video. */}
+            {playing && (
+              <div
+                className="pointer-events-auto absolute inset-0 z-[1] cursor-pointer"
+                style={{ touchAction: 'manipulation' }}
+                aria-label={userPaused ? 'Play video preview' : 'Pause video preview'}
+                onPointerDown={(e) => {
+                  tapPressRef.current = {
+                    x: e.clientX,
+                    y: e.clientY,
+                    t: Date.now(),
+                  }
+                }}
+                onPointerUp={(e) => {
+                  const p = tapPressRef.current
+                  tapPressRef.current = null
+                  if (!p) return
+                  // A finger that drifted > 12px was a swipe/scroll —
+                  // never let it toggle the video.
+                  if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 12)
+                    return
+                  // A press held past 400ms is the card's long-press
+                  // (context app bar) — not a tap.
+                  if (Date.now() - p.t > 400) return
+                  if (userPaused) {
+                    setUserPaused(false)
+                    resumePreviewNow(topicId)
+                  } else {
+                    setUserPaused(true)
+                    pausePreviewNow(topicId)
+                  }
+                }}
+                onPointerCancel={() => {
+                  // The browser took the gesture over (scroll) — no toggle.
+                  tapPressRef.current = null
+                }}
+                onClick={(e) => {
+                  // The toggle already ran at pointerup — the click must
+                  // NEVER reach the card (that would open the article).
+                  e.stopPropagation()
+                  e.preventDefault()
+                }}
+              />
+            )}
+
+            {/* Play chip (bottom-left) — shown while the USER paused the
+                video by tapping it: the corner swaps from the Sound
+                button to a Play affordance so it reads "tap the video to
+                continue" (audio is irrelevant while paused, so the sound
+                button is hidden until it rolls again). pointer-events
+                pass through to the tap surface right below — tapping the
+                chip resumes, same as tapping anywhere on the video. */}
+            {userPaused && (
+              <div className="pointer-events-none absolute bottom-1.5 left-1.5 z-[2] flex items-center gap-1.5 rounded-lg bg-black/70 py-2.5 pl-3 pr-3.5 backdrop-blur-[2px]">
+                <Play className="h-4 w-4 fill-current text-white/90" />
+                <span className="text-[10px] font-extrabold uppercase leading-none tracking-[0.12em] text-white/95">
+                  Play
+                </span>
+              </div>
+            )}
+
             {/* Sound button (bottom-left) — ONLY while the preview is
-                actually playing (user: "ONLY when a video preview is
+                actually rolling (user: "ONLY when a video preview is
                 playing only in the preview video make it show a sound
-                button which i can press to turn on sound"). A PRESS, not
-                a hover: the autoplay policy only permits sound after a
-                user gesture on the page (user: "i think there is
-                something so only where there is a press registered on a
-                website it can do sound") — the tap IS that gesture, so
-                turning sound on from the button reliably works. The
-                toggle fires at POINTERUP (tap-vs-swipe aware — see
-                soundPressRef) so it always runs inside the gesture, with
-                no click-delay/click-cancel on mobile. Tapping it must
+                button which i can press to turn on sound") and NOT
+                user-paused. A PRESS, not a hover: the autoplay policy
+                only permits sound after a user gesture on the page (user:
+                "i think there is something so only where there is a press
+                registered on a website it can do sound") — the tap IS that
+                gesture, so turning sound on from the button reliably
+                works. The toggle fires at POINTERUP (tap-vs-swipe aware —
+                see soundPressRef) so it always runs inside the gesture,
+                with no click-delay/click-cancel on mobile. Tapping it must
                 NOT open the article: pointer-events-auto over the
                 pass-through container + stopPropagation (the card's
                 own click handler would also ignore it via the
@@ -830,7 +795,7 @@ export function HeroVideoPreview({ topicId }: { topicId: string }) {
                 generous padding + touch-action: manipulation make it a
                 comfortable thumb target (user: "the sound button
                 doesn't work well on mobile"). */}
-            {playing && (
+            {playing && !userPaused && (
               <button
                 type="button"
                 aria-label={muted ? 'Turn on preview sound' : 'Mute preview sound'}

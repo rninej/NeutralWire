@@ -64,3 +64,23 @@ Stage Summary:
 - Ask AI is a real centered modal that sticks to the middle of the screen while scrolling.
 - Deploy note: Vercel picks up on push. The archive search index self-builds over the first day of real search traffic (80 entries per search, backfill logged as indexedNow).
 - Known backlog: bias bar image version, Active CPU audit, privacy policy country/city, email swap to moneyisbroken@gmail.com.
+
+---
+Task ID: session21
+Agent: main (Super Z)
+Task: 4-in-1 preview interaction rework — (1) tap the video preview to pause/unpause WITHOUT opening the article; (2) video previews are muted by default; (3) only the banner under the video preview (the card's text) opens the article; (4) cards without previews keep click-anywhere (card or image) → article.
+
+Work Log:
+- Environment reset again: re-cloned NeutralWire from GitHub, bun install (842 pkgs), confirmed session 16-20 work already on main (HEAD 43e8bc0).
+- Store (src/lib/video-preview-store.ts): new pausePreviewNow/resumePreviewNow + userPausedTopics set — the tap-to-pause routes through the registered player controls; resumeAllPreviews (article close) now SKIPS user-paused topics so closing an article never un-pauses a video the user froze; register/unregister cleans the set. Muted-by-default made the whole audible-autoplay recovery layer obsolete: claimPreviewAudio/waitForPreviewAudio queue + section-6 gesture tracking removed; the lease survives purely for the Sound button (forcePreviewAudio mutes the previous audible card). releasePreviewAudio kept (frees the lease when an audible card unmounts).
+- YouTubePreviewPlayer: playerVars mute:1 + onReady mute()+playVideo() — no lease claim, no blockProbe, no tryUnmute/unMuteNow gesture recovery; setAudible(true) (Sound button path) un-mutes at PREVIEW_VOLUME + re-asserts playVideo() for iOS's parked audio pipeline. onPlaying reports !audibleRef.current.
+- NativePreviewPlayer: startPlayback is now always el.muted=true + play() (muted autoplay never blocked; onDead only when even muted fails); the whole attempt()/lease-queue/onUserGesture recovery tree deleted; setAudible unchanged (press-gesture unmute).
+- HeroVideoPreview: new full-surface TAP LAYER (pointer-events-auto, z-[1] under the Sound button) rendered while the video is on screen — a user-pause keeps `playing` true so the frozen frame + tap surface stay up for the resume tap. Toggle fires at POINTERUP with tap-vs-swipe (>12px drift) and tap-vs-hold (>400ms = the card's 450ms long-press/context-bar) detection; the trailing click is stopPropagation'd so a video tap can NEVER open the article; pointerdown/move/up PROPAGATE on purpose so swipe-dismiss and long-press context bar still work when started on the video. userPaused state swaps the corner Sound button for a pointer-events-none "Play" chip (tap resumes); muted initial state now true; scroll-away/dead-video resets clear userPaused. Cards without a rolling preview (flag off, miss, still buffering) keep the classic whole-card click → article, banner clicks arm the existing video handoff (article continues at the preview's position).
+- Verified: bunx tsc --noEmit 0 errors; eslint clean on all 3 touched files; dev-server smoke: / 200, /debug 200, /api/video 200, agent-browser load with zero console errors.
+- Committed + pushed to main.
+
+Stage Summary:
+- Tap the video = pause/unpause (frozen frame + Play chip; scroll/swipe/hold never mis-toggle). Only the banner (card text) under it opens the article — still with the seamless video handoff.
+- Previews are muted by default on every platform (YouTube + native); the corner Sound button is the only path to sound (press = the gesture the policy needs, half volume, single-audible lease).
+- Cards without previews: click card or image → article, exactly as before.
+- Known backlog: bias bar image version, Active CPU audit, privacy policy country/city, email swap to moneyisbroken@gmail.com.
