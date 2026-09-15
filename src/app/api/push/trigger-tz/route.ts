@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import webpush from 'web-push'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { readCachedNews, isVirtualCategory } from '@/lib/news-cache'
+import { consumeLease, jobRecentlyRan, markJobRun, CRON_JOB_INTERVALS } from '@/lib/mesh/lease-server'
 import { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } from '@/lib/vapid'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import type { Category } from '@/lib/news-sources'
@@ -201,12 +202,42 @@ function scoreStoryForDevice(
 export async function GET(req: NextRequest) {
   const t0 = Date.now()
   const secret = req.nextUrl.searchParams.get('secret') || ''
+  const leaseId = req.nextUrl.searchParams.get('lease') || ''
+  const peer = req.nextUrl.searchParams.get('peer') || ''
   const dryRun = req.nextUrl.searchParams.get('dry') === '1'
   const forceEvening = req.nextUrl.searchParams.get('forceEvening') === '1'
   const forceSlot = req.nextUrl.searchParams.get('forceSlot') as Slot | null
 
-  if (secret !== TRIGGER_TZ_SECRET) {
+  // ── Auth: admin secret (external cron / debug) OR one-time mesh lease
+  // (a visitor's browser driving the schedule — the userCron experiment).
+  // Per-device sentSlotsToday + the global sent-history make double
+  // triggering harmless (devices never get the same slot twice), and the
+  // lease path additionally respects a 14-minute interval floor.
+  let authorized = secret === TRIGGER_TZ_SECRET
+  let viaLease = false
+  if (!authorized && leaseId) {
+    const lease = await consumeLease(leaseId, peer, 'notify')
+    authorized = lease.ok
+    viaLease = lease.ok
+    if (!lease.ok) {
+      console.warn(`[trigger-tz] lease rejected: ${lease.reason}`)
+    }
+  }
+  if (!authorized) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  if (viaLease && !dryRun && !forceSlot) {
+    if (await jobRecentlyRan('notify', CRON_JOB_INTERVALS.notify.serverFloorMs)) {
+      return NextResponse.json({
+        ok: true,
+        skipped: 'interval',
+        message: 'Notification pass ran recently — floor respected',
+        sent: 0,
+        ts: Date.now(),
+      })
+    }
+    await markJobRun('notify')
   }
 
   console.log(`[trigger-tz] Starting at ${new Date().toISOString()} (dry=${dryRun})`)
@@ -508,13 +539,16 @@ export async function GET(req: NextRequest) {
         const bestFp = storyFingerprint(bestStory.title)
         if (bestFp) allSentFingerprints.add(bestFp)
 
-        // ── Use the OG share image as the notification image ──
-        // The /api/og-image endpoint generates an image with the article's
-        // photo + NEUTRALWIRE banner + bias bar (left/center/right
-        // percentages). This is the same image used for social share
-        // previews. Using it as the notification image gives users a
-        // rich preview with the bias visualization before they tap.
-        const ogImageUrl = `${origin}/api/og-image?topicId=${encodeURIComponent(bestStory.topicId)}&title=${encodeURIComponent(bestStory.title.slice(0, 80))}&leanLeft=${bestStory.leanLeft}&leanCenter=${bestStory.leanCenter}&leanRight=${bestStory.leanRight}&imageUrl=${encodeURIComponent(bestStory.imageUrl || '')}`
+        // ── Notification image — ONLY when the article HAS a photo ──
+        // The /api/og-image endpoint composites the article photo + NW
+        // banner + bias bar; when the story has NO image it renders a
+        // plain dark card with just the bias bar — which looked like a
+        // broken "black image" in the notification shade. Stories without
+        // an image now ship NO image at all (the OS falls back to the
+        // large icon), exactly as requested.
+        const ogImageUrl = bestStory.imageUrl
+          ? `${origin}/api/og-image?topicId=${encodeURIComponent(bestStory.topicId)}&title=${encodeURIComponent(bestStory.title.slice(0, 80))}&leanLeft=${bestStory.leanLeft}&leanCenter=${bestStory.leanCenter}&leanRight=${bestStory.leanRight}&imageUrl=${encodeURIComponent(bestStory.imageUrl)}`
+          : null
 
         const payload = JSON.stringify({
           title: slotLabels[target.slot],
@@ -525,7 +559,8 @@ export async function GET(req: NextRequest) {
           // Android applies its own tint and shows a white square if the badge
           // icon has color. This is the NW monogram in white silhouette.
           badge: '/badge-96.png',
-          image: ogImageUrl,
+          // undefined is dropped by JSON.stringify — no photo, no image.
+          image: ogImageUrl ?? undefined,
           tag: `briefing-${target.slot}`,
           notifId: `tz_${target.dateKey}_${target.slot}_${target.deviceId.slice(-6)}`,
           // Like-button gate (featureFlags/notifLike, read once per run

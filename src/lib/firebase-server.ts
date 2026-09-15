@@ -158,3 +158,24 @@ export async function firebasePing(): Promise<boolean> {
   // failure would too — we treat both as "db not reachable" upstream.
   return v !== null || true
 }
+
+/**
+ * Delete a node at the given path (REST DELETE). Used by the mesh
+ * lease system (one-time lease consumption) and log trimming.
+ */
+export async function firebaseDelete(path: string): Promise<boolean> {
+  const url = `${DB_URL}/${path}.json`
+  try {
+    const res = await withTimeout(
+      fetch(url, {
+        method: 'DELETE',
+        cache: 'no-store',
+      }),
+      FETCH_TIMEOUT_MS,
+    )
+    return res.ok
+  } catch (err) {
+    console.warn(`[firebase] delete ${path} error:`, err)
+    return false
+  }
+}

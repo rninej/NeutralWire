@@ -149,6 +149,43 @@ async function getMilestoneDonate(): Promise<boolean> {
   }
 }
 
+// ── Server-rendered mesh flags (P2P relay + user-powered cron) ──
+// Both experimental features default ON per the user's spec; flipped
+// from /debug. Read server-side (same 5s-memo pattern) and passed as
+// props so a flip applies on the next page load — the client mesh
+// never runs with a stale on/off state baked into the bundle.
+let meshRelayFlagMemo: { value: boolean; ts: number } | null = null
+let userCronFlagMemo: { value: boolean; ts: number } | null = null
+const MESH_FLAG_TTL_MS = 5 * 1000
+
+async function getMeshRelay(): Promise<boolean> {
+  if (meshRelayFlagMemo && Date.now() - meshRelayFlagMemo.ts < MESH_FLAG_TTL_MS) {
+    return meshRelayFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<boolean | string>('featureFlags/meshRelay')
+    const value = !(stored === false || stored === 'false')
+    meshRelayFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return true
+  }
+}
+
+async function getUserCron(): Promise<boolean> {
+  if (userCronFlagMemo && Date.now() - userCronFlagMemo.ts < MESH_FLAG_TTL_MS) {
+    return userCronFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<boolean | string>('featureFlags/userCron')
+    const value = !(stored === false || stored === 'false')
+    userCronFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return true
+  }
+}
+
 /**
  *  Generate dynamic OG metadata for shared links.
  *
@@ -243,6 +280,11 @@ export default async function Page() {
   // celebration-only version; switched from /debug.
   const milestoneDonate = await getMilestoneDonate()
 
+  // Mesh experimental flags — P2P relay + user-powered cron (both
+  // default ON; switched from /debug).
+  const meshRelay = await getMeshRelay()
+  const userCron = await getUserCron()
+
   // Personal override (Account → Feature Flags → "Your header style"):
   // a cookie, so the server sees it during SSR — the visitor's own pick
   // renders in the very first paint, no flash. Invalid values fall back
@@ -264,6 +306,8 @@ export default async function Page() {
           initialSubtopicNav={initialSubtopicNav}
           popupSystem={popupSystem}
           milestoneDonate={milestoneDonate}
+          meshRelay={meshRelay}
+          userCron={userCron}
         />
       </VideoPreviewProvider>
     </VideoWatchProvider>

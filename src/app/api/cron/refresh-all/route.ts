@@ -5,6 +5,7 @@ import { aggregateCategory, shortenLongTitles } from '@/lib/news-aggregator'
 import { aggregateMyCountryViaGdelt } from '@/lib/gdelt-aggregator'
 import { refreshCategory } from '@/lib/news-cache'
 import { sourcesForCountry } from '@/lib/country-detect'
+import { consumeLease, jobRecentlyRan, markJobRun, CRON_JOB_INTERVALS } from '@/lib/mesh/lease-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,10 +34,16 @@ export const maxDuration = 60
  *       The response always goes out in ≤ ~10s → cron-job.org always
  *       gets a fast 200 → timeouts are impossible.
  *
- * Security: hardcoded secret (URL acts as the secret).
+ * Security: hardcoded secret (URL acts as the secret) OR a one-time
+ * Firebase lease (the user-powered cron — see /src/lib/mesh/lease-server.ts).
+ * Lease-triggered runs additionally respect a 25-minute interval floor
+ * (Firebase lastRun + in-memory) so lease spam can never force
+ * back-to-back heavy refreshes.
  *
- * Trigger: cron-job.org every 30 minutes
+ * Trigger: cron-job.org every 30 minutes AND/OR the oldest live visitor
+ *   (experimental userCron feature, default ON).
  *   URL: https://neutralwire.org/api/cron/refresh-all?secret=965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd
+ *   Lease: /api/cron/refresh-all?lease=<id>&peer=<peerId>
  */
 
 const CRON_SECRET = '965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd'
@@ -50,9 +57,39 @@ const SYNC_WAIT_MS = 8000
 export async function GET(req: NextRequest) {
   const t0 = Date.now()
 
+  // ── Auth: admin secret (external cron) OR one-time mesh lease (a
+  // visitor's browser driving the schedule — the userCron experiment).
   const secret = req.nextUrl.searchParams.get('secret') || ''
-  if (secret !== CRON_SECRET) {
+  const leaseId = req.nextUrl.searchParams.get('lease') || ''
+  const peer = req.nextUrl.searchParams.get('peer') || ''
+  let authorized = secret === CRON_SECRET
+  let viaLease = false
+  if (!authorized && leaseId) {
+    const lease = await consumeLease(leaseId, peer, 'refresh')
+    authorized = lease.ok
+    viaLease = lease.ok
+    if (!lease.ok) {
+      console.warn(`[cron/refresh-all] lease rejected: ${lease.reason}`)
+    }
+  }
+  if (!authorized) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // ── Interval floor for lease-triggered runs ──
+  // The external cron keeps its own schedule and is NOT throttled here;
+  // visitor-driven triggers are capped so a buggy/spammy client cannot
+  // multiply invocations.
+  if (viaLease) {
+    if (await jobRecentlyRan('refresh', CRON_JOB_INTERVALS.refresh.serverFloorMs)) {
+      return NextResponse.json({
+        ok: true,
+        skipped: 'interval',
+        message: 'Refresh ran recently — floor respected',
+        ts: Date.now(),
+      })
+    }
+    await markJobRun('refresh')
   }
 
   // ── Rotation: relevant/GB is ALWAYS refreshed (default landing page),

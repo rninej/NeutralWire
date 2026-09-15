@@ -42,11 +42,19 @@ import {
   Play,
   Heart,
   Bug,
+  Network,
+  Timer,
 } from 'lucide-react'
 import { getDeviceId } from '@/lib/referral'
 import { COUNTRY_COORDS, latLngToXY } from '@/lib/country-coords'
 import { cn } from '@/lib/utils'
 import { DEFAULT_POPUP_MODE, type PopupMode } from '@/lib/popup-mode'
+import {
+  readLocalMeshEvents,
+  readLocalMeshStats,
+  type LocalMeshEvent,
+  type LocalMeshStats,
+} from '@/lib/mesh/mesh-log'
 import { LayoutGrid, List, Underline, LayoutDashboard, PanelBottomOpen, AppWindow, Pill, PanelTop, MoveHorizontal, ChevronsRight } from 'lucide-react'
 
 // ── Types ──
@@ -295,6 +303,62 @@ export default function DebugPage() {
     if (authed && passwordRef.current) fetchBugReports()
   }, [authed, fetchBugReports])
 
+  // ── Mesh Relay Monitor (P2P relay + user-cron observability) ──
+  // The "keep all bugs and unwanted switches as a record" requirement:
+  // every fallback, verification failure, malformed payload, relay
+  // switch and cron trigger is recorded — locally (this browser's ring,
+  // read from localStorage) and cross-user (Firebase meshLogs, read via
+  // the admin-gated /api/mesh/logs endpoint).
+  interface MeshLogUi {
+    id: string
+    ts: number
+    type: string
+    room: string
+    peerId: string
+    detail: string
+  }
+  const [meshLogs, setMeshLogs] = React.useState<MeshLogUi[]>([])
+  const [meshLogsLoading, setMeshLogsLoading] = React.useState(false)
+  const [meshLocalStats, setMeshLocalStats] = React.useState<LocalMeshStats | null>(null)
+  const [meshLocalEvents, setMeshLocalEvents] = React.useState<LocalMeshEvent[]>([])
+
+  const fetchMeshLogs = React.useCallback(async () => {
+    if (!passwordRef.current) return
+    setMeshLogsLoading(true)
+    try {
+      const res = await fetch(
+        `/api/mesh/logs?password=${encodeURIComponent(passwordRef.current)}`,
+      )
+      if (res.ok) {
+        const json = await res.json()
+        setMeshLogs(json.events || [])
+      }
+      setMeshLocalStats(readLocalMeshStats())
+      setMeshLocalEvents(readLocalMeshEvents().slice(-14).reverse())
+    } catch {
+      // silent — the refresh button retries
+    } finally {
+      setMeshLogsLoading(false)
+    }
+  }, [])
+
+  const clearMeshLogs = async () => {
+    if (!passwordRef.current) return
+    try {
+      await fetch(
+        `/api/mesh/logs?password=${encodeURIComponent(passwordRef.current)}`,
+        { method: 'DELETE' },
+      )
+      setMeshLogs([])
+    } catch {
+      // silent
+    }
+  }
+
+  React.useEffect(() => {
+    if (authed && passwordRef.current) fetchMeshLogs()
+  }, [authed, fetchMeshLogs])
+
   // ── Push diagnostics (existing debug page content) ──
   const [deviceId, setDeviceId] = React.useState('')
   const [report, setReport] = React.useState<CheckResult[]>([])
@@ -471,6 +535,15 @@ export default function DebugPage() {
   const [milestoneDonate, setMilestoneDonate] = React.useState<boolean | null>(null)
   const [milestoneDonateFlipping, setMilestoneDonateFlipping] = React.useState(false)
   const [milestoneDonateResult, setMilestoneDonateResult] = React.useState<string | null>(null)
+  // Mesh experimental features (both default ON per the user's spec):
+  //   meshRelay → P2P news relay between visitors (WebRTC + signed manifests)
+  //   userCron  → visitors drive the refresh/notify cron schedule via leases
+  const [meshRelay, setMeshRelay] = React.useState<boolean | null>(null)
+  const [meshRelayFlipping, setMeshRelayFlipping] = React.useState(false)
+  const [meshRelayResult, setMeshRelayResult] = React.useState<string | null>(null)
+  const [userCron, setUserCron] = React.useState<boolean | null>(null)
+  const [userCronFlipping, setUserCronFlipping] = React.useState(false)
+  const [userCronResult, setUserCronResult] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     fetch('/api/flags')
@@ -489,6 +562,8 @@ export default function DebugPage() {
         setVideoWatch(d?.videoWatch !== false)
         setVideoPreview(d?.videoPreview === true)
         setMilestoneDonate(d?.milestoneDonate !== false)
+        setMeshRelay(d?.meshRelay !== false)
+        setUserCron(d?.userCron !== false)
       })
       .catch(() => {
         setNavMode('cards')
@@ -497,12 +572,14 @@ export default function DebugPage() {
         setVideoWatch(true)
         setVideoPreview(false)
         setMilestoneDonate(true)
+        setMeshRelay(true)
+        setUserCron(true)
       })
   }, [])
 
   /** POST one boolean flag (shared by the experimental switches). */
   const flipBooleanFlag = async (
-    flag: 'notifLike' | 'videoWatch' | 'videoPreview' | 'milestoneDonate',
+    flag: 'notifLike' | 'videoWatch' | 'videoPreview' | 'milestoneDonate' | 'meshRelay' | 'userCron',
     value: boolean,
   ): Promise<boolean> => {
     if (!passwordRef.current) return false
@@ -1359,6 +1436,173 @@ export default function DebugPage() {
                 )}
               </Button>
             </div>
+
+            {/* ── P2P news relay (meshRelay) ── */}
+            <div
+              className={cn(
+                'flex items-start gap-3 rounded-xl border p-3 md:p-4',
+                meshRelay === false ? 'border-border opacity-70' : 'border-border bg-muted/40',
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  meshRelay ? 'bg-emerald-500/15 text-emerald-500' : 'bg-muted text-muted-foreground',
+                )}
+              >
+                <Network className="h-4.5 w-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold">P2P news relay (visitors serve visitors)</span>
+                  {meshRelay !== null && (
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                        meshRelay
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-muted-foreground/20 text-muted-foreground',
+                      )}
+                    >
+                      {meshRelay ? 'Mesh on' : 'Off'}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Visitors in the same feed room (same category + country —
+                  country feeds never mix) relay the news to each other over
+                  WebRTC: one relay per room reads Firebase directly and pushes
+                  snapshots to everyone else, cutting server cost per feed
+                  from O(users) to O(rooms). Every payload is verified against
+                  an ECDSA-signed server manifest; at 12+ peers, verification
+                  switches to 3-random-peer consensus with a periodic signed
+                  anchor. Any failure, timeout or tampering fails CLOSED —
+                  the visitor fetches from the server like before. The mesh
+                  never slows a cold load. All fallbacks and blocks are
+                  recorded in the Mesh Relay Monitor below.
+                </p>
+                {meshRelayResult && (
+                  <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    {meshRelayResult}
+                  </p>
+                )}
+              </div>
+              <Button
+                variant={meshRelay ? 'destructive' : 'default'}
+                size="sm"
+                disabled={meshRelayFlipping || meshRelay === null}
+                onClick={async () => {
+                  if (meshRelayFlipping || meshRelay === null) return
+                  setMeshRelayFlipping(true)
+                  setMeshRelayResult(null)
+                  const next = !meshRelay
+                  const ok = await flipBooleanFlag('meshRelay', next)
+                  if (ok) {
+                    setMeshRelay(next)
+                    setMeshRelayResult(
+                      next
+                        ? '✓ Relay live — applies to every visitor on their next page load'
+                        : '✓ Relay off — everyone loads the classic server way',
+                    )
+                  } else {
+                    setMeshRelayResult('Failed to update (check password)')
+                  }
+                  setMeshRelayFlipping(false)
+                }}
+                className="shrink-0"
+              >
+                {meshRelayFlipping ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : meshRelay ? (
+                  'Turn off'
+                ) : (
+                  'Turn on'
+                )}
+              </Button>
+            </div>
+
+            {/* ── User-powered cron (userCron) ── */}
+            <div
+              className={cn(
+                'flex items-start gap-3 rounded-xl border p-3 md:p-4',
+                userCron === false ? 'border-border opacity-70' : 'border-border bg-muted/40',
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  userCron ? 'bg-violet-500/15 text-violet-500' : 'bg-muted text-muted-foreground',
+                )}
+              >
+                <Timer className="h-4.5 w-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold">User-powered cron (visitors run the schedule)</span>
+                  {userCron !== null && (
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                        userCron
+                          ? 'bg-violet-500 text-white'
+                          : 'bg-muted-foreground/20 text-muted-foreground',
+                      )}
+                    >
+                      {userCron ? 'Visitor cron' : 'Off'}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  The oldest live visitor checks job staleness every minute
+                  and triggers the RSS refresh (30 min) and the timezone-aware
+                  notification briefings (20 min) through one-time Firebase
+                  leases — Firebase itself timestamps each lease, the server
+                  consumes it once, and per-job interval floors (25 min / 14
+                  min) bound even a spamming client. Server invocations now
+                  happen only while visitors are actually online; an external
+                  cron service (cron-job.org) keeps working as a backstop —
+                  both paths dedupe, so devices never get the same briefing
+                  twice.
+                </p>
+                {userCronResult && (
+                  <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    {userCronResult}
+                  </p>
+                )}
+              </div>
+              <Button
+                variant={userCron ? 'destructive' : 'default'}
+                size="sm"
+                disabled={userCronFlipping || userCron === null}
+                onClick={async () => {
+                  if (userCronFlipping || userCron === null) return
+                  setUserCronFlipping(true)
+                  setUserCronResult(null)
+                  const next = !userCron
+                  const ok = await flipBooleanFlag('userCron', next)
+                  if (ok) {
+                    setUserCron(next)
+                    setUserCronResult(
+                      next
+                        ? '✓ Visitors drive the schedule — applies on their next page load'
+                        : '✓ Visitor cron off — use an external cron service',
+                    )
+                  } else {
+                    setUserCronResult('Failed to update (check password)')
+                  }
+                  setUserCronFlipping(false)
+                }}
+                className="shrink-0"
+              >
+                {userCronFlipping ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : userCron ? (
+                  'Turn off'
+                ) : (
+                  'Turn on'
+                )}
+              </Button>
+            </div>
           </div>
         </Card>
 
@@ -1414,6 +1658,147 @@ export default function DebugPage() {
                   onDismiss={() => dismissReport(r.id)}
                 />
               ))}
+            </div>
+          )}
+        </Card>
+
+        {/* ── Mesh Relay Monitor ──
+            Observability for the two experimental mesh systems: every
+            fallback, verification failure, malformed payload, relay
+            switch and cron trigger is recorded here (local ring for this
+            browser + the shared Firebase log across all visitors). */}
+        <Card className="mb-6 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Network className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-bold">Mesh Relay Monitor</h2>
+            <span className="ml-auto flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {meshLogs.length} recent events
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={fetchMeshLogs}
+                disabled={meshLogsLoading}
+              >
+                {meshLogsLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearMeshLogs}
+                disabled={meshLogs.length === 0}
+              >
+                <Eraser className="h-4 w-4" />
+              </Button>
+            </span>
+          </div>
+          <p className="mb-4 text-sm text-muted-foreground">
+            The record of every mesh fallback, unwanted switch and
+            verification block across all visitors — the audit trail for
+            the P2P relay and the user-powered cron. This browser's own
+            counters appear first (from its last session on the home
+            feed), then the shared cross-user log.
+          </p>
+
+          {/* This browser's mesh counters */}
+          <div className="mb-4 grid grid-cols-3 gap-3 md:grid-cols-6">
+            {[
+              { label: 'Room joins', value: meshLocalStats?.joined },
+              { label: 'Mesh-served', value: meshLocalStats?.served },
+              { label: 'Relay pushes', value: meshLocalStats?.relaysServed },
+              { label: 'Fallbacks', value: meshLocalStats?.fallbacks },
+              { label: 'Verified', value: meshLocalStats?.verifyOk },
+              { label: 'Blocked', value: meshLocalStats?.blocks },
+            ].map((cell) => (
+              <div
+                key={cell.label}
+                className="rounded-xl border bg-muted/30 p-3 text-center"
+              >
+                <div className="text-xl font-bold tabular-nums">
+                  {cell.value ?? 0}
+                </div>
+                <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {cell.label}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* This browser's recent mesh events */}
+          {meshLocalEvents.length > 0 && (
+            <div className="mb-4">
+              <div className="mb-1.5 text-xs font-semibold">This browser</div>
+              <div className="flex flex-wrap gap-1.5">
+                {meshLocalEvents.map((ev, i) => (
+                  <span
+                    key={`${ev.ts}-${i}`}
+                    className={cn(
+                      'rounded-full px-2 py-0.5 text-[10px] font-medium',
+                      meshEventClass(ev.type),
+                    )}
+                    title={`${ev.room}${ev.detail ? ' — ' + ev.detail : ''}`}
+                  >
+                    {ev.type}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Shared cross-user log */}
+          <div className="mb-1.5 text-xs font-semibold">All visitors (Firebase)</div>
+          {meshLogs.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+              No mesh events recorded yet. Open the home feed (with the P2P
+              relay switch on) in one or more browsers — joins, relay
+              elections, fallbacks and blocks will appear here.
+            </div>
+          ) : (
+            <div className="max-h-96 overflow-y-auto rounded-xl border">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+                  <tr className="text-left text-muted-foreground">
+                    <th className="px-3 py-2 font-semibold">When</th>
+                    <th className="px-3 py-2 font-semibold">Event</th>
+                    <th className="px-3 py-2 font-semibold">Room</th>
+                    <th className="px-3 py-2 font-semibold">Peer</th>
+                    <th className="px-3 py-2 font-semibold">Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {meshLogs.map((ev) => (
+                    <tr key={ev.id} className="border-t">
+                      <td className="whitespace-nowrap px-3 py-1.5 text-muted-foreground">
+                        {meshTimeAgo(ev.ts)}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <span
+                          className={cn(
+                            'rounded-full px-2 py-0.5 text-[10px] font-bold',
+                            meshEventClass(ev.type),
+                          )}
+                        >
+                          {ev.type}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-1.5 font-mono">
+                        {ev.room || '—'}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-muted-foreground">
+                        {ev.peerId || '—'}
+                      </td>
+                      <td className="px-3 py-1.5 text-muted-foreground">
+                        {ev.detail || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </Card>
@@ -1657,6 +2042,42 @@ function timeAgo(ms: number): string {
   const h = Math.floor(m / 60)
   if (h < 48) return `${h}h ago`
   return `${Math.floor(h / 24)}d ago`
+}
+
+/** Mesh monitor: relative time (mesh events carry epoch ms). */
+function meshTimeAgo(ts: number): string {
+  return timeAgo(ts || 0)
+}
+
+/** Mesh monitor: color class per event type (failures red, fallbacks
+ *  amber, election/switches blue, cron violet, normal ops green). */
+function meshEventClass(type: string): string {
+  if (
+    type.startsWith('verify-') && type !== 'verify-ok'
+  ) {
+    return 'bg-red-500/15 text-red-600 dark:text-red-400'
+  }
+  if (type === 'malformed' || type === 'rate-abuse' || type === 'stale-reject') {
+    return 'bg-red-500/15 text-red-600 dark:text-red-400'
+  }
+  if (type.startsWith('fallback-')) {
+    return 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+  }
+  if (type.startsWith('cron-')) {
+    return 'bg-violet-500/15 text-violet-600 dark:text-violet-400'
+  }
+  if (
+    type === 'promote' ||
+    type === 'relay-switch' ||
+    type === 'connect' ||
+    type === 'disconnect'
+  ) {
+    return 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
+  }
+  if (type === 'refresh-req' || type === 'refresh-served') {
+    return 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400'
+  }
+  return 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
 }
 
 function ReportRow({

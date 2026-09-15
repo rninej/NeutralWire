@@ -16,9 +16,9 @@ export const maxDuration = 15
 /**
  * Server-side feature flags (stored in Firebase under featureFlags/<name>).
  *
- * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, videoWatch, videoPreview, milestoneDonate }   (public)
+ * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, videoWatch, videoPreview, milestoneDonate, meshRelay, userCron }   (public)
  * POST /api/flags   → set flag(s) for ALL users (password-protected)
- *       body: { password, subtopicNav?, popupSystem?, notifLike?, videoWatch?, videoPreview?, milestoneDonate? }
+ *       body: { password, subtopicNav?, popupSystem?, notifLike?, videoWatch?, videoPreview?, milestoneDonate?, meshRelay?, userCron? }
  *       — send one or more.
  *
  * Managed flags:
@@ -74,6 +74,26 @@ export const maxDuration = 15
  *       'original' popupSystem already brings back the classic Ko-fi
  *       donate popup.
  *
+ *   - meshRelay (boolean, default TRUE): the experimental P2P news
+ *       relay. Visitors in the same feed room (same category + country)
+ *       serve each other the news over WebRTC data channels — one relay
+ *       per room reads Firebase directly and pushes verified snapshots
+ *       to everyone else, cutting /api/news invocations and Firebase
+ *       bandwidth from O(users) to O(rooms). Integrity is enforced by
+ *       server-signed manifests (ECDSA) + 3-peer consensus at scale;
+ *       any verification failure fails CLOSED to the normal server
+ *       path. Flip off in /debug → every visitor loads the classic way
+ *       on their next page load.
+ *
+ *   - userCron (boolean, default TRUE): the experimental user-powered
+ *       cron. The oldest live visitor checks job staleness every minute
+ *       and triggers the RSS refresh + timezone-aware notification send
+ *       through one-time Firebase leases (server-enforced interval
+ *       floors). Server invocations happen only while visitors are
+ *       actually online; an external cron service still works as a
+ *       backstop (both paths dedupe). Flip off in /debug → the schedule
+ *       pauses until an external cron hits the endpoints.
+ *
  * Flags are flipped from /debug in one click; every client receives the
  * values server-side on load (page.tsx SSR) so a flip propagates on the
  * next page load with no wrong-design flash.
@@ -99,6 +119,8 @@ const NOTIF_LIKE_FLAG_PATH = 'featureFlags/notifLike'
 const VIDEO_FLAG_PATH = 'featureFlags/videoWatch'
 const VIDEO_PREVIEW_FLAG_PATH = 'featureFlags/videoPreview'
 const MILESTONE_DONATE_FLAG_PATH = 'featureFlags/milestoneDonate'
+const MESH_RELAY_FLAG_PATH = 'featureFlags/meshRelay'
+const USER_CRON_FLAG_PATH = 'featureFlags/userCron'
 
 // Per-instance memos (10s) — bound Firebase reads when many clients hit
 // this endpoint simultaneously on a warm serverless instance.
@@ -108,6 +130,8 @@ let notifLikeMemo: { value: boolean; ts: number } | null = null
 let videoMemo: { value: boolean; ts: number } | null = null
 let videoPreviewMemo: { value: boolean; ts: number } | null = null
 let milestoneDonateMemo: { value: boolean; ts: number } | null = null
+let meshRelayMemo: { value: boolean; ts: number } | null = null
+let userCronMemo: { value: boolean; ts: number } | null = null
 const MEMO_TTL_MS = 10 * 1000
 
 function sha256(s: string): string {
@@ -144,7 +168,7 @@ function normalizeBooleanFlag(v: unknown, fallback: boolean): boolean {
 export async function GET() {
   // All flags are fetched in parallel — one cold instance pays the
   // RTDB reads at most, then all answers are memoized together.
-  const [navResult, popupResult, notifLikeResult, videoResult, videoPreviewResult, milestoneDonateResult] = await Promise.allSettled([
+  const [navResult, popupResult, notifLikeResult, videoResult, videoPreviewResult, milestoneDonateResult, meshRelayResult, userCronResult] = await Promise.allSettled([
     (async () => {
       if (navMemo && Date.now() - navMemo.ts < MEMO_TTL_MS) return navMemo.value
       const stored = await firebaseRead<string>(NAV_FLAG_PATH)
@@ -192,6 +216,24 @@ export async function GET() {
       milestoneDonateMemo = { value, ts: Date.now() }
       return value
     })(),
+    (async () => {
+      if (meshRelayMemo && Date.now() - meshRelayMemo.ts < MEMO_TTL_MS) return meshRelayMemo.value
+      const stored = await firebaseRead<boolean>(MESH_RELAY_FLAG_PATH)
+      // DEFAULT ON — the user asked for the experiment live by default;
+      // an explicit false turns the P2P relay off for everyone.
+      const value = normalizeBooleanFlag(stored, true)
+      meshRelayMemo = { value, ts: Date.now() }
+      return value
+    })(),
+    (async () => {
+      if (userCronMemo && Date.now() - userCronMemo.ts < MEMO_TTL_MS) return userCronMemo.value
+      const stored = await firebaseRead<boolean>(USER_CRON_FLAG_PATH)
+      // DEFAULT ON — visitors drive the cron schedule while online;
+      // an explicit false pauses client-driven triggering.
+      const value = normalizeBooleanFlag(stored, true)
+      userCronMemo = { value, ts: Date.now() }
+      return value
+    })(),
   ])
 
   // ── CDN cache (Fluid CPU) ──
@@ -217,6 +259,10 @@ export async function GET() {
         videoPreviewResult.status === 'fulfilled' ? videoPreviewResult.value : false,
       milestoneDonate:
         milestoneDonateResult.status === 'fulfilled' ? milestoneDonateResult.value : true,
+      meshRelay:
+        meshRelayResult.status === 'fulfilled' ? meshRelayResult.value : true,
+      userCron:
+        userCronResult.status === 'fulfilled' ? userCronResult.value : true,
     },
     {
       headers: {
@@ -235,6 +281,8 @@ export async function POST(req: NextRequest) {
     videoWatch?: boolean | string
     videoPreview?: boolean | string
     milestoneDonate?: boolean | string
+    meshRelay?: boolean | string
+    userCron?: boolean | string
   }
   try {
     body = await req.json()
@@ -252,11 +300,13 @@ export async function POST(req: NextRequest) {
   const wantsVideo = body.videoWatch !== undefined
   const wantsVideoPreview = body.videoPreview !== undefined
   const wantsMilestoneDonate = body.milestoneDonate !== undefined
-  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsVideo && !wantsVideoPreview && !wantsMilestoneDonate) {
+  const wantsMeshRelay = body.meshRelay !== undefined
+  const wantsUserCron = body.userCron !== undefined
+  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsVideo && !wantsVideoPreview && !wantsMilestoneDonate && !wantsMeshRelay && !wantsUserCron) {
     return NextResponse.json(
       {
         error:
-          'Provide subtopicNav, popupSystem, notifLike, videoWatch, videoPreview and/or milestoneDonate to set',
+          'Provide subtopicNav, popupSystem, notifLike, videoWatch, videoPreview, milestoneDonate, meshRelay and/or userCron to set',
       },
       { status: 400 },
     )
@@ -334,6 +384,26 @@ export async function POST(req: NextRequest) {
     console.log(`[flags] milestoneDonate set to '${milestoneDonate}' (applies to ALL users)`)
   }
 
+  if (wantsMeshRelay) {
+    const meshRelay = normalizeBooleanFlag(body.meshRelay, true)
+    const ok = await firebaseWrite(MESH_RELAY_FLAG_PATH, meshRelay)
+    if (!ok) {
+      return NextResponse.json({ error: 'Firebase write failed (meshRelay)' }, { status: 500 })
+    }
+    meshRelayMemo = { value: meshRelay, ts: Date.now() }
+    console.log(`[flags] meshRelay set to '${meshRelay}' (applies to ALL users)`)
+  }
+
+  if (wantsUserCron) {
+    const userCron = normalizeBooleanFlag(body.userCron, true)
+    const ok = await firebaseWrite(USER_CRON_FLAG_PATH, userCron)
+    if (!ok) {
+      return NextResponse.json({ error: 'Firebase write failed (userCron)' }, { status: 500 })
+    }
+    userCronMemo = { value: userCron, ts: Date.now() }
+    console.log(`[flags] userCron set to '${userCron}' (applies to ALL users)`)
+  }
+
   return NextResponse.json({
     ok: true,
     ...(wantsNav ? { subtopicNav: body.subtopicNav } : {}),
@@ -342,5 +412,7 @@ export async function POST(req: NextRequest) {
     ...(wantsVideo ? { videoWatch: normalizeBooleanFlag(body.videoWatch, true) } : {}),
     ...(wantsVideoPreview ? { videoPreview: normalizeBooleanFlag(body.videoPreview, false) } : {}),
     ...(wantsMilestoneDonate ? { milestoneDonate: normalizeBooleanFlag(body.milestoneDonate, true) } : {}),
+    ...(wantsMeshRelay ? { meshRelay: normalizeBooleanFlag(body.meshRelay, true) } : {}),
+    ...(wantsUserCron ? { userCron: normalizeBooleanFlag(body.userCron, true) } : {}),
   })
 }

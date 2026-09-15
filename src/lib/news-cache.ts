@@ -30,6 +30,8 @@
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import type { Category } from '@/lib/news-sources'
 import type { CategoryCachePayload, TopicArticle } from '@/lib/news-aggregator'
+import { MESH_PATHS, hashMeshNode, type MeshFeedNode } from '@/lib/mesh/mesh-protocol'
+import { signManifest } from '@/lib/mesh/mesh-sign'
 
 const ROOT = 'newsCache'
 const STALE_MS = 30 * 60 * 1000 // 30 minutes — for RSS categories (was 10 min)
@@ -121,6 +123,49 @@ export async function readCachedNews(
 }
 
 /**
+ * Write the server-signed mesh manifest for a room (best-effort).
+ *
+ * The P2P mesh relay (experimental, src/lib/mesh/) serves feeds peer to
+ * peer; its integrity model is this manifest: the SHA-256 of the room's
+ * SLIM cache node, signed with the mesh private key. Clients verify with
+ * the embedded public key, so even though the RTDB is public-write, no
+ * client can forge a manifest a peer will accept.
+ *
+ * MUST use the exact same slim normalization as clients (hashMeshNode →
+ * slimNodeForMesh in mesh-protocol.ts) — that function is deliberately
+ * shared so server and browser always agree byte-for-byte.
+ *
+ * Failure is silent on purpose: a missing manifest just means the mesh
+ * can't verify (clients fall back to the normal server path); it must
+ * never break a cache write.
+ */
+async function writeMeshManifest(
+  room: string,
+  payload: CategoryCachePayload,
+): Promise<void> {
+  try {
+    const node: MeshFeedNode = {
+      updatedAt: payload.updatedAt,
+      sourceCount: payload.sourceCount,
+      articleCount: payload.articleCount,
+      cacheVersion: payload.cacheVersion,
+      topics: payload.topics,
+    }
+    const hash = await hashMeshNode(node)
+    const sig = await signManifest(room, hash, payload.updatedAt, payload.cacheVersion ?? 0)
+    if (!sig) return
+    await firebaseWrite(MESH_PATHS.manifest(room), {
+      hash,
+      updatedAt: payload.updatedAt,
+      v: payload.cacheVersion ?? 0,
+      sig,
+    })
+  } catch (err) {
+    console.warn(`[news-cache] mesh manifest for ${room} failed:`, err)
+  }
+}
+
+/**
  * Write the cached payload for a category. Updates the updatedAt timestamp
  * and stamps the current CACHE_VERSION so future reads can detect when the
  * cache is from an older source set.
@@ -139,7 +184,12 @@ export async function writeCachedNews(
     topics,
     cacheVersion: CACHE_VERSION,
   }
-  return firebaseWrite(cachePath(category, country), payload)
+  const ok = await firebaseWrite(cachePath(category, country), payload)
+  if (ok) {
+    // Mesh manifest for this room (best-effort — see writeMeshManifest).
+    void writeMeshManifest(cachePath(category, country), payload)
+  }
+  return ok
 }
 
 /**

@@ -47,6 +47,16 @@ import { trackPageView } from '@/lib/analytics-tracker'
 import { reportInstallMetric, reportActiveMetric, reportAppOpenMetric } from '@/lib/pwa-metrics'
 import { gateAllows, markGate } from '@/lib/client-call-gate'
 import { usePlatform } from '@/lib/use-platform'
+// ── Experimental P2P mesh relay + user-powered cron ──
+import {
+  initMesh,
+  meshGetFeed,
+  meshHealth,
+  meshShutdown,
+  onMeshData,
+} from '@/lib/mesh/mesh-relay'
+import { meshRoomFor } from '@/lib/mesh/mesh-protocol'
+import { startUserCron, stopUserCron } from '@/lib/mesh/user-cron'
 import { NAV_STYLE_EVENT, readNavOverride, type NavMode } from '@/lib/nav-override'
 import { restoreGradient } from '@/lib/use-theme-reveal'
 import { archiveTopicsInBackground } from '@/lib/background-archiver'
@@ -276,6 +286,8 @@ export default function Home({
   initialSubtopicNav,
   popupSystem = DEFAULT_POPUP_MODE,
   milestoneDonate = true,
+  meshRelay = true,
+  userCron = true,
 }: {
   initialSubtopicNav?: NavVariant
   popupSystem?: PopupMode
@@ -283,6 +295,14 @@ export default function Home({
    *  celebration-only version — site-wide flag from /debug, read during
    *  SSR (page.tsx) so the popup opens with the right body. */
   milestoneDonate?: boolean
+  /** Experimental: P2P news relay (visitors serve each other verified
+   *  feed snapshots over WebRTC; server-signed manifests keep the data
+   *  unforgeable). Default ON; flipped from /debug. */
+  meshRelay?: boolean
+  /** Experimental: visitors run the cron schedule (RSS refresh +
+   *  notification sends trigger only while users are online, via
+   *  one-time Firebase leases). Default ON; flipped from /debug. */
+  userCron?: boolean
 }) {
   // --- Platform detection (Android / Apple / Other) ---
   // Sets body.platform-{android|apple|other} so the CSS glass rules in
@@ -322,6 +342,13 @@ export default function Home({
 
   // --- Country detection ---
   const [country, setCountry] = useState<CountryInfo | null>(null)
+
+  // ── Country ref (always-current value — read by the mesh data callback
+  //    without re-subscribing whenever the detected country changes) ──
+  const countryRef = React.useRef<CountryInfo | null>(null)
+  useEffect(() => {
+    countryRef.current = country
+  }, [country])
   // Only render time-dependent values after mount (avoids hydration mismatch
   // — server uses UTC, client uses local timezone).
   const [mounted, setMounted] = useState(false)
@@ -576,11 +603,34 @@ export default function Home({
       if (country && (category === 'relevant' || category === 'mycountry')) {
         params.set('country', country.code)
       }
-      const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
-      const json: NewsResponse = await res.json()
-      if (!res.ok || json.error) {
-        setHasMore(false)
-        return
+
+      // ── Mesh-first path (infinite scroll) ──
+      // Deeper pages slice straight out of the room's verified snapshot
+      // when it still has topics at this offset; anything beyond the
+      // node (or a mesh miss) falls through to the server as before.
+      let json: NewsResponse | null = null
+      if (
+        meshRelay &&
+        category !== 'blindspots' &&
+        (category === 'relevant' || category === 'mycountry' ? !!country : true)
+      ) {
+        const meshJson = meshGetFeed({
+          category,
+          country: country?.code ?? null,
+          limit: 24,
+          minCoverage,
+          offset,
+          slim: true,
+        })
+        if (meshJson) json = meshJson as unknown as NewsResponse
+      }
+      if (!json) {
+        const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
+        json = (await res.json()) as NewsResponse
+        if (!res.ok || json.error) {
+          setHasMore(false)
+          return
+        }
       }
       const newTopics = json.topics || []
       if (newTopics.length === 0) {
@@ -604,7 +654,7 @@ export default function Home({
     } finally {
       setLoadingMore(false)
     }
-  }, [loadingMore, hasMore, topics, olderTopics, category, minCoverage, country])
+  }, [loadingMore, hasMore, topics, olderTopics, category, minCoverage, country, meshRelay])
 
   // IntersectionObserver — triggers loadMore when sentinel is visible
   useEffect(() => {
@@ -660,6 +710,57 @@ export default function Home({
   useEffect(() => {
     topicsRef.current = topics
   }, [topics])
+
+  // ── Older-topics ref (mesh silent-swap guard: never reshuffle the feed
+  //    under a user who has scrolled into the infinite-scroll pages) ──
+  const olderTopicsRef = React.useRef<TopicArticle[]>([])
+  useEffect(() => {
+    olderTopicsRef.current = olderTopics
+  }, [olderTopics])
+
+  // ── Experimental mesh features (flags from /debug, SSR-provided) ──
+  // P2P relay: joins the feed room (category + country), elects a relay,
+  // and serves/accepts ECDSA-manifest-verified feed snapshots between
+  // visitors. Never blocks loads — it only ever REPLACES work the server
+  // would have done, and fails closed to the normal path.
+  useEffect(() => {
+    if (!meshRelay) return
+    initMesh({ enabled: true })
+    return () => meshShutdown()
+  }, [meshRelay])
+
+  // User-powered cron: this browser competes for the scheduler lease;
+  // the oldest live visitor triggers refresh/notify jobs when due.
+  useEffect(() => {
+    if (!userCron) return
+    startUserCron()
+    return () => stopUserCron()
+  }, [userCron])
+
+  // ── Mesh data subscription (the silent-swap path) ──
+  // When a VERIFIED snapshot arrives from the mesh — either relayed by a
+  // peer or read directly from Firebase by this tab acting as the room's
+  // relay — swap it into the visible feed exactly like the silent
+  // refetch does (no skeleton, no flash). Room-matched and page-1 only.
+  useEffect(() => {
+    if (!meshRelay) return
+    return onMeshData((room, node) => {
+      const cat = categoryRef.current
+      const myRoom = meshRoomFor(cat, countryRef.current?.code ?? null)
+      if (room !== myRoom) return
+      if (olderTopicsRef.current.length > 0) return
+      const topics = node.topics
+        .filter((t) => t.coverage >= 1)
+        .slice(0, 24)
+        .map((t) => ({ ...t, articles: [] }))
+      if (topics.length === 0) return
+      setTopics(topics)
+      setFetchedAt(new Date(node.updatedAt))
+      setIsCached(true)
+      setIsFresh(Date.now() - node.updatedAt < 25 * 60 * 1000)
+      setArticleCount(node.articleCount ?? 0)
+    })
+  }, [meshRelay])
 
   // --- User interests + engagement + seen-topics (for personalization) ---
   const [interests, setInterestsState] = useState<string[]>([])
@@ -1785,11 +1886,39 @@ export default function Home({
         if (country && isVirtual) {
           params.set('country', country.code)
         }
-        const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
-        const json: NewsResponse = await res.json()
-        if (reqId !== reqIdRef.current) return
-        if (!res.ok || json.error) {
-          throw new Error(json.error || `Failed (${res.status})`)
+
+        // ── Mesh-first path (experimental P2P relay) ──
+        // Try the verified peer relay BEFORE touching the server. This
+        // call is synchronous-cheap: it either returns instantly from
+        // the room's verified snapshot (zero /api/news invocation, zero
+        // Firebase feed read) or misses instantly and the normal fetch
+        // below runs — a cold load is NEVER slowed down. Virtual
+        // categories need a known country (the room key is per-country);
+        // blindspots is a cross-category view the mesh never serves.
+        let json: NewsResponse | null = null
+        const canMesh =
+          meshRelay &&
+          cat !== 'blindspots' &&
+          (isVirtual ? !!country : true)
+        if (canMesh) {
+          const meshJson = meshGetFeed({
+            category: cat,
+            country: country?.code ?? null,
+            limit: 24,
+            minCoverage: mc,
+            offset: 0,
+            slim: true,
+          })
+          if (meshJson) json = meshJson as unknown as NewsResponse
+        }
+
+        if (!json) {
+          const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
+          json = (await res.json()) as NewsResponse
+          if (reqId !== reqIdRef.current) return
+          if (!res.ok || json.error) {
+            throw new Error(json.error || `Failed (${res.status})`)
+          }
         }
         // Progressive loading: show first 5 topics immediately, then the
         // rest after a tiny delay. This makes the page feel instant —
@@ -1896,7 +2025,7 @@ export default function Home({
         if (reqId === reqIdRef.current) setLoading(false)
       }
     },
-    [],
+    [meshRelay],
   )
 
   useEffect(() => {
@@ -2011,12 +2140,24 @@ export default function Home({
   const FEED_HEAL_STALE_MS = 10 * 60 * 1000
   const feedAgeMs = fetchedAt ? Date.now() - fetchedAt.getTime() : 0
   const feedTooOld = fetchedAt !== null && feedAgeMs > FEED_HEAL_STALE_MS
+  // ── Mesh-freshness guard ──
+  // While the P2P relay holds verified data newer than its staleness
+  // horizon, the MESH owns freshness for this room (the relay polls the
+  // server-written manifest for updates and consumers push refresh-req
+  // when the node ages out) — firing this browser's own /api/refresh
+  // heal would re-add exactly the per-user invocations the mesh exists
+  // to remove. The moment the mesh is off/stale/disconnected, the heal
+  // effect resumes its normal job.
   useEffect(() => {
     if (loading) return
+    if (meshRelay && meshHealth().live) return
     if (!isFresh || feedTooOld) {
       const delay = feedTooOld && isFresh ? 3000 : 12000
       const t = setTimeout(async () => {
         try {
+          // Re-check at fire time too: the mesh may have warmed up (or
+          // relayed a fresh node) while the timer was counting down.
+          if (meshRelay && meshHealth().live) return
           const params = new URLSearchParams({
             category,
             limit: '24',
@@ -2041,7 +2182,7 @@ export default function Home({
       }, delay)
       return () => clearTimeout(t)
     }
-  }, [isFresh, loading, feedTooOld, category, minCoverage, country])
+  }, [isFresh, loading, feedTooOld, category, minCoverage, country, meshRelay])
 
   const handleClearSearch = () => {
     setSearch('')
