@@ -225,7 +225,15 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
   const [mounted, setMounted] = React.useState(false)
   React.useEffect(() => setMounted(true), [])
 
-  // Lock body scroll when open.
+  // Lock body scroll when open. On desktop this stops the wheel from
+  // scroll-chaining through the page behind; on mobile it pins the feed
+  // (scroll position + feed video state survive the read).
+  //
+  // ⚠ EXACTLY ONE lock effect may exist in this component. There used to be
+  // two: the second snapshotted `prev` AFTER the first had already set
+  // 'hidden', so on close it "restored" overflow:hidden — the homepage was
+  // left permanently frozen (the "can't scroll after closing an article"
+  // bug). This is the only place TopicDetail touches body scroll.
   React.useEffect(() => {
     document.body.style.overflow = 'hidden'
     return () => {
@@ -301,18 +309,6 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
-
-  // Lock body scroll while the reader is open. On desktop this stops the
-  // wheel from scroll-chaining through the backdrop and scrolling the feed
-  // behind the modal; on mobile it pins the feed (scroll position + feed
-  // video state survive the read). Same pattern as the Account page.
-  React.useEffect(() => {
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [])
 
   // Reset image error state when topic changes.
   React.useEffect(() => {
@@ -625,49 +621,49 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     }
   }, [summaryLoading, summaryError, summary, leftArticles.length, centerArticles.length, rightArticles.length, onReportBroken, topic.topicId, onClose])
 
-  // ── Desktop modal vs mobile sheet ──
+  // ── Desktop full page vs mobile sheet ──
   // Captured ONCE at mount (this component only renders client-side after
   // a user interaction, so window always exists). Below lg the article is
   // a full-screen opaque sheet that slides up over the feed; at lg+ it is a
-  // centered reading CARD floating on a dimmed, blurred backdrop — the
-  // desktop-native pattern (ESC / backdrop-click / pull-the-top-bar all
-  // close it).
-  const desktopModal =
+  // FULL PAGE — the article takes over the entire viewport, edge to edge,
+  // like a real news-site article page, with the content centered in a
+  // comfortable reading column. ESC / Close button / pulling the top bar
+  // down / the browser back button all close it.
+  const desktopPage =
     typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
 
   return (
-    // ── Backdrop layer ──
+    // ── Page layer ──
     // Mobile: fully transparent (no bg, no events) — the card IS the screen
     // and slides over the live feed, exactly like the old single-sheet UX.
-    // Desktop: dims + blurs the feed, centers the reading card, and closes
-    // on click. No transform/will-change here so fixed descendants (the
-    // portaled Ask-AI panel at z-[80]) can never get trapped.
+    // Desktop: the inner card fills the whole viewport as an opaque article
+    // page — no backdrop, no floating card, no dimmed feed behind it. No
+    // transform/will-change here so fixed descendants (the portaled Ask-AI
+    // panel at z-[80]) can never get trapped.
     <motion.div
-      className="fixed inset-0 z-50 lg:grid lg:place-items-center lg:overflow-hidden lg:bg-black/50 lg:p-6 lg:backdrop-blur-sm"
+      className="fixed inset-0 z-50"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.2 }}
-      onClick={desktopModal ? onClose : undefined}
     >
     <motion.div
-      className="h-full overflow-y-auto overscroll-contain bg-background lg:h-auto lg:max-h-[calc(100vh-3rem)] lg:w-full lg:max-w-3xl lg:rounded-2xl lg:border lg:shadow-2xl"
+      className="h-full overflow-y-auto overscroll-contain bg-background"
       role="dialog"
       aria-modal="true"
       aria-label={topic.title}
-      onClick={desktopModal ? (e) => e.stopPropagation() : undefined}
-      // SHEET SLIDE-UP (mobile) / CARD RISE (desktop).
+      // SHEET SLIDE-UP (mobile) / PAGE RISE (desktop).
       // Mobile: the article rises over the feed as one opaque sheet
       // (transform only — never an opacity crossfade; a screen-wide
       // half-transparent solid reads as a flash on phones). Desktop: the
-      // card fades + rises + settles with a subtle scale — the standard
-      // modal entrance, glitch-free over the blurred backdrop.
-      initial={desktopModal ? { opacity: 0, y: 28, scale: 0.97 } : { y: '100%' }}
-      animate={desktopModal ? { opacity: 1, y: 0, scale: 1 } : { y: 0 }}
-      exit={desktopModal ? { opacity: 0, y: 28, scale: 0.97 } : { y: '100%' }}
+      // full page fades + rises into place and settles — a real page
+      // transition, not a floating modal over a dimmed feed.
+      initial={desktopPage ? { opacity: 0, y: 24 } : { y: '100%' }}
+      animate={desktopPage ? { opacity: 1, y: 0 } : { y: 0 }}
+      exit={desktopPage ? { opacity: 0, y: 24 } : { y: '100%' }}
       transition={
-        desktopModal
-          ? { duration: 0.28, ease: [0.16, 1, 0.3, 1] }
+        desktopPage
+          ? { duration: 0.25, ease: [0.16, 1, 0.3, 1] }
           : { duration: 0.34, ease: [0.32, 0.72, 0, 1] }
       }
       style={{ willChange: 'transform' }}
@@ -697,7 +693,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           click normally (they never enter the drag). The little grabber
           pill at the top centre is the visual affordance. */}
       <motion.div
-        className="glass sticky top-0 z-10 border-b bg-background/95 backdrop-blur lg:rounded-t-2xl"
+        className="glass sticky top-0 z-10 border-b bg-background/95 backdrop-blur"
         style={{ touchAction: 'none', cursor: 'grab' }}
         onPointerDown={(e) => {
           // Don't hijack presses on the bar's own controls.
@@ -716,7 +712,10 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
         <div className="flex h-3 items-center justify-center lg:hidden" aria-hidden="true">
           <div className="h-1 w-9 rounded-full bg-foreground/20" />
         </div>
-        <div className="flex h-11 items-center gap-2 px-4">
+        {/* Full-page article (lg+): the glass bar spans the viewport; its
+            controls align to the SAME max-w-3xl reading column as the
+            article text below — a real article-page header. */}
+        <div className="mx-auto flex h-11 w-full max-w-3xl items-center gap-2 px-4 lg:px-6">
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5 flex-shrink-0">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>

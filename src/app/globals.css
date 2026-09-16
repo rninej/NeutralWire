@@ -1635,3 +1635,15 @@ html.nw-settled #nw-app-root {
     user-select: text;
   }
 }
+
+/* ── Cookie banner vs. full-page article ──
+   The article view is now a FULL PAGE (fixed inset-0, z-50) on desktop;
+   the cookie consent banner (z-[80]) used to float over the article's
+   bottom edge while reading. While ANY modal dialog is open (article page,
+   sources popup, Ask AI), the banner steps aside — display:none (not
+   opacity) so it never steals taps — and returns once the dialog closes,
+   still undismissed, exactly where it was. :has() is baseline in every
+   current browser (Chrome 105+, Safari 15.4+, Firefox 121+). */
+body:has([role='dialog'][aria-modal='true']) [aria-label='Cookie consent'] {
+  display: none !important;
+}

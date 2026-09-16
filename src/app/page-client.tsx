@@ -12,6 +12,7 @@ import {
   UserCircle,
   Heart,
   WifiOff,
+  ChevronRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -2655,6 +2656,7 @@ export default function Home({
                         engagement={engagement}
                         myCountryTopics={myCountryTopics}
                         onSearchClick={openSearch}
+                        onOpenCategory={(c) => setCategory(c as Category)}
                       />
                     ) : category === 'blindspots' ? (
                       /* Blindspots: per-category sections showing top blindspot stories */
@@ -3146,6 +3148,7 @@ function SectionedFeed({
   engagement,
   myCountryTopics,
   onSearchClick,
+  onOpenCategory,
 }: {
   topics: TopicArticle[]
   olderTopics: TopicArticle[]
@@ -3159,6 +3162,10 @@ function SectionedFeed({
    * /api/news?category=mycountry request. */
   myCountryTopics?: TopicArticle[]
   onSearchClick: () => void
+  /** Desktop "View all →" affordance: switches to the section's full
+   * category tab. Only passed by the Relevant tab (where sections are
+   * summaries of real tabs). */
+  onOpenCategory?: (cat: string) => void
 }) {
   // Desktop (lg+) renders a uniform 3-column magazine grid instead of the
   // mobile hero+minis layout (see the grid below).
@@ -3571,8 +3578,14 @@ function SectionedFeed({
     })
   }
 
+  // Section keys that have a full category tab — these get the desktop
+  // "View all →" link in their header (BBC's "View more" pattern).
+  const VIEW_ALL_CATS = new Set([
+    'world', 'politics', 'business', 'technology', 'science', 'health', 'mycountry',
+  ])
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 lg:space-y-12">
       {allSections.map((section, sectionIdx) => {
         const { key, label, topics: sectionTopics, isInterested } = section
         if (sectionTopics.length === 0) return null
@@ -3586,8 +3599,8 @@ function SectionedFeed({
             transition={{ duration: 0.35, delay: Math.min(sectionIdx * 0.06, 0.3), ease: [0.16, 1, 0.3, 1] }}
             className="nw-cv-section"
           >
-            <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
-              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight lg:text-xl">
+            <div className="mb-3 flex items-center justify-between gap-3 border-b-2 border-foreground/10 pb-2 lg:mb-4">
+              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight lg:text-2xl">
                 {label}
                 {isInterested && (
                   <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
@@ -3595,48 +3608,45 @@ function SectionedFeed({
                   </span>
                 )}
               </h2>
-              {/* Search button on the right of each section header (mobile only) */}
-              <button
-                type="button"
-                onClick={onSearchClick}
-                className="lg:hidden inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-[11px] font-medium"
-                aria-label="Search"
-                title="Search news"
-              >
-                <Search className="h-3.5 w-3.5" />
-                <span>Search</span>
-              </button>
-            </div>
-            {/* ── Responsive section grid ──
-                Mobile (<lg): hero full width on top, minis in 2-col below.
-                Desktop (lg+): editorial LEAD ROW (wide hero + compact rail)
-                followed by the uniform magazine grid — hierarchy first,
-                density after. The grid steps up to 4 columns at xl so cards
-                stay ~330px instead of ballooning to 460px on wide screens. */}
-            {isDesktop ? (
-              <div className="space-y-4">
-                <DesktopLeadRow
-                  lead={sectionTopics[0]}
-                  rail={sectionTopics.slice(1, 4)}
-                  onOpenDetail={onOpenDetail}
-                  onDismiss={handleDismissInSection}
-                />
-                <div className="grid grid-cols-3 gap-4 xl:grid-cols-4">
-                  {sectionTopics.slice(4, 10).map((t, i) => (
-                    <TopicCard
-                      key={t.topicId}
-                      topic={t}
-                      onOpenDetail={onOpenDetail}
-                      onDismiss={handleDismissInSection}
-                      index={i}
-                      /* Experimental video preview — every desktop magazine
-                         card has a large image, so every one arms (on scroll,
-                         throttled by the resolution semaphore). */
-                      videoPreview
-                    />
-                  ))}
-                </div>
+              <div className="flex items-center gap-2">
+                {/* "View all →" (desktop only) — jumps to this section's full
+                    category tab, like BBC's "View more". Only for sections
+                    that map to a real tab. */}
+                {onOpenCategory && VIEW_ALL_CATS.has(key) && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenCategory(key)}
+                    className="hidden lg:inline-flex items-center gap-0.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    View all
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                )}
+                {/* Search button on the right of each section header (mobile only) */}
+                <button
+                  type="button"
+                  onClick={onSearchClick}
+                  className="lg:hidden inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-[11px] font-medium"
+                  aria-label="Search"
+                  title="Search news"
+                >
+                  <Search className="h-3.5 w-3.5" />
+                  <span>Search</span>
+                </button>
               </div>
+            </div>
+            {/* ── Responsive section body ──
+                Mobile (<lg): hero full width on top, minis in 2-col below.
+                Desktop (lg+): BBC section blocks — hero card in the left
+                column (~5/12) + a 2-column grid of image + text-only tiles
+                to the right (~7/12), chunked in sevens so scrolling down a
+                sector shows ALL its news in this format. */}
+            {isDesktop ? (
+              <DesktopSectionBlocks
+                topics={sectionTopics}
+                onOpenDetail={onOpenDetail}
+                onDismiss={handleDismissInSection}
+              />
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {sectionTopics[0] && (
@@ -3722,7 +3732,7 @@ function BlindspotSectionedFeed({
   if (allSections.length === 0) return null
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 lg:space-y-12">
       {allSections.map((section, sectionIdx) => {
         const { key, label, topics: sectionTopics } = section
         if (sectionTopics.length === 0) return null
@@ -3740,8 +3750,8 @@ function BlindspotSectionedFeed({
             }}
             className="nw-cv-section"
           >
-            <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
-              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight lg:text-xl">
+            <div className="mb-3 flex items-center justify-between gap-3 border-b-2 border-foreground/10 pb-2 lg:mb-4">
+              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight lg:text-2xl">
                 {label}
                 <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                   {sectionTopics.length} blindspot{sectionTopics.length !== 1 ? 's' : ''}
@@ -3758,31 +3768,14 @@ function BlindspotSectionedFeed({
                 <span>Search</span>
               </button>
             </div>
-            {/* Same layout as SectionedFeed — desktop editorial lead row +
-                magazine grid vs mobile hero + minis. */}
+            {/* Same layout as SectionedFeed — desktop BBC section blocks
+                (hero + 2-col tile grid, chunked) vs mobile hero + minis. */}
             {isDesktop ? (
-              <div className="space-y-4">
-                <DesktopLeadRow
-                  lead={sectionTopics[0]}
-                  rail={sectionTopics.slice(1, 4)}
-                  onOpenDetail={onOpenDetail}
-                  onDismiss={onDismiss}
-                />
-                <div className="grid grid-cols-3 gap-4 xl:grid-cols-4">
-                  {sectionTopics.slice(4, 10).map((t, i) => (
-                    <TopicCard
-                      key={t.topicId}
-                      topic={t}
-                      onOpenDetail={onOpenDetail}
-                      onDismiss={onDismiss}
-                      index={i}
-                      /* Experimental video preview — every desktop
-                         magazine card (large image). */
-                      videoPreview
-                    />
-                  ))}
-                </div>
-              </div>
+              <DesktopSectionBlocks
+                topics={sectionTopics}
+                onOpenDetail={onOpenDetail}
+                onDismiss={onDismiss}
+              />
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {sectionTopics[0] && (
@@ -3820,46 +3813,96 @@ function BlindspotSectionedFeed({
 }
 
 /**
- * DesktopLeadRow — the top of every desktop feed: the section's best
- * story as a WIDE hero card (big type + two-line deck) with a fixed rail
- * of compact stories beside it. The desktop equivalent of the mobile
- * hero+minis row users love — proper news-site hierarchy instead of a
- * flat wall of identical cards. The rail ends wherever its stories end
- * (content-start): a sidebar shorter than the lead is the classic
- * editorial look, not a bug.
+ * DesktopSectionBlocks — the desktop body of every feed section. Topics are
+ * chunked into groups of 7 (1 hero + 6 tiles — mirroring the mobile
+ * 1-hero + 6-minis chunks exactly) and each chunk renders as a
+ * DesktopSectionBlock. Scrolling down a sector therefore shows ALL its
+ * news in the same BBC-style format, block after block.
  */
-function DesktopLeadRow({
-  lead,
-  rail,
+function DesktopSectionBlocks({
+  topics,
   onOpenDetail,
   onDismiss,
 }: {
-  lead: TopicArticle | undefined
-  rail: TopicArticle[]
+  topics: TopicArticle[]
   onOpenDetail: (topic: TopicArticle) => void
   onDismiss?: (topic: TopicArticle) => void
 }) {
-  if (!lead) return null
+  if (topics.length === 0) return null
+  const chunks: TopicArticle[][] = []
+  for (let i = 0; i < topics.length; i += 7) {
+    chunks.push(topics.slice(i, i + 7))
+  }
   return (
-    <div className="flex gap-4">
-      <div className="min-w-0 flex-1">
-        <TopicCard
-          key={lead.topicId}
-          topic={lead}
-          variant="hero"
+    <div className="space-y-8">
+      {chunks.map((chunk, i) => (
+        <DesktopSectionBlock
+          key={chunk[0]?.topicId || i}
+          topics={chunk}
           onOpenDetail={onOpenDetail}
           onDismiss={onDismiss}
-          index={0}
-          /* The lead story is the most valuable preview slot on desktop. */
-          videoPreview
         />
-      </div>
-      <div className="flex w-[360px] shrink-0 flex-col content-start gap-4 xl:w-[400px]">
-        {rail.slice(0, 3).map((t, i) => (
+      ))}
+    </div>
+  )
+}
+
+/**
+ * DesktopSectionBlock — ONE BBC-style block: the chunk's best story as a
+ * HERO card in the left column (~5/12 of the width) and the rest as TILE
+ * cards in a 2-column grid to the right (~7/12). Image tiles and clean
+ * text-only tiles mix naturally in the grid — the classic BBC news-card
+ * pattern — with the NeutralWire touch: every card carries the left/center/
+ * right bias bar, coverage count, and the sources|share pill.
+ *
+ * Rows are ragged (items-start, natural heights) — intentional editorial
+ * rhythm, not a bug. Only the hero arms the experimental video preview, so
+ * one block resolves at most one stream.
+ */
+function DesktopSectionBlock({
+  topics,
+  onOpenDetail,
+  onDismiss,
+}: {
+  topics: TopicArticle[]
+  onOpenDetail: (topic: TopicArticle) => void
+  onDismiss?: (topic: TopicArticle) => void
+}) {
+  if (topics.length === 0) return null
+  // Hero = the chunk's first story WITH an image (the hero needs one).
+  // The imageless top story swaps to tile position 1 — still prominent,
+  // never buried (same swap logic as the mobile chunks).
+  let list = topics
+  if (!list[0].imageUrl) {
+    const firstWithImageIdx = list.findIndex((t, i) => i >= 1 && t.imageUrl)
+    if (firstWithImageIdx > 0) {
+      list = [
+        list[firstWithImageIdx], // hero: has an image
+        list[0],                 // tile 1: the important imageless story
+        ...list.slice(1, firstWithImageIdx),
+        ...list.slice(firstWithImageIdx + 1),
+      ]
+    }
+  }
+  const [lead, ...tiles] = list
+  return (
+    <div className="grid items-start gap-x-6 gap-y-0 lg:grid-cols-[5fr_7fr]">
+      <TopicCard
+        key={lead.topicId}
+        topic={lead}
+        variant="hero"
+        onOpenDetail={onOpenDetail}
+        onDismiss={onDismiss}
+        index={0}
+        /* The hero is the block's most valuable preview slot on desktop. */
+        videoPreview
+      />
+      <div className="grid grid-cols-2 content-start items-start gap-x-6 gap-y-6">
+        {tiles.map((t, i) => (
           <TopicCard
             key={t.topicId}
             topic={t}
-            variant="mini"
+            variant="tile"
             onOpenDetail={onOpenDetail}
             onDismiss={onDismiss}
             index={i + 1}
@@ -3922,12 +3965,12 @@ function MobileTopicLayout({
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 lg:space-y-12">
       {isDesktop ? (
-        /* ── DESKTOP: ONE section — header + lead row + continuous grid.
-            (This used to render INSIDE the mobile chunks.map — every chunk
-            of 7 re-rendered the ENTIRE list, so a 60-topic feed showed the
-            same grid up to 9 times. Hoisted: rendered exactly once.) */
+        /* ── DESKTOP: ONE section — header + BBC section blocks. Every
+            chunk of 7 renders as hero-left + 2-col tile grid right, so
+            scrolling down the sector shows ALL its news in that format
+            (mirrors the mobile 1-hero + 6-minis chunks exactly). */
         <motion.section
           initial={{ opacity: 0, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
@@ -3935,36 +3978,16 @@ function MobileTopicLayout({
           transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
           className="nw-cv-section"
         >
-          <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
-            <h2 className="text-lg font-bold tracking-tight lg:text-xl">
+          <div className="mb-3 flex items-center justify-between gap-3 border-b-2 border-foreground/10 pb-2 lg:mb-4">
+            <h2 className="text-lg font-bold tracking-tight lg:text-2xl">
               {label}
             </h2>
           </div>
-          {/* Editorial LEAD ROW (wide hero + compact rail) then one
-              continuous magazine grid — 4 columns at xl so cards stay
-              ~330px wide on big screens instead of stretching. */}
-          <div className="space-y-4">
-            <DesktopLeadRow
-              lead={sorted[0]}
-              rail={sorted.slice(1, 4)}
-              onOpenDetail={onOpenDetail}
-              onDismiss={onDismiss}
-            />
-            <div className="grid grid-cols-3 gap-4 xl:grid-cols-4">
-              {sorted.slice(4).map((t, i) => (
-                <TopicCard
-                  key={t.topicId}
-                  topic={t}
-                  onOpenDetail={onOpenDetail}
-                  onDismiss={onDismiss}
-                  index={i}
-                  /* Experimental video preview — every desktop magazine
-                     card has a large image, so every one arms. */
-                  videoPreview
-                />
-              ))}
-            </div>
-          </div>
+          <DesktopSectionBlocks
+            topics={sorted}
+            onOpenDetail={onOpenDetail}
+            onDismiss={onDismiss}
+          />
         </motion.section>
       ) : (
         /* ── MOBILE: chunked 1 hero + 6 minis (unchanged, users love it). */

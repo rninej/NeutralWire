@@ -24,7 +24,7 @@ import { bumpEngagementForTopic } from '@/lib/user-interests'
 
 interface TopicCardProps {
   topic: TopicArticle
-  variant?: 'default' | 'featured' | 'compact' | 'hero' | 'mini'
+  variant?: 'default' | 'featured' | 'compact' | 'hero' | 'mini' | 'tile'
   defaultOpen?: boolean
   onOpenDetail?: (topic: TopicArticle) => void
   /** Called when the user swipes the card LEFT past the dismiss threshold
@@ -652,6 +652,71 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
       )
     }
 
+  // ── TILE variant: the BBC-style desktop section card ──
+  // Image-top 16:9 card with title + bias bar + meta row, used in the
+  // 2-column grids beside each section's hero on desktop. When the story
+  // has no image it renders as a clean TEXT-ONLY card (title + summary +
+  // meta) — the classic BBC mix of image and text-only cards in one grid.
+  // Keeps every interaction: long-press/right-click context bar, the
+  // sources|share pill, swipe-to-dismiss, click-to-open.
+  if (variant === 'tile') {
+    return wrapWithSwipe(
+      <Card
+        {...longPressHandlers}
+        className={cn(
+          'card-glass nw-noselect h-full overflow-hidden p-0 gap-0 flex flex-col',
+          onOpenDetail && 'cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-all',
+        )}
+        onClick={handleCardClick}
+      >
+        {showImage && (
+          <div className="relative w-full overflow-hidden bg-muted aspect-video">
+            <img
+              src={proxyImage(imageUrl!)}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.08]"
+              onError={() => setImgErrorMap((m) => ({ ...m, [imageUrl!]: true }))}
+            />
+            <ImageBadges />
+          </div>
+        )}
+        <div className="flex flex-1 flex-col gap-1.5 p-3 lg:p-3.5">
+          <h3
+            className={cn(
+              'font-semibold leading-snug',
+              // Image tiles: 2 lines (BBC spec). Text-only tiles: slightly
+              // bigger + a summary line where the image would sit.
+              showImage
+                ? 'text-[15px] line-clamp-2 xl:line-clamp-3'
+                : 'text-base line-clamp-3 xl:text-[17px] xl:line-clamp-4',
+            )}
+          >
+            {topic.title}
+          </h3>
+          {!showImage && topic.summary && (
+            <p className="text-[13px] leading-relaxed text-muted-foreground line-clamp-2 xl:line-clamp-3">
+              {topic.summary}
+            </p>
+          )}
+          <div className="mt-auto flex flex-col gap-1.5 pt-1.5">
+            <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[9px]">
+                {topic.coverage}src
+              </Badge>
+              <span className="truncate text-[10px] text-muted-foreground">
+                {mounted ? formatTime(topic.latestSeen) : ''}
+              </span>
+              {sourcesSharePill(true)}
+            </div>
+          </div>
+        </div>
+      </Card>,
+    )
+  }
+
   // ── HERO variant: large card with image on TOP, big title below ──
   // Used for the top story in each section. Full-width on mobile.
   const isHero = variant === 'hero'
@@ -720,7 +785,7 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
           className={cn(
             'font-bold leading-snug',
             isHero
-              ? 'text-xl sm:text-2xl lg:text-3xl lg:leading-tight'
+              ? 'text-xl sm:text-2xl lg:text-[26px] lg:leading-[1.2] xl:text-[28px]'
               : 'text-base line-clamp-3 lg:text-[17px]',
             variant === 'compact' ? 'text-sm' : '',
           )}
@@ -763,7 +828,7 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
       )}
       {topic.summary && isHero && (
         <div className="hidden px-4 pt-1 lg:block">
-          <p className="line-clamp-2 text-[15px] leading-relaxed text-muted-foreground">{topic.summary}</p>
+          <p className="line-clamp-3 text-[15px] leading-relaxed text-muted-foreground">{topic.summary}</p>
         </div>
       )}
 
