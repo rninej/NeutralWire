@@ -149,14 +149,21 @@ export function ReferralDialog({ onClose }: ReferralDialogProps) {
   }
 
   return (
+    // Desktop (lg+): centered card on a dimmed, blurred backdrop instead of
+    // a full-screen mobile takeover (ESC closes it too).
     <div
-      className="fixed inset-0 z-50 overflow-y-auto bg-background"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Refer a friend"
+      className="fixed inset-0 z-50 lg:grid lg:place-items-center lg:overflow-hidden lg:bg-black/50 lg:p-6 lg:backdrop-blur-sm"
+      onClick={onClose}
     >
+      <div
+        className="h-full overflow-y-auto bg-background lg:h-auto lg:max-h-[calc(100vh-3rem)] lg:w-full lg:max-w-2xl lg:rounded-2xl lg:border lg:shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Refer a friend"
+        onClick={(e) => e.stopPropagation()}
+      >
       {/* Top bar */}
-      <div className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
+      <div className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur lg:rounded-t-2xl">
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
@@ -289,6 +296,7 @@ export function ReferralDialog({ onClose }: ReferralDialogProps) {
           <NotificationEnabler />
         </Card>
       </div>
+    </div>
     </div>
   )
 }

@@ -702,7 +702,18 @@ class MeshRoom {
       const node = validateMeshNode(rawNode)
       if (!node) return
       const hash = await hashMeshNode(node)
-      const res = await verifyManifestForNode(this.room, manifest, hash)
+      let res = await verifyManifestForNode(this.room, manifest, hash)
+      if (!res.ok) {
+        // Node-then-manifest write race: the server writes the node FIRST
+        // and the manifest ~300ms later (writeCachedNews awaits both, but
+        // the DB sees them as two writes). If our two reads straddled a
+        // refresh (old manifest + new node), re-read the manifest once
+        // after it settles instead of logging a false mismatch and going
+        // dark for a poll cycle.
+        await new Promise((r) => setTimeout(r, 600))
+        const manifest2 = await rtdbGet<MeshManifest>(MESH_PATHS.manifest(this.room))
+        res = await verifyManifestForNode(this.room, manifest2, hash)
+      }
       if (!res.ok) {
         logMeshEvent({ type: 'verify-manifest-bad', room: this.room, detail: `relay load: ${res.reason ?? 'fail'}` })
         return

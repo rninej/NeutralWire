@@ -61,7 +61,7 @@ export function CookieConsent() {
           aria-label="Cookie consent"
           // z-[80] — above the install banner (60) and its modal (70)
           // so it can never be covered by the popup it must precede.
-          className="fixed bottom-0 left-0 right-0 z-[80] flex justify-center px-3 pb-3"
+          className="fixed bottom-0 left-0 right-0 z-[80] flex justify-center px-3 pb-3 lg:bottom-6"
         >
           <div className="w-full max-w-md rounded-2xl border bg-background p-4 shadow-2xl">
             <div className="flex items-start gap-3">

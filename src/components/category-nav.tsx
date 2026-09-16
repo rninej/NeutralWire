@@ -176,11 +176,16 @@ export function CategoryNav({
 
   const row = (
     <div className="relative">
-      {/* Scrollable chip row — scrollbar hidden; edge fades hint overflow */}
+      {/* Scrollable chip row — scrollbar hidden; edge fades hint overflow.
+          On desktop (lg+) the row WRAPS instead of overflowing: every
+          category is visible without swipe-hunting — a hidden-scroll swipe
+          row as the primary nav is a mobile pattern and read as broken
+          with a mouse. Edge fades stay mobile-only (a wrapping row never
+          scrolls). */}
       <div
         ref={scrollRef}
         onScroll={updateFades}
-        className="no-scrollbar flex items-center gap-1.5 overflow-x-auto scroll-smooth px-0.5 py-1"
+        className="no-scrollbar flex items-center gap-1.5 overflow-x-auto scroll-smooth px-0.5 py-1 lg:flex-wrap lg:overflow-x-visible"
         role="tablist"
         aria-label="News categories"
       >
@@ -199,8 +204,10 @@ export function CategoryNav({
               whileTap={{ scale: 0.94 }}
               transition={{ duration: 0.15, ease: 'easeOut' }}
               className={cn(
-                // Big touch target: 40px tall on mobile, 36px on desktop.
-                'relative inline-flex h-10 sm:h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 text-[13px] sm:text-sm font-semibold transition-colors',
+                // Big touch target: 40px tall on mobile, 36px on sm, a
+                // tighter 32px text-weight chip on desktop (fine pointer,
+                // wrap-enabled row).
+                'relative inline-flex h-10 sm:h-9 lg:h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 lg:px-3 lg:text-[13px] text-[13px] sm:text-sm font-semibold transition-colors',
                 active
                   ? 'text-background'
                   : 'text-foreground/75 hover:bg-muted hover:text-foreground',

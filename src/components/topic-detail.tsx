@@ -302,6 +302,18 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
 
+  // Lock body scroll while the reader is open. On desktop this stops the
+  // wheel from scroll-chaining through the backdrop and scrolling the feed
+  // behind the modal; on mobile it pins the feed (scroll position + feed
+  // video state survive the read). Same pattern as the Account page.
+  React.useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [])
+
   // Reset image error state when topic changes.
   React.useEffect(() => {
     setImgError(false)
@@ -613,31 +625,58 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     }
   }, [summaryLoading, summaryError, summary, leftArticles.length, centerArticles.length, rightArticles.length, onReportBroken, topic.topicId, onClose])
 
+  // ── Desktop modal vs mobile sheet ──
+  // Captured ONCE at mount (this component only renders client-side after
+  // a user interaction, so window always exists). Below lg the article is
+  // a full-screen opaque sheet that slides up over the feed; at lg+ it is a
+  // centered reading CARD floating on a dimmed, blurred backdrop — the
+  // desktop-native pattern (ESC / backdrop-click / pull-the-top-bar all
+  // close it).
+  const desktopModal =
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
+
   return (
+    // ── Backdrop layer ──
+    // Mobile: fully transparent (no bg, no events) — the card IS the screen
+    // and slides over the live feed, exactly like the old single-sheet UX.
+    // Desktop: dims + blurs the feed, centers the reading card, and closes
+    // on click. No transform/will-change here so fixed descendants (the
+    // portaled Ask-AI panel at z-[80]) can never get trapped.
     <motion.div
-      className="fixed inset-0 z-50 overflow-y-auto bg-background"
+      className="fixed inset-0 z-50 lg:grid lg:place-items-center lg:overflow-hidden lg:bg-black/50 lg:p-6 lg:backdrop-blur-sm"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      onClick={desktopModal ? onClose : undefined}
+    >
+    <motion.div
+      className="h-full overflow-y-auto overscroll-contain bg-background lg:h-auto lg:max-h-[calc(100vh-3rem)] lg:w-full lg:max-w-3xl lg:rounded-2xl lg:border lg:shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-label={topic.title}
-      // SHEET SLIDE-UP: the article rises over the feed as one opaque
-      // sheet (transform only — never an opacity crossfade). A full-
-      // screen solid div animating opacity 0→1 reads as a screen-wide
-      // flash on phones (mid-transition the whole viewport is a half-
-      // transparent solid), and the backdrop-blur top bar inside a
-      // fading parent compounds the compositing glitch. An opaque
-      // transform slide is the classic mobile article transition and
-      // is glitch-free. Exit mirrors it: the sheet glides back down
-      // (also the natural continuation of a swipe-down close).
-      initial={{ y: '100%' }}
-      animate={{ y: 0 }}
-      exit={{ y: '100%' }}
-      transition={{ duration: 0.34, ease: [0.32, 0.72, 0, 1] }}
+      onClick={desktopModal ? (e) => e.stopPropagation() : undefined}
+      // SHEET SLIDE-UP (mobile) / CARD RISE (desktop).
+      // Mobile: the article rises over the feed as one opaque sheet
+      // (transform only — never an opacity crossfade; a screen-wide
+      // half-transparent solid reads as a flash on phones). Desktop: the
+      // card fades + rises + settles with a subtle scale — the standard
+      // modal entrance, glitch-free over the blurred backdrop.
+      initial={desktopModal ? { opacity: 0, y: 28, scale: 0.97 } : { y: '100%' }}
+      animate={desktopModal ? { opacity: 1, y: 0, scale: 1 } : { y: 0 }}
+      exit={desktopModal ? { opacity: 0, y: 28, scale: 0.97 } : { y: '100%' }}
+      transition={
+        desktopModal
+          ? { duration: 0.28, ease: [0.16, 1, 0.3, 1] }
+          : { duration: 0.34, ease: [0.32, 0.72, 0, 1] }
+      }
       style={{ willChange: 'transform' }}
-      // Swipe-down-to-close: vertical drag is armed but ONLY starts from
-      // the top bar (dragListener=false; the bar calls
-      // dragControls.start on its own pointerdown). Constraints pin the
-      // sheet to the viewport with a soft bottom elastic — pulling down
-      // rubber-bands, and crossing the threshold in onDragEnd closes it.
+      // Swipe-down-to-close (mobile) / pull-the-top-bar (desktop, works
+      // with the mouse too): vertical drag is armed but ONLY starts from
+      // the top bar (dragListener=false; the bar calls dragControls.start
+      // on its own pointerdown). Constraints pin the sheet to the viewport
+      // with a soft bottom elastic — pulling down rubber-bands, and
+      // crossing the threshold in onDragEnd closes it.
       drag="y"
       dragListener={false}
       dragControls={dragControls}
@@ -658,7 +697,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           click normally (they never enter the drag). The little grabber
           pill at the top centre is the visual affordance. */}
       <motion.div
-        className="glass sticky top-0 z-10 border-b bg-background/95 backdrop-blur"
+        className="glass sticky top-0 z-10 border-b bg-background/95 backdrop-blur lg:rounded-t-2xl"
         style={{ touchAction: 'none', cursor: 'grab' }}
         onPointerDown={(e) => {
           // Don't hijack presses on the bar's own controls.
@@ -666,13 +705,15 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           dragControls.start(e)
         }}
       >
-        {/* Grabber strip — the "pull me down" affordance. The pill lives in
-            its OWN 12px row ABOVE the button row (it used to be absolutely
-            positioned at the bar's vertical centre, where the like/dislike
-            group reached the middle on narrow phones and visually collided
-            with it). 12 + 44 = 56px — the same total height the sticky-Ask-AI
-            scroll logic (rect.bottom < 56) expects. */}
-        <div className="flex h-3 items-center justify-center" aria-hidden="true">
+        {/* Grabber strip — the "pull me down" affordance (touch devices
+            only; desktop reads the bar's grab cursor + backdrop instead).
+            The pill lives in its OWN 12px row ABOVE the button row (it used
+            to be absolutely positioned at the bar's vertical centre, where
+            the like/dislike group reached the middle on narrow phones and
+            visually collided with it). 12 + 44 = 56px — the same total
+            height the sticky-Ask-AI scroll logic (rect.bottom < 56)
+            expects. */}
+        <div className="flex h-3 items-center justify-center lg:hidden" aria-hidden="true">
           <div className="h-1 w-9 rounded-full bg-foreground/20" />
         </div>
         <div className="flex h-11 items-center gap-2 px-4">
@@ -786,7 +827,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
         </div>
       </motion.div>
 
-      <div className="mx-auto max-w-3xl px-4 py-6">
+      <div className="mx-auto max-w-3xl px-4 py-6 lg:px-6 lg:py-8">
         {/* ── Auto-like confirmation banner (notification Like tap) ──
             Appears when the like button was pressed FOR the user — confirms
             what happened and that similar stories will rank higher. */}
@@ -1139,6 +1180,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           onClose={() => setAskAiOpen(false)}
         />
       )}
+    </motion.div>
     </motion.div>
   )
 }

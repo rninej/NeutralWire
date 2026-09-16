@@ -1620,3 +1620,18 @@ html.nw-settled #nw-app-root {
   -webkit-user-select: none;
   user-select: none;
 }
+
+/* ── Desktop (fine pointer) override ──
+   Touch devices keep .nw-noselect (it powers the 450ms long-press →
+   context app bar without the native text-selection callout fighting it).
+   On a mouse desktop it does nothing but frustrate: headlines/summaries
+   become selectable + copyable like every real news site, and the card's
+   click handler separately ignores clicks that end a text selection.
+   Long-press + swipe gestures are pointer-type gated in topic-card.tsx. */
+@media (hover: hover) and (pointer: fine) {
+  .nw-noselect {
+    -webkit-touch-callout: default;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}

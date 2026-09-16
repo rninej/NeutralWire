@@ -174,7 +174,7 @@ export function CardContextBar({ topic, onOpen, onClose }: CardContextBarProps) 
 
   return createPortal(
     <motion.div
-      className="fixed inset-0 z-[95] flex items-end justify-center bg-black/30 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[95] flex items-end justify-center bg-black/30 backdrop-blur-[2px] sm:items-center sm:p-6"
       onClick={onClose}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -182,7 +182,7 @@ export function CardContextBar({ topic, onOpen, onClose }: CardContextBarProps) 
       transition={{ duration: 0.18, ease: 'easeOut' }}
     >
       <motion.div
-        className="w-full max-w-2xl overflow-hidden rounded-t-2xl border-t border-border/60 bg-background/95 shadow-2xl backdrop-blur-2xl sm:mb-4 sm:rounded-2xl sm:border"
+        className="w-full max-w-2xl overflow-hidden rounded-t-2xl border-t border-border/60 bg-background/95 shadow-2xl backdrop-blur-2xl sm:rounded-2xl sm:border"
         onClick={(e) => e.stopPropagation()}
         initial={{ y: 90, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}

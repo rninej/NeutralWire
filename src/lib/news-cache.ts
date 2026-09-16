@@ -135,15 +135,24 @@ export async function readCachedNews(
  * slimNodeForMesh in mesh-protocol.ts) — that function is deliberately
  * shared so server and browser always agree byte-for-byte.
  *
+ * ⚠️ ROOM KEY PARITY (the Sep-16 incident): clients address a room as the
+ * BARE cache key (meshRoomFor → "relevant__GB"), reading the manifest at
+ * meshManifest/<room>. This function therefore MUST receive the bare key
+ * too — passing cachePath() ("newsCache/relevant__GB") wrote manifests to
+ * meshManifest/newsCache/<room> AND signed them over the wrong room
+ * string, so no relay could ever verify and every load logged
+ * "relay load: mismatch". The strip below makes both inputs identical.
+ *
  * Failure is silent on purpose: a missing manifest just means the mesh
  * can't verify (clients fall back to the normal server path); it must
  * never break a cache write.
  */
 async function writeMeshManifest(
-  room: string,
+  cachePathStr: string,
   payload: CategoryCachePayload,
 ): Promise<void> {
   try {
+    const room = cachePathStr.replace(/^newsCache\//, '')
     const node: MeshFeedNode = {
       updatedAt: payload.updatedAt,
       sourceCount: payload.sourceCount,
@@ -161,7 +170,29 @@ async function writeMeshManifest(
       sig,
     })
   } catch (err) {
-    console.warn(`[news-cache] mesh manifest for ${room} failed:`, err)
+    console.warn(`[news-cache] mesh manifest for ${cachePathStr} failed:`, err)
+  }
+}
+
+/**
+ * Re-sign + rewrite the mesh manifest for a cache room from the LIVE node
+ * (used by /api/debug/ai-fix, which patches topics directly in newsCache
+ * outside the normal refresh path — without this, every "Make AI Fix"
+ * action silently breaks manifest/hash parity for that room and its mesh
+ * relay fails closed with "relay load: mismatch" until the next refresh).
+ */
+export async function refreshMeshManifestForRoom(cacheKey: string): Promise<void> {
+  try {
+    const payload = await firebaseRead<CategoryCachePayload>(
+      cacheKey.startsWith('newsCache/') ? cacheKey : `newsCache/${cacheKey}`,
+    )
+    if (!payload || !Array.isArray(payload.topics)) return
+    await writeMeshManifest(cacheKey.replace(/^newsCache\//, ''), {
+      ...payload,
+      cacheVersion: typeof payload.cacheVersion === 'number' ? payload.cacheVersion : 0,
+    })
+  } catch {
+    // best-effort — the mesh just falls back until the next refresh
   }
 }
 
@@ -184,10 +215,14 @@ export async function writeCachedNews(
     topics,
     cacheVersion: CACHE_VERSION,
   }
-  const ok = await firebaseWrite(cachePath(category, country), payload)
+  const path = cachePath(category, country)
+  const ok = await firebaseWrite(path, payload)
   if (ok) {
-    // Mesh manifest for this room (best-effort — see writeMeshManifest).
-    void writeMeshManifest(cachePath(category, country), payload)
+    // Mesh manifest for this room — AWAITED (not void) so a serverless
+    // instance suspended right after the response can never kill the
+    // signature write mid-flight (the Sep-16 manifests-stuck-at-deploy
+    // failure mode; adds only ~200ms to a multi-second refresh).
+    await writeMeshManifest(path, payload)
   }
   return ok
 }

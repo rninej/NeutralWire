@@ -274,6 +274,14 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
     // Don't open detail if the user clicked a link or button inside the card.
     const target = e.target as HTMLElement
     if (target.closest('a, button')) return
+    // Desktop text selection: dragging across a headline then releasing
+    // still fires a click — never open the article over a selection.
+    try {
+      const sel = window.getSelection()
+      if (sel && sel.toString().length > 0) return
+    } catch {
+      /* getSelection can throw in rare embeds — ignore */
+    }
     // Don't open detail if this click came right after a LONG-PRESS — the
     // press opened the context app bar; the trailing click must not also
     // open the article (same suppression pattern as the swipe below).
@@ -298,13 +306,35 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
     onOpenDetail?.(topic)
   }
 
-  // ── Long-press detection (450ms hold) ──
+  // ── Pointer capability (computed once per card) ──
+  // Touch-like devices keep the 450ms long-press → context app bar and the
+  // swipe-to-dismiss drag. Pure-mouse desktops instead get the native
+  // RIGHT-CLICK on the card (opens the same action bar) and selectable
+  // text (see the .nw-noselect CSS override for fine pointers) — a mouse
+  // hold accidentally triggering a mobile bottom sheet was the #1 desktop
+  // complaint. `any-pointer: coarse` stays true on touch-screen laptops,
+  // so those keep every gesture. Fails OPEN (gestures armed) if matchMedia
+  // is unavailable — mobile-first.
+  const [touchCapable] = React.useState<boolean>(() => {
+    try {
+      return (
+        typeof window === 'undefined' ||
+        window.matchMedia('(any-pointer: coarse)').matches
+      )
+    } catch {
+      return true
+    }
+  })
+
+  // ── Long-press detection (450ms hold) — TOUCH / PEN only ──
   // Press-and-hold anywhere on the card surface opens the context app bar.
   // Cancelled by: pointer move >10px (scroll/swipe intent), pointerup/
   // pointercancel (tap), or framer's drag starting. The click that fires
   // after a completed long-press is suppressed by pressHappenedRef (same
   // pattern the swipe uses). Buttons/links inside the card never start a
-  // press (their taps/holds keep their own meaning).
+  // press (their taps/holds keep their own meaning). Mouse pointers never
+  // start a press — desktop right-click opens the bar instead (see
+  // handleContextMenu).
   const pressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const pressPosRef = React.useRef<{ x: number; y: number } | null>(null)
   const pressHappenedRef = React.useRef(false)
@@ -318,8 +348,9 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
   }
 
   const handlePressStart = (e: React.PointerEvent) => {
-    // Mouse: only primary button. Touch/pen: always.
-    if (e.pointerType === 'mouse' && e.button !== 0) return
+    // Touch/pen only — a mouse button hold is text-selection intent, not
+    // a long-press. (The old check only excluded non-primary buttons.)
+    if (e.pointerType === 'mouse') return
     // Don't start a press on interactive children (they own their taps).
     const target = e.target as HTMLElement
     if (target.closest('a, button, input, textarea, [role="button"]')) return
@@ -348,10 +379,19 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
 
   const handlePressEnd = () => clearPressTimer()
 
-  // Suppress the Android long-press context menu while a press is being
-  // measured (desktop right-click keeps working — it never starts a press).
+  // Right-click on a card: touch devices suppress the native menu while a
+  // long-press is being measured (Android long-press menu); pure-mouse
+  // desktops get the DESKTOP-native pattern — right-click opens the story
+  // action bar (same bar as the mobile long-press).
   const handleContextMenu = (e: React.MouseEvent) => {
-    if (pressTimerRef.current || pressHappenedRef.current) e.preventDefault()
+    if (pressTimerRef.current || pressHappenedRef.current) {
+      e.preventDefault()
+      return
+    }
+    if (!touchCapable) {
+      e.preventDefault()
+      setContextBarOpen(true)
+    }
   }
 
   const longPressHandlers = {
@@ -519,7 +559,8 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
               <ThumbsDown className="h-10 w-10 text-white" strokeWidth={2.5} />
             </motion.div>
           </motion.div>
-          {/* The draggable card.
+          {/* The draggable card (touch devices only — a mouse dragging a
+              card is text-selection intent, not a dismiss).
               - drag="x" + dragDirectionLock: only horizontal drag is allowed.
                 dragDirectionLock means once the drag starts moving
                 horizontally, it won't accidentally catch vertical scroll.
@@ -535,7 +576,7 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
               - z-10: above the glow + thumbs-down so the card sits on top. */}
           <motion.div
             ref={dragCardRef}
-            drag="x"
+            drag={touchCapable ? 'x' : false}
             dragDirectionLock
             dragConstraints={{ left: -300, right: 0 }}
             dragElastic={{ left: 0.6, right: 0 }}
@@ -599,7 +640,7 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
                 the "Sources" label shows on every size. */}
             {sourcesSharePill(true)}
           </div>
-          <h3 className="font-bold text-sm leading-tight line-clamp-3">
+          <h3 className="font-bold text-sm leading-tight line-clamp-3 lg:text-[15px]">
             {topic.title}
           </h3>
           {/* Compact bias bar — every card shows the red/blue/grey spectrum */}
@@ -678,7 +719,9 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
         <h3
           className={cn(
             'font-bold leading-snug',
-            isHero ? 'text-xl sm:text-2xl' : 'text-base line-clamp-3',
+            isHero
+              ? 'text-xl sm:text-2xl lg:text-3xl lg:leading-tight'
+              : 'text-base line-clamp-3 lg:text-[17px]',
             variant === 'compact' ? 'text-sm' : '',
           )}
         >
@@ -710,10 +753,17 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
         </div>
       )}
 
-      {/* Description (hidden for hero + compact to keep the card compact) */}
+      {/* Description (hidden for hero + compact to keep the card compact
+          on touch; the DESKTOP lead-story hero shows a two-line deck —
+          the standard news-site lead treatment) */}
       {topic.summary && variant !== 'compact' && !isHero && (
         <div className={cn('px-4', showImage && !isHero ? 'pt-3' : '')}>
-          <p className="text-sm text-muted-foreground line-clamp-3">{topic.summary}</p>
+          <p className="text-sm text-muted-foreground line-clamp-3 lg:text-[15px]">{topic.summary}</p>
+        </div>
+      )}
+      {topic.summary && isHero && (
+        <div className="hidden px-4 pt-1 lg:block">
+          <p className="line-clamp-2 text-[15px] leading-relaxed text-muted-foreground">{topic.summary}</p>
         </div>
       )}
 
@@ -729,7 +779,7 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
         <div className="mt-auto flex flex-col gap-3 p-4 pt-3">
           <BiasBar left={topic.leanLeft} center={topic.leanCenter} right={topic.leanRight} />
           <div className="flex items-center justify-between gap-2 min-w-0">
-            <span className="text-[11px] text-muted-foreground truncate">
+            <span className="text-[11px] text-muted-foreground truncate lg:text-xs">
               {total} {total === 1 ? 'article' : 'articles'} across the spectrum
             </span>
             {/* Combined Sources | Share pill — same design as the header's

@@ -2253,7 +2253,7 @@ export default function Home({
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
       >
-        <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4">
+        <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4 lg:px-6">
           <a href="/" className="flex items-center gap-2 font-bold">
             {/* Logo entrance: fade in + scale from 0.9 → 1 over 0.4s.
                 The whileHover scale-up is preserved (1.15 with a spring). */}
@@ -2349,7 +2349,7 @@ export default function Home({
             - 'tabsarrow': bold tabs + a floating (non-clickable) swipe
               hint arrow over the right edge of the row.
             - 'cardsarrow': big chips + the same floating swipe hint. */}
-        <div className="mx-auto max-w-[1440px] px-4 pb-2">
+        <div className="mx-auto max-w-[1440px] px-4 pb-2 lg:px-6">
           {subtopicNav === 'dock' ? null : subtopicNav === 'classic' ? (
             <div className="flex flex-wrap items-center gap-1">
               {PRIMARY_CATEGORIES.map((c) => (
@@ -2489,7 +2489,7 @@ export default function Home({
           it's on the outer wrapper, not on category-switch transitions
           (those are handled by the inner AnimatePresence below). */}
       <motion.main
-        className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6"
+        className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 lg:px-6 lg:py-8"
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
@@ -2768,7 +2768,7 @@ export default function Home({
         animate={{ opacity: 1 }}
         transition={{ duration: 0.5, delay: 0.15, ease: 'easeOut' }}
       >
-        <div className="mx-auto max-w-[1440px] px-4 text-center text-xs text-muted-foreground">
+        <div className="mx-auto max-w-[1440px] px-4 text-center text-xs text-muted-foreground lg:px-6">
           NeutralWire
         </div>
       </motion.footer>
@@ -3026,7 +3026,7 @@ function LoadingState() {
       </motion.div>
 
       {/* Mini card grid skeleton */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {Array.from({ length: 6 }).map((_, i) => (
           <motion.div
             key={i}
@@ -3587,7 +3587,7 @@ function SectionedFeed({
             className="nw-cv-section"
           >
             <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
-              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight">
+              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight lg:text-xl">
                 {label}
                 {isInterested && (
                   <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
@@ -3609,25 +3609,33 @@ function SectionedFeed({
             </div>
             {/* ── Responsive section grid ──
                 Mobile (<lg): hero full width on top, minis in 2-col below.
-                Desktop (lg+): uniform 3-column magazine grid of full cards
-                (image + summary + bias bar). The old hero+row-span-3 grid
-                stretched the minis and left large dead gaps on wide
-                screens — uniform cards align cleanly at any width. */}
+                Desktop (lg+): editorial LEAD ROW (wide hero + compact rail)
+                followed by the uniform magazine grid — hierarchy first,
+                density after. The grid steps up to 4 columns at xl so cards
+                stay ~330px instead of ballooning to 460px on wide screens. */}
             {isDesktop ? (
-              <div className="grid grid-cols-3 gap-4">
-                {sectionTopics.slice(0, 9).map((t, i) => (
-                  <TopicCard
-                    key={t.topicId}
-                    topic={t}
-                    onOpenDetail={onOpenDetail}
-                    onDismiss={handleDismissInSection}
-                    index={i}
-                    /* Experimental video preview — every desktop magazine
-                       card has a large image, so every one arms (on scroll,
-                       throttled by the resolution semaphore). */
-                    videoPreview
-                  />
-                ))}
+              <div className="space-y-4">
+                <DesktopLeadRow
+                  lead={sectionTopics[0]}
+                  rail={sectionTopics.slice(1, 4)}
+                  onOpenDetail={onOpenDetail}
+                  onDismiss={handleDismissInSection}
+                />
+                <div className="grid grid-cols-3 gap-4 xl:grid-cols-4">
+                  {sectionTopics.slice(4, 10).map((t, i) => (
+                    <TopicCard
+                      key={t.topicId}
+                      topic={t}
+                      onOpenDetail={onOpenDetail}
+                      onDismiss={handleDismissInSection}
+                      index={i}
+                      /* Experimental video preview — every desktop magazine
+                         card has a large image, so every one arms (on scroll,
+                         throttled by the resolution semaphore). */
+                      videoPreview
+                    />
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -3733,7 +3741,7 @@ function BlindspotSectionedFeed({
             className="nw-cv-section"
           >
             <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
-              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight">
+              <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight lg:text-xl">
                 {label}
                 <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                   {sectionTopics.length} blindspot{sectionTopics.length !== 1 ? 's' : ''}
@@ -3750,22 +3758,30 @@ function BlindspotSectionedFeed({
                 <span>Search</span>
               </button>
             </div>
-            {/* Same layout as SectionedFeed — desktop magazine grid vs
-                mobile hero + minis. */}
+            {/* Same layout as SectionedFeed — desktop editorial lead row +
+                magazine grid vs mobile hero + minis. */}
             {isDesktop ? (
-              <div className="grid grid-cols-3 gap-4">
-                {sectionTopics.slice(0, 9).map((t, i) => (
-                  <TopicCard
-                    key={t.topicId}
-                    topic={t}
-                    onOpenDetail={onOpenDetail}
-                    onDismiss={onDismiss}
-                    index={i}
-                    /* Experimental video preview — every desktop
-                       magazine card (large image). */
-                    videoPreview
-                  />
-                ))}
+              <div className="space-y-4">
+                <DesktopLeadRow
+                  lead={sectionTopics[0]}
+                  rail={sectionTopics.slice(1, 4)}
+                  onOpenDetail={onOpenDetail}
+                  onDismiss={onDismiss}
+                />
+                <div className="grid grid-cols-3 gap-4 xl:grid-cols-4">
+                  {sectionTopics.slice(4, 10).map((t, i) => (
+                    <TopicCard
+                      key={t.topicId}
+                      topic={t}
+                      onOpenDetail={onOpenDetail}
+                      onDismiss={onDismiss}
+                      index={i}
+                      /* Experimental video preview — every desktop
+                         magazine card (large image). */
+                      videoPreview
+                    />
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -3799,6 +3815,57 @@ function BlindspotSectionedFeed({
           </motion.section>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * DesktopLeadRow — the top of every desktop feed: the section's best
+ * story as a WIDE hero card (big type + two-line deck) with a fixed rail
+ * of compact stories beside it. The desktop equivalent of the mobile
+ * hero+minis row users love — proper news-site hierarchy instead of a
+ * flat wall of identical cards. The rail ends wherever its stories end
+ * (content-start): a sidebar shorter than the lead is the classic
+ * editorial look, not a bug.
+ */
+function DesktopLeadRow({
+  lead,
+  rail,
+  onOpenDetail,
+  onDismiss,
+}: {
+  lead: TopicArticle | undefined
+  rail: TopicArticle[]
+  onOpenDetail: (topic: TopicArticle) => void
+  onDismiss?: (topic: TopicArticle) => void
+}) {
+  if (!lead) return null
+  return (
+    <div className="flex gap-4">
+      <div className="min-w-0 flex-1">
+        <TopicCard
+          key={lead.topicId}
+          topic={lead}
+          variant="hero"
+          onOpenDetail={onOpenDetail}
+          onDismiss={onDismiss}
+          index={0}
+          /* The lead story is the most valuable preview slot on desktop. */
+          videoPreview
+        />
+      </div>
+      <div className="flex w-[360px] shrink-0 flex-col content-start gap-4 xl:w-[400px]">
+        {rail.slice(0, 3).map((t, i) => (
+          <TopicCard
+            key={t.topicId}
+            topic={t}
+            variant="mini"
+            onOpenDetail={onOpenDetail}
+            onDismiss={onDismiss}
+            index={i + 1}
+          />
+        ))}
+      </div>
     </div>
   )
 }
@@ -3856,40 +3923,35 @@ function MobileTopicLayout({
 
   return (
     <div className="space-y-8">
-      {chunks.map((chunk, chunkIdx) => (
+      {isDesktop ? (
+        /* ── DESKTOP: ONE section — header + lead row + continuous grid.
+            (This used to render INSIDE the mobile chunks.map — every chunk
+            of 7 re-rendered the ENTIRE list, so a 60-topic feed showed the
+            same grid up to 9 times. Hoisted: rendered exactly once.) */
         <motion.section
-          key={chunkIdx}
           initial={{ opacity: 0, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-40px' }}
-          transition={{ duration: 0.35, delay: Math.min(chunkIdx * 0.06, 0.3), ease: [0.16, 1, 0.3, 1] }}
+          transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
           className="nw-cv-section"
         >
-          {chunkIdx === 0 && (
-            <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
-              <h2 className="text-lg font-bold tracking-tight">
-                {label}
-              </h2>
-              {/* Search button on the right of the section header (mobile only) */}
-              <button
-                type="button"
-                onClick={onSearchClick}
-                className="lg:hidden inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-[11px] font-medium"
-                aria-label="Search"
-                title="Search news"
-              >
-                <Search className="h-3.5 w-3.5" />
-                <span>Search</span>
-              </button>
-            </div>
-          )}
-          {/* ── Responsive grid ──
-              Mobile: 1 hero + 6 minis per chunk (unchanged, users love it).
-              Desktop: one continuous uniform 3-column magazine grid of
-              full cards — no chunks, no stretching, clean alignment. */}
-          {isDesktop ? (
-            <div className="grid grid-cols-3 gap-4">
-              {sorted.map((t, i) => (
+          <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
+            <h2 className="text-lg font-bold tracking-tight lg:text-xl">
+              {label}
+            </h2>
+          </div>
+          {/* Editorial LEAD ROW (wide hero + compact rail) then one
+              continuous magazine grid — 4 columns at xl so cards stay
+              ~330px wide on big screens instead of stretching. */}
+          <div className="space-y-4">
+            <DesktopLeadRow
+              lead={sorted[0]}
+              rail={sorted.slice(1, 4)}
+              onOpenDetail={onOpenDetail}
+              onDismiss={onDismiss}
+            />
+            <div className="grid grid-cols-3 gap-4 xl:grid-cols-4">
+              {sorted.slice(4).map((t, i) => (
                 <TopicCard
                   key={t.topicId}
                   topic={t}
@@ -3902,7 +3964,37 @@ function MobileTopicLayout({
                 />
               ))}
             </div>
-          ) : (
+          </div>
+        </motion.section>
+      ) : (
+        /* ── MOBILE: chunked 1 hero + 6 minis (unchanged, users love it). */
+        chunks.map((chunk, chunkIdx) => (
+          <motion.section
+            key={chunkIdx}
+            initial={{ opacity: 0, y: 12 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: '-40px' }}
+            transition={{ duration: 0.35, delay: Math.min(chunkIdx * 0.06, 0.3), ease: [0.16, 1, 0.3, 1] }}
+            className="nw-cv-section"
+          >
+            {chunkIdx === 0 && (
+              <div className="mb-3 flex items-center justify-between border-b-2 border-foreground/10 pb-2">
+                <h2 className="text-lg font-bold tracking-tight lg:text-xl">
+                  {label}
+                </h2>
+                {/* Search button on the right of the section header (mobile only) */}
+                <button
+                  type="button"
+                  onClick={onSearchClick}
+                  className="lg:hidden inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-[11px] font-medium"
+                  aria-label="Search"
+                  title="Search news"
+                >
+                  <Search className="h-3.5 w-3.5" />
+                  <span>Search</span>
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {chunk[0] && (
                 <div className="sm:col-span-2">
@@ -3931,9 +4023,9 @@ function MobileTopicLayout({
                 />
               ))}
             </div>
-          )}
-        </motion.section>
-      ))}
+          </motion.section>
+        ))
+      )}
     </div>
   )
 }

@@ -372,7 +372,7 @@ export function PwaInstallPromptLegacy({
   // ── "Installed!" confirmation toast ──
   if (showInstalledToast) {
     return (
-      <div className="fixed bottom-4 left-4 right-4 z-[70] mx-auto max-w-sm rounded-xl border-2 border-emerald-400 bg-background p-4 shadow-lg">
+      <div className="fixed bottom-4 left-4 right-4 z-[70] mx-auto max-w-sm rounded-xl border-2 border-emerald-400 bg-background p-4 shadow-lg lg:bottom-6">
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white">
             <CheckCircle2 className="h-5 w-5" />
@@ -508,7 +508,7 @@ export function PwaInstallPromptLegacy({
   // handler — this is the user gesture that satisfies the browser's
   // activation requirement and avoids "unsafe app" warnings.
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-[60] mx-auto max-w-sm rounded-xl border-2 border-transparent bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 p-[2px] shadow-lg">
+    <div className="fixed bottom-4 left-4 right-4 z-[60] mx-auto max-w-sm rounded-xl border-2 border-transparent bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 p-[2px] shadow-lg lg:bottom-6">
       <div className="rounded-[10px] bg-background p-4">
         <div className="flex items-start gap-3">
           {/* Install icon — clickable, also triggers install */}
@@ -585,7 +585,7 @@ function InstallInstructionsModal({
   onDismiss: () => void
 }) {
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[70] flex justify-center px-3 pb-3 pointer-events-none">
+    <div className="fixed bottom-0 left-0 right-0 z-[70] flex justify-center px-3 pb-3 pointer-events-none lg:bottom-6">
       <div
         className="pointer-events-auto w-full max-w-md rounded-2xl border bg-background shadow-2xl overflow-hidden"
         style={{

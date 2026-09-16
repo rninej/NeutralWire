@@ -101,7 +101,7 @@ export function IosNotificationPrompt() {
   if (!show || granted) return null
 
   return (
-    <div className="fixed inset-x-0 top-0 z-[60] p-4">
+    <div className="fixed inset-x-0 top-0 z-[60] p-4 lg:top-4">
       <div className="mx-auto max-w-md rounded-xl border-2 border-foreground/20 bg-background p-4 shadow-xl">
         <div className="flex items-start gap-3">
           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-foreground text-background">

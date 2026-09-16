@@ -13,6 +13,7 @@ import {
 } from '@/lib/news-aggregator'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import { writeSearchIndexEntry } from '@/lib/search-index'
+import { refreshMeshManifestForRoom } from '@/lib/news-cache'
 import type { TopicArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
@@ -142,6 +143,10 @@ async function patchTopicEverywhere(
       })
       if (changed) {
         await firebaseWrite(`newsCache/${key}`, { ...payload, topics })
+        // Keep the server-signed mesh manifest in sync with the patched
+        // node — otherwise the room's P2P relay fails closed (hash
+        // mismatch) until the next full refresh.
+        await refreshMeshManifestForRoom(key)
       }
     } catch {
       // continue

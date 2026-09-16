@@ -396,7 +396,7 @@ export function PwaInstallPrompt({
   // ── "Installed!" confirmation toast ──
   if (showInstalledToast) {
     return (
-      <div className="fixed bottom-4 left-4 right-4 z-[70] mx-auto max-w-sm rounded-xl border-2 border-emerald-400 bg-background p-4 shadow-lg">
+      <div className="fixed bottom-4 left-4 right-4 z-[70] mx-auto max-w-sm rounded-xl border-2 border-emerald-400 bg-background p-4 shadow-lg lg:bottom-6">
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white">
             <CheckCircle2 className="h-5 w-5" />
@@ -430,7 +430,7 @@ export function PwaInstallPrompt({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: '110%', opacity: 0 }}
           transition={{ type: 'spring', stiffness: 380, damping: 38 }}
-          className="fixed bottom-0 left-0 right-0 z-[70] flex justify-center px-3 pb-3"
+          className="fixed bottom-0 left-0 right-0 z-[70] flex justify-center px-3 pb-3 lg:bottom-6"
         >
           <div className="w-full max-w-md overflow-hidden rounded-3xl border bg-background shadow-2xl">
           {/* Top row: phone mock + headline (the endowment visual) */}

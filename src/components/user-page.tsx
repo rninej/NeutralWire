@@ -359,19 +359,32 @@ export function UserPage({ onClose }: UserPageProps) {
   }
 
   return (
+    // ── Backdrop + centered card (desktop) / full-screen sheet (mobile) ──
+    // Same pattern as the article view: below lg this is an opaque
+    // full-screen takeover; at lg+ it floats as a rounded card on a dimmed,
+    // blurred backdrop (ESC closes it too).
+    <motion.div
+      className="fixed inset-0 z-50 lg:grid lg:place-items-center lg:overflow-hidden lg:bg-black/50 lg:p-6 lg:backdrop-blur-sm"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      onClick={onClose}
+    >
     <motion.div
       ref={pageRef}
-      className="fixed inset-0 z-50 overflow-y-auto bg-background"
+      className="h-full overflow-y-auto bg-background lg:h-auto lg:max-h-[calc(100vh-3rem)] lg:w-full lg:max-w-2xl lg:rounded-2xl lg:border lg:shadow-2xl"
       role="dialog"
       aria-modal="true"
       aria-label="Account"
+      onClick={(e) => e.stopPropagation()}
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 24 }}
       transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
     >
       {/* Sticky top bar */}
-      <div className="glass sticky top-0 z-20 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
+      <div className="glass sticky top-0 z-20 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur lg:rounded-t-2xl">
         <Button variant="ghost" size="sm" onClick={onClose} className="gap-1.5 flex-shrink-0">
           <X className="h-4 w-4" />
           <span className="hidden sm:inline">Close</span>
@@ -806,6 +819,7 @@ export function UserPage({ onClose }: UserPageProps) {
           </motion.div>
         </AnimatePresence>
       </div>
+    </motion.div>
     </motion.div>
   )
 }
