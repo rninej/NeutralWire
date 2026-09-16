@@ -359,6 +359,50 @@ export default function DebugPage() {
     if (authed && passwordRef.current) fetchMeshLogs()
   }, [authed, fetchMeshLogs])
 
+  // ── Firebase Bandwidth monitor (Sep 2026 ETag fix observability) ──
+  // /api/fb-stats reports the warm server instance's live counters:
+  // real downloads, bytes SAVED via zero-byte 304 conditional reads,
+  // hit ratio and the most recent Firebase operations. Poll every 5s.
+  interface FbStats {
+    sessionId: string
+    sessionDownloadBytes: number
+    sessionSavedBytes: number
+    etag304Hits: number
+    etagCacheEntries: number
+    etagCacheBytes: number
+    sessionOps: number
+    recentOps: Array<{ path: string; method: string; bytes: number; ts: number }>
+  }
+  const [fbStats, setFbStats] = React.useState<FbStats | null>(null)
+
+  React.useEffect(() => {
+    if (!authed) return
+    let alive = true
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/fb-stats', { cache: 'no-store' })
+        if (res.ok) {
+          const json = (await res.json()) as FbStats
+          if (alive) setFbStats(json)
+        }
+      } catch {
+        // silent — next tick retries
+      }
+    }
+    void poll()
+    const t = setInterval(poll, 5000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [authed])
+
+  const fmtBytes = (n: number): string => {
+    if (n < 1024) return `${n} B`
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+    return `${(n / 1024 / 1024).toFixed(2)} MB`
+  }
+
   // ── Push diagnostics (existing debug page content) ──
   const [deviceId, setDeviceId] = React.useState('')
   const [report, setReport] = React.useState<CheckResult[]>([])
@@ -1800,6 +1844,87 @@ export default function DebugPage() {
                 </tbody>
               </table>
             </div>
+          )}
+        </Card>
+
+        {/* ── Firebase Bandwidth (ETag conditional-read savings) ── */}
+        <Card className="mb-6 p-4 md:p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <h2 className="text-base font-bold">Firebase Bandwidth</h2>
+            <span className="text-xs text-muted-foreground">
+              warm instance · refreshes every 5s
+              {fbStats ? ` · session ${fbStats.sessionId}` : ''}
+            </span>
+          </div>
+          {!fbStats ? (
+            <p className="text-sm text-muted-foreground">Loading instance stats…</p>
+          ) : (
+            <>
+              <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="rounded-lg border p-3">
+                  <div className="text-xs text-muted-foreground">Downloaded</div>
+                  <div className="text-lg font-bold">{fmtBytes(fbStats.sessionDownloadBytes)}</div>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <div className="text-xs text-muted-foreground">Saved via 304s</div>
+                  <div className="text-lg font-bold text-emerald-500">
+                    {fmtBytes(fbStats.sessionSavedBytes)}
+                  </div>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <div className="text-xs text-muted-foreground">304 hits</div>
+                  <div className="text-lg font-bold">{fbStats.etag304Hits}</div>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <div className="text-xs text-muted-foreground">Hit ratio</div>
+                  <div className="text-lg font-bold">
+                    {fbStats.etag304Hits + (fbStats.sessionOps - fbStats.etag304Hits) > 0
+                      ? Math.round(
+                          (fbStats.etag304Hits /
+                            Math.max(1, fbStats.etag304Hits + fbStats.sessionOps)) *
+                            100,
+                        ) + '%'
+                      : '—'}
+                  </div>
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground mb-2">
+                ETag cache: {fbStats.etagCacheEntries} paths · {fmtBytes(fbStats.etagCacheBytes)}
+                cached · {fbStats.sessionOps} ops this instance
+              </div>
+              {fbStats.recentOps.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b text-left text-muted-foreground">
+                        <th className="px-2 py-1">op</th>
+                        <th className="px-2 py-1">path</th>
+                        <th className="px-2 py-1">bytes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fbStats.recentOps.slice(-8).reverse().map((op, i) => (
+                        <tr key={i} className="border-b border-border/40">
+                          <td
+                            className={`whitespace-nowrap px-2 py-1 font-mono ${
+                              op.method === 'GET304' ? 'text-emerald-500' : ''
+                            }`}
+                          >
+                            {op.method}
+                          </td>
+                          <td className="px-2 py-1 font-mono text-muted-foreground truncate max-w-[280px]">
+                            {op.path}
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-1 font-mono">
+                            {op.method === 'GET304' ? '0 (saved)' : fmtBytes(op.bytes)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
         </Card>
 

@@ -626,7 +626,13 @@ export default function Home({
         if (meshJson) json = meshJson as unknown as NewsResponse
       }
       if (!json) {
-        const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
+        // NOTE: no `cache: 'no-store'` here ON PURPOSE (Sep 2026 bandwidth
+        // fix): request-level no-store bypasses the Vercel CDN, so every
+        // scroll page hit the function + re-read the full 130-330KB room
+        // from Firebase. The route's response carries
+        // `s-maxage=300, stale-while-revalidate=600` — the CDN absorbs
+        // repeat traffic and the SW keeps its own 5-min freshness policy.
+        const res = await fetch(`/api/news?${params.toString()}`)
         json = (await res.json()) as NewsResponse
         if (!res.ok || json.error) {
           setHasMore(false)
@@ -1033,7 +1039,10 @@ export default function Home({
         }
 
         try {
-          const topicRes = await fetch(`/api/topic/${topicId}`, { cache: 'no-store' })
+          // Archive hits are CDN-cached for 24h by the route — no
+          // `no-store` (it would bypass the CDN and re-read Firebase on
+          // every retry; 404s are never cached so retries still work).
+          const topicRes = await fetch(`/api/topic/${topicId}`)
           if (!topicRes.ok) {
             // 404 = topic doesn't exist at all, stop retrying
             if (topicRes.status === 404) {
@@ -1914,7 +1923,15 @@ export default function Home({
         }
 
         if (!json) {
-          const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
+          // No `cache: 'no-store'` here ON PURPOSE (Sep 2026 bandwidth
+          // fix): request-level no-store bypassed the Vercel CDN, so
+          // EVERY page load / category switch re-ran the function and
+          // re-downloaded the full 130-330KB room from Firebase. The
+          // route's `s-maxage=300` CDN cache now engages; the SW keeps
+          // its own network-first-with-5-min-revalidate policy on top,
+          // and the stale-feed heal effect (below) still force-refreshes
+          // anything older than 10 minutes.
+          const res = await fetch(`/api/news?${params.toString()}`)
           json = (await res.json()) as NewsResponse
           if (reqId !== reqIdRef.current) return
           if (!res.ok || json.error) {
@@ -1949,13 +1966,12 @@ export default function Home({
         }
 
         // ── Background: archive all topics so sources persist forever ──
-        // The client sends each topic to /api/archive-topic which saves
-        // the full topic (with articles) to Firebase. This runs on the
-        // user's device — spreads work across users, saves Vercel CPU.
-        // Only archives topics that haven't been archived yet (tracked
-        // in localStorage). The visitor's country is sent along so the
-        // server can search their relevant__CC / mycountry__CC caches.
-        archiveTopicsInBackground(allTopics, country?.code)
+        // ONE batch call per feed load: the server reads the room once
+        // (ETag-cached), finds which topics are missing from the archive,
+        // and writes trimmed permanent copies. (The OLD per-topic loop
+        // re-downloaded the whole feed room per topic — a top driver of
+        // the 6.2GB/month Firebase bill.)
+        archiveTopicsInBackground(allTopics, country?.code, cat)
 
         // If there's a ?topic= URL param (from a shared link), auto-open
         // that topic's detail view.
@@ -1969,7 +1985,7 @@ export default function Home({
           } else {
             // Search ALL categories via API.
             try {
-              const topicRes = await fetch(`/api/topic/${topicParam}`, { cache: 'no-store' })
+              const topicRes = await fetch(`/api/topic/${topicParam}`)
               if (topicRes.ok) {
                 const topicJson = await topicRes.json()
                 if (topicJson.topic) handleOpenDetailRef.current?.(topicJson.topic)
@@ -1995,7 +2011,7 @@ export default function Home({
               slim: '1',
               country: country.code,
             })
-            const mcRes = await fetch(`/api/news?${mcParams.toString()}`, { cache: 'no-store' })
+            const mcRes = await fetch(`/api/news?${mcParams.toString()}`)
             if (mcRes.ok) {
               const mcJson: NewsResponse = await mcRes.json()
               if (reqId === reqIdRef.current && mcJson.topics) {
@@ -3259,7 +3275,11 @@ function SectionedFeed({
                 minCoverage: '1',
                 slim: '1',
               })
-              const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' })
+              // No `no-store` (Sep 2026 fix): this desktop-sections
+              // prefetch fires for ~7 categories on EVERY page load —
+              // with no-store it bypassed the CDN and re-downloaded all
+              // 7 full rooms (~630KB) from Firebase per visitor.
+              const res = await fetch(`/api/news?${params.toString()}`)
               if (!res.ok) return { cat, topics: [] }
               const json = await res.json()
               return { cat, topics: (json.topics || []) as TopicArticle[] }

@@ -36,11 +36,13 @@
  * All matching is LOWERCASED on both sides — case never matters.
  */
 
-import { firebaseRead, firebasePatch } from '@/lib/firebase-server'
+import { firebaseRead, firebasePatch, firebaseReadShallow } from '@/lib/firebase-server'
 import type { TopicArticle } from '@/lib/news-aggregator'
 
 const DB_URL =
   'https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app'
+// (kept only for reference/backfill internals; all reads now go through
+// firebase-server's ETag-cached helpers)
 
 /** Compact index entry. Short keys keep the node small. */
 export interface SearchIndexEntry {
@@ -121,31 +123,15 @@ export async function writeSearchIndexEntry(topic: TopicArticle): Promise<boolea
 let archiveKeyMemo: { ids: string[] | null; ts: number } | null = null
 const ARCHIVE_KEY_TTL_MS = 2 * 60 * 1000
 
-/** Shallow-list ALL archive topic ids (~1 byte/key — tiny). */
+/** Shallow-list ALL archive topic ids (bytes, not topics; ETag-cached —
+ * repeat listings of an unchanged archive are zero-byte 304s). */
 export async function listArchiveIds(): Promise<string[]> {
   if (archiveKeyMemo && Date.now() - archiveKeyMemo.ts < ARCHIVE_KEY_TTL_MS) {
     return archiveKeyMemo.ids ?? []
   }
-  let ids: string[] | null = null
-  try {
-    const controller = new AbortController()
-    const t = setTimeout(() => controller.abort(), 6000)
-    const res = await fetch(`${DB_URL}/archive.json?shallow=true`, {
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-    clearTimeout(t)
-    if (res.ok) {
-      const text = await res.text()
-      if (text && text !== 'null') {
-        ids = Object.keys(JSON.parse(text) as Record<string, unknown>)
-      }
-    }
-  } catch {
-    // fall through — empty list
-  }
-  archiveKeyMemo = { ids, ts: Date.now() }
-  return ids ?? []
+  const ids = await firebaseReadShallow('archive')
+  archiveKeyMemo = { ids: ids.length > 0 ? ids : null, ts: Date.now() }
+  return ids
 }
 
 /**

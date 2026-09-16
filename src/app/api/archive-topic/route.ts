@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import { writeSearchIndexEntry } from '@/lib/search-index'
+import { trimTopicForArchive } from '@/lib/topic-archive'
 import type { TopicArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
@@ -60,9 +61,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Topic not found in cache' }, { status: 404 })
     }
 
-    // 4. Write to archive (permanent storage with articles)
+    // 4. Write to archive (permanent storage with articles — trimmed:
+    // 12 articles / 300-char descriptions, see topic-archive.ts).
+    // Legacy per-topic endpoint — the batch client now uses
+    // /api/archive-batch; this one keeps working for old service workers.
     await firebaseWrite(`archive/${topicId}`, {
-      ...topicToArchive,
+      ...trimTopicForArchive(topicToArchive),
       archivedAt: Date.now(),
     })
 

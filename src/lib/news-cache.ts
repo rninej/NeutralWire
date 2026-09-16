@@ -28,6 +28,7 @@
  */
 
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { writeTopicIndex } from '@/lib/topic-lookup'
 import type { Category } from '@/lib/news-sources'
 import type { CategoryCachePayload, TopicArticle } from '@/lib/news-aggregator'
 import { MESH_PATHS, hashMeshNode, type MeshFeedNode } from '@/lib/mesh/mesh-protocol'
@@ -223,6 +224,14 @@ export async function writeCachedNews(
     // signature write mid-flight (the Sep-16 manifests-stuck-at-deploy
     // failure mode; adds only ~200ms to a multi-second refresh).
     await writeMeshManifest(path, payload)
+    // Topic index (topicId → room) — AWAITED alongside the manifest.
+    // This is what makes findTopicAnywhere O(1): shared-link page loads,
+    // og-image bot crawls and /api/topic lookups resolve with ONE ~30B
+    // index read + ONE room read (ETag-cached) instead of scanning up to
+    // 48 rooms (up to 6.44MB per lookup — a top driver of the 6.2GB/month
+    // Firebase download bill). One small PATCH (~1-2KB) per refresh.
+    const room = path.replace(/^newsCache\//, '')
+    await writeTopicIndex(room, topics)
   }
   return ok
 }

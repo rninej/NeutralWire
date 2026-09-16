@@ -11,24 +11,28 @@
  * link whose topic lived in an unchecked key produced NO og:title and NO
  * og:image card (the exact bug reported for ?topic=a7ocn3u).
  *
- * This module fixes it structurally:
- *   1. It lists the newsCache keys LIVE (`?shallow=true` — key names only,
- *      ~200 bytes) so new country/category keys are always covered.
- *      No hardcoded key list to go stale again.
- *   2. It ARCHIVES the topic the moment any server finds it
+ * This module fixes it structurally — and (Sep 2026, the 6.2GB/month
+ * bandwidth fix) CHEAPLY:
+ *   1. It checks the topic ARCHIVE first (`archive/<topicId>` — tiny).
+ *   2. It checks the TOPIC INDEX (`topicIndex/<topicId> = room` — ~30
+ *      bytes) written at every cache refresh, then reads that ONE room
+ *      (usually an ETag 304 → zero bytes). Previously this step was a
+ *      FULL SCAN of up to 48 rooms × 130-330KB = up to 6.44MB PER
+ *      LOOKUP — paid by page.tsx generateMetadata, /api/og-image (every
+ *      social-bot crawl of a shared link), /api/summary and /api/video.
+ *   3. It ARCHIVES the topic the moment any server finds it
  *      (archive/<topicId>), so the topic becomes permanently findable —
- *      even after it rotates out of the live cache. "Prevent it from ever
- *      happening again" = once seen, never lost.
- *   3. Every consumer imports this one function, so lookups can never
- *      drift apart again.
+ *      even after it rotates out of the live cache.
+ *   4. The legacy full scan remains as the fallback for pre-index
+ *      topics — and self-heals the index for every room it touches.
+ * Every consumer imports this one function, so lookups can never drift
+ * apart again.
  */
 
-import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { firebaseRead, firebaseReadShallow, firebaseWrite, firebasePatch } from '@/lib/firebase-server'
 import { writeSearchIndexEntry } from '@/lib/search-index'
+import { trimTopicForArchive } from '@/lib/topic-archive'
 import type { TopicArticle } from '@/lib/news-aggregator'
-
-const DB_URL =
-  'https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app'
 
 /** Keys we check FIRST (cheapest + most likely), before the live listing. */
 const PRIORITY_KEYS = ['top', 'relevant', 'world', 'politics', 'relevant__INT']
@@ -43,38 +47,63 @@ const archivedKnown = new Set<string>()
 const knownMissing = new Map<string, number>()
 const MISSING_TTL_MS = 30 * 1000
 
+// ── topicIndex: topicId → room (written at refresh; heals lookups) ──
+const TOPIC_INDEX = 'topicIndex'
+
+/**
+ * Which live room holds this topic? ONE ~30-byte read.
+ * Returns null for unknown/pre-index topics (caller falls back).
+ */
+async function roomForTopic(topicId: string): Promise<string | null> {
+  try {
+    const room = await firebaseRead<string>(`${TOPIC_INDEX}/${topicId}`)
+    // A stale index entry can point at a room string we can trust
+    // structurally (letters/digits/underscore only — never a path
+    // traversal; it is only ever interpolated under newsCache/).
+    if (typeof room === 'string' && /^[A-Za-z0-9_]{1,40}$/.test(room)) return room
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Record topicId→room for a whole room's topics (one small PATCH).
+ * Called at cache-write time (news-cache.ts) and opportunistically when
+ * a legacy scan touches a room — the index converges to complete.
+ */
+export async function writeTopicIndex(
+  room: string,
+  topics: Array<{ topicId?: string }>,
+): Promise<void> {
+  try {
+    const patch: Record<string, string> = {}
+    for (const t of topics) {
+      if (t?.topicId) patch[t.topicId] = room
+    }
+    if (Object.keys(patch).length === 0) return
+    await firebasePatch(TOPIC_INDEX, patch)
+  } catch {
+    // best-effort — lookups just fall back to the scan
+  }
+}
+
 /**
  * List ALL newsCache keys (shallow — returns key names only, tiny).
+ * ETag-cached in firebaseReadShallow: repeat listings are zero-byte 304s.
  * Falls back to a static seed list when Firebase is unreachable.
  */
 async function listCacheKeys(): Promise<string[]> {
   if (keyListMemo && Date.now() - keyListMemo.ts < KEY_LIST_TTL_MS) {
     return keyListMemo.keys ?? PRIORITY_KEYS
   }
-  let keys: string[] | null = null
-  try {
-    const controller = new AbortController()
-    const t = setTimeout(() => controller.abort(), 6000)
-    const res = await fetch(`${DB_URL}/newsCache.json?shallow=true`, {
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-    clearTimeout(t)
-    if (res.ok) {
-      const text = await res.text()
-      if (text && text !== 'null') {
-        keys = Object.keys(JSON.parse(text) as Record<string, unknown>)
-      }
-    }
-  } catch {
-    // fall through to static seed
-  }
-  keyListMemo = { keys, ts: Date.now() }
-  return keys ?? PRIORITY_KEYS
+  const keys = await firebaseReadShallow('newsCache')
+  keyListMemo = { keys: keys.length > 0 ? keys : null, ts: Date.now() }
+  return keys.length > 0 ? keys : PRIORITY_KEYS
 }
 
 /** Order keys so priority + plain categories are searched before country
- *  variants (same hit-rate, fewer reads on average). */
+ * variants (same hit-rate, fewer reads on average). */
 function orderKeys(keys: string[]): string[] {
   const priority = [...PRIORITY_KEYS]
   const plain = keys.filter((k) => !k.includes('__'))
@@ -83,9 +112,13 @@ function orderKeys(keys: string[]): string[] {
 }
 
 /**
- * Find a topic by id ANYWHERE it can exist:
+ * Find a topic by id ANYWHERE it can exist — CHEAPLY:
  *   1. archive/<topicId>          (permanent — check first, it's tiny)
- *   2. newsCache/<key>/topics[]   for EVERY live key (dynamically listed)
+ *   2. topicIndex/<topicId>       (~30B pointer to the live room)
+ *      → newsCache/<room>         (ONE room read, usually ETag 304)
+ *   3. hint key                   (caller's category — 1 read)
+ *   4. newsCache/<key>/topics[]   for EVERY live key (legacy fallback,
+ *                                 self-heals the topicIndex)
  *
  * When found in the live cache, the topic is ARCHIVED immediately (fire
  * and forget) so it is permanent from that moment on — links shared later
@@ -121,7 +154,20 @@ export async function findTopicAnywhere(
     }
   }
 
-  // 2. Hinted key first (caller's known category — 1 read, fastest path).
+  // 2. Topic index — the O(1) path for every topic cached since the
+  //    index shipped (and backfilled for all 48 live rooms by
+  //    scripts/backfill-topic-index.ts). One ~30B read + one room read.
+  const indexedRoom = await roomForTopic(topicId)
+  if (indexedRoom) {
+    const found = await searchKey(indexedRoom, topicId)
+    if (found) {
+      if (alsoArchive) void archiveTopic(found)
+      return found
+    }
+    // Stale entry (topic rotated out of that room) — fall through.
+  }
+
+  // 3. Hinted key first (caller's known category — 1 read, fastest path).
   const hint = opts.hint?.replace(/^newsCache\//, '').replace(/\.json$/, '')
   if (hint) {
     const found = await searchKey(hint, topicId)
@@ -131,10 +177,12 @@ export async function findTopicAnywhere(
     }
   }
 
-  // 3. Full live search over EVERY key.
+  // 4. Full live search over EVERY key (legacy fallback — rare once the
+  //    index is warm; every room it reads gets its topics indexed so the
+  //    NEXT lookup for any of them takes the O(1) path).
   const keys = orderKeys(await listCacheKeys())
   for (const key of keys) {
-    if (key === hint) continue // already searched
+    if (key === hint || key === indexedRoom) continue // already searched
     const found = await searchKey(key, topicId)
     if (found) {
       if (alsoArchive) void archiveTopic(found)
@@ -156,6 +204,9 @@ async function searchKey(
       `newsCache/${key}`,
     )
     if (payload?.topics) {
+      // Self-heal: index every topic in this room so future lookups
+      // (ours and other instances') skip the scan for them.
+      void writeTopicIndex(key, payload.topics)
       return payload.topics.find((t) => t.topicId === topicId) || null
     }
   } catch {
@@ -176,9 +227,9 @@ async function archiveTopic(topic: TopicArticle): Promise<void> {
       archivedKnown.add(id)
       return
     }
+    const trimmed = trimTopicForArchive(topic)
     const ok = await firebaseWrite(`archive/${id}`, {
-      ...topic,
-      articles: topic.articles ?? [],
+      ...trimmed,
       archivedAt: Date.now(),
     })
     if (ok) {

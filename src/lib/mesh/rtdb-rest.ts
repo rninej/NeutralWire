@@ -12,11 +12,22 @@
  * for room presence — the Firebase Spark plan caps simultaneous
  * connections (~100), so the mesh keeps exactly ≤1 stream per visible
  * tab and pauses it while the tab is hidden (see mesh-presence.ts).
+ *
+ * ── ETag conditional reads (Sep 2026 bandwidth fix) ──
+ * Firebase RTDB returns an ETag when asked (X-Firebase-ETag: true — the
+ * header is CORS-exposed) and honors If-None-Match with a bodyless 304.
+ * The relay polls the manifest every 60s and re-reads feed rooms on
+ * promote/refresh; those repeat reads of unchanged nodes now cost zero
+ * downloaded bytes instead of re-pulling 130-330KB rooms.
  */
 
 import { RTDB_URL } from '@/lib/mesh/mesh-protocol'
 
 const FETCH_TIMEOUT_MS = 8000
+
+// ── Per-page ETag cache (bounded — only manifest + room paths) ──
+const ETAG_CACHE = new Map<string, { etag: string; value: unknown }>()
+const ETAG_CACHE_MAX = 16
 
 function url(path: string): string {
   return `${RTDB_URL}/${path.replace(/^\/+/, '')}.json`
@@ -30,17 +41,49 @@ export function serverTimestamp(): { '.sv': string } {
 
 export async function rtdbGet<T = unknown>(path: string): Promise<T | null> {
   try {
+    const cached = ETAG_CACHE.get(path)
+    const headers: Record<string, string> = { Accept: 'application/json' }
+    if (cached) {
+      headers['If-None-Match'] = cached.etag
+    } else {
+      headers['X-Firebase-ETag'] = 'true'
+    }
     const res = await fetch(url(path), {
       cache: 'no-store',
-      headers: { Accept: 'application/json' },
+      headers,
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
+    // 304 Not Modified — data unchanged since our last read of this
+    // path; serve from memory (zero downloaded bytes).
+    if (res.status === 304 && cached) {
+      return cached.value as T | null
+    }
     if (!res.ok) return null
+    const etag = res.headers.get('etag')
     const text = await res.text()
-    if (!text || text === 'null') return null
-    return JSON.parse(text) as T
+    if (!text || text === 'null') {
+      if (etag) {
+        ETAG_CACHE.set(path, { etag, value: null })
+        trimEtagCache()
+      }
+      return null
+    }
+    const value = JSON.parse(text) as T
+    if (etag) {
+      ETAG_CACHE.set(path, { etag, value })
+      trimEtagCache()
+    }
+    return value
   } catch {
     return null
+  }
+}
+
+function trimEtagCache(): void {
+  while (ETAG_CACHE.size > ETAG_CACHE_MAX) {
+    const oldest = ETAG_CACHE.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    ETAG_CACHE.delete(oldest)
   }
 }
 
@@ -56,6 +99,7 @@ export async function rtdbPut(
       cache: 'no-store',
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
+    if (res.ok) ETAG_CACHE.delete(path) // value changed — drop stale entry
     return res.ok
   } catch {
     return false
@@ -69,6 +113,7 @@ export async function rtdbDelete(path: string): Promise<boolean> {
       cache: 'no-store',
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
+    if (res.ok) ETAG_CACHE.delete(path)
     return res.ok
   } catch {
     return false

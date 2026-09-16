@@ -397,8 +397,13 @@ self.addEventListener('fetch', (event) => {
         }
 
         // Stale or missing → network first.
+        // NOTE: no `cache: 'no-store'` on this inner fetch (Sep 2026
+        // bandwidth fix): it set a no-store request header that bypassed
+        // the Vercel CDN, so every SW revalidation re-ran the function and
+        // re-downloaded the full 130-330KB room from Firebase. The route
+        // already emits `s-maxage=300` — the CDN absorbs repeat traffic.
         try {
-          const res = await fetch(req, { cache: 'no-store' })
+          const res = await fetch(req)
           if (res.ok) {
             putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
           }
@@ -436,7 +441,10 @@ self.addEventListener('fetch', (event) => {
         // — revalidate at most once per hour, not on every request.
         let networkFetch = null
         if (!cached || cachedAgeMs(cached) > REVALIDATE_SUMMARY_MS) {
-          networkFetch = fetch(req, { cache: 'no-store' })
+          // No `cache: 'no-store'` (Sep 2026): let the Vercel CDN cache
+          // engage — the route marks summaries cacheable and they are
+          // immutable once generated.
+          networkFetch = fetch(req)
             .then((res) => {
               if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
               return res
@@ -476,9 +484,11 @@ self.addEventListener('fetch', (event) => {
         const cached = await cache.match(req)
 
         // Revalidate only when the cached copy is older than the threshold.
+        // No `cache: 'no-store'` (Sep 2026): archive hits are CDN-cached
+        // for 24h by the route — the SW revalidation now benefits too.
         let networkFetch = null
         if (!cached || cachedAgeMs(cached) > REVALIDATE_NEWS_MS) {
-          networkFetch = fetch(req, { cache: 'no-store' })
+          networkFetch = fetch(req)
             .then((res) => {
               if (res.ok) putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
               return res

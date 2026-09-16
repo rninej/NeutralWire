@@ -15,6 +15,7 @@ import {
   DEFAULT_COUNTRY,
 } from '@/lib/country-detect'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { trimTopicForArchive, snapshotArchived, markSnapshotArchived } from '@/lib/topic-archive'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -100,34 +101,44 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    // ── BACKGROUND 1: Archive ALL topics so old links always open ──
-    // Every topic from the refresh is archived to Firebase so that when a
+    // ── BACKGROUND 1: Archive NEW topics so old links always open ──
+    // Topics from the refresh are archived to Firebase so that when a
     // user opens an old shared link (/?topic=xxx), /api/topic/[id] can
     // always find it — even weeks later when the live cache has rotated.
     //
-    // EMERGENCY FIX: Previously read the ENTIRE archive node to check which
-    // topicIds already exist. With hundreds of archived topics (each with
-    // full article arrays), this was downloading 17MB+ per refresh.
-    // Now we just write each topic directly (PATCH is idempotent — writing
-    // an existing topicId just overwrites it with the same data). No read
-    // needed at all.
+    // EMERGENCY FIX 1: previously read the ENTIRE archive node to check
+    // which topicIds already exist (17MB+ per refresh).
+    // EMERGENCY FIX 2 (Sep 2026): the shallow key listing used next was
+    // still ~313KB of downloads per refresh (15MB/day at 48 runs/day).
+    // Now: per-instance snapshot markers (topic-archive.ts) skip repeat
+    // work entirely, and archive PUTs are idempotent + trimmed (12
+    // articles, 300-char descriptions) — cost is upload-only, never the
+    // download quota. A cold instance re-writes a snapshot at most once.
     after(async () => {
       try {
-        const toArchive = fresh.topics
+        const room = `${category}${country && (category === 'relevant' || category === 'mycountry') ? `__${country.toUpperCase()}` : ''}`
+        const snapshotAt = fresh.updatedAt
 
-        console.log(`[refresh] Archiving ${toArchive.length} topics...`)
+        if (snapshotArchived(room, snapshotAt)) {
+          console.log(`[refresh] ${room}: snapshot already archived by this instance`)
+          return
+        }
+
+        const toArchive = fresh.topics.filter((t) => t?.topicId)
+        console.log(`[refresh] Archiving ${toArchive.length} topics (${room})...`)
         const batchSize = 8
         for (let i = 0; i < toArchive.length; i += batchSize) {
           const batch = toArchive.slice(i, i + batchSize)
           await Promise.allSettled(
             batch.map((topic) =>
               firebaseWrite(`archive/${topic.topicId}`, {
-                ...topic,
+                ...trimTopicForArchive(topic),
                 archivedAt: Date.now(),
               }),
             ),
           )
         }
+        markSnapshotArchived(room, snapshotAt)
         console.log(`[refresh] Archived ${toArchive.length} topics`)
       } catch (err) {
         console.warn('[refresh] Background archiving failed:', err)

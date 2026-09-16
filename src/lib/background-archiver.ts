@@ -3,70 +3,92 @@
 /**
  * Background topic archiver.
  *
- * Runs on the CLIENT (user's device) — scans the current feed for topics
- * that haven't been archived yet, and sends them to /api/archive-topic
- * one at a time with a delay. This spreads the archival work across
- * users' devices instead of burning Vercel CPU.
+ * Runs on the CLIENT (user's device) — sends the current feed's topic ids
+ * to /api/archive-batch in ONE request. The server reads the feed room
+ * once (ETag-cached), works out which topics are missing from the
+ * archive, and writes trimmed permanent copies so shared links keep
+ * resolving forever. Spreads the work across visitors' devices instead
+ * of burning Vercel CPU.
  *
- * How it works:
- *   1. Called with the current list of topics in the feed
- *   2. For each topic, checks localStorage to see if we already archived it
- *   3. If not, sends a POST to /api/archive-topic with the topic data
- *   4. The server checks if it's already in Firebase archive (quick read)
- *   5. If not, it writes the topic (with articles) to archive/<topicId>
- *   6. Marks the topicId as archived in localStorage (so we don't retry)
+ * ── WHY BATCHED (Sep 2026, the 6.2GB/month Firebase fix) ──
+ * The OLD version POSTed /api/archive-topic once per topic (2s apart).
+ * Each of those calls re-read archive/<id> (~10-30KB) and — for every
+ * not-yet-archived topic — ran a full-cache topic lookup that downloaded
+ * the visitor's whole feed room (130-330KB). After each 30-minute feed
+ * rotation the next visitor's browser paid up to ~6MB of Firebase
+ * downloads. The batch endpoint turns that into ONE room read + one
+ * shallow key listing (both usually zero-byte 304s on warm instances).
  *
- * This is fire-and-forget — errors are silently ignored. The archiver
- * runs with a 2-second delay between topics to avoid hammering the server.
+ * localStorage still tracks what THIS device has already sent, so the
+ * common case (nothing new) doesn't even fire the request. The server
+ * remains the source of truth — a new visitor's first batch call
+ * deduplicates against the archive itself and only writes what's
+ * actually missing.
  */
 
 const ARCHIVED_KEY = 'neutralwire:archived-topics'
-const MAX_ARCHIVED_TRACK = 500 // keep track of last 500 archived IDs
+const MAX_ARCHIVED_TRACK = 800 // keep track of last 800 sent IDs
+// How fresh our "server confirmed" set may be before we re-send (the
+// archive grows on other devices too — re-checking keeps it converging).
+const LOCAL_SET_TTL_MS = 6 * 60 * 60 * 1000
 
 /**
  * Get the set of topicIds we've already archived (from localStorage).
  */
-function getArchivedSet(): Set<string> {
+function getArchivedSet(): { ids: Set<string>; ts: number } {
   try {
     const raw = localStorage.getItem(ARCHIVED_KEY)
-    if (raw) return new Set(JSON.parse(raw))
+    if (raw) {
+      const parsed = JSON.parse(raw) as { ids?: string[]; ts?: number } | string[]
+      if (Array.isArray(parsed)) return { ids: new Set(parsed), ts: 0 }
+      return { ids: new Set(parsed.ids || []), ts: parsed.ts || 0 }
+    }
   } catch {}
-  return new Set()
+  return { ids: new Set(), ts: 0 }
 }
 
 /**
- * Mark a topicId as archived in localStorage.
+ * Mark topicIds as sent (server confirmed them) in localStorage.
  */
-function markArchived(topicId: string) {
+function markArchived(topicIds: string[]): void {
   try {
-    const set = getArchivedSet()
-    set.add(topicId)
+    const { ids } = getArchivedSet()
+    for (const id of topicIds) ids.add(id)
     // Keep only the last MAX_ARCHIVED_TRACK entries (prevent unbounded growth)
-    if (set.size > MAX_ARCHIVED_TRACK) {
-      const arr = Array.from(set).slice(-MAX_ARCHIVED_TRACK)
-      localStorage.setItem(ARCHIVED_KEY, JSON.stringify(arr))
-    } else {
-      localStorage.setItem(ARCHIVED_KEY, JSON.stringify(Array.from(set)))
-    }
+    const arr = Array.from(ids).slice(-MAX_ARCHIVED_TRACK)
+    localStorage.setItem(ARCHIVED_KEY, JSON.stringify({ ids: arr, ts: Date.now() }))
   } catch {}
 }
 
-// Track if an archiver is already running (prevent duplicates)
+// Track if an archiver run is already in flight (prevent duplicates)
 let archiverRunning = false
+
+/** The room key for a feed the client just loaded (mirrors cachePath()). */
+function roomForFeed(
+  category: string | undefined,
+  countryCode: string | null | undefined,
+): string | undefined {
+  const cat = (category || 'relevant').toLowerCase()
+  if (cat === 'relevant' || cat === 'mycountry') {
+    const c = (countryCode || 'INT').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'INT'
+    return `${cat}__${c}`
+  }
+  return cat
+}
 
 /**
  * Archive topics in the background. Called from page-client after
- * topics are loaded. Only processes topics that haven't been archived yet.
+ * topics are loaded.
  *
  * @param topics The current list of topics in the feed
- * @param countryCode The visitor's country code (GB, US, IN, HK, …). Sent
- *   with each request so the server can also search the visitor's
- *   `relevant__CC` / `mycountry__CC` caches — without it, topics from
- *   non-GB/US/IN countries were never found (the 404s in console).
+ * @param countryCode The visitor's country code (GB, US, IN, HK, …).
+ * @param category The feed category the topics came from ('relevant',
+ *        'world', …) — lets the server read the exact room in one go.
  */
 export function archiveTopicsInBackground(
   topics: Array<{ topicId: string }>,
   countryCode?: string | null,
+  category?: string,
 ): void {
   if (archiverRunning) return
   if (typeof window === 'undefined') return
@@ -74,60 +96,64 @@ export function archiveTopicsInBackground(
 
   archiverRunning = true
 
-  const archivedSet = getArchivedSet()
-  const toArchive = topics.filter((t) => t.topicId && !archivedSet.has(t.topicId))
+  try {
+    const { ids: archivedSet, ts } = getArchivedSet()
+    const staleSet = Date.now() - ts > LOCAL_SET_TTL_MS
+    const toSend = topics.filter(
+      (t) => t.topicId && (staleSet || !archivedSet.has(t.topicId)),
+    )
 
-  if (toArchive.length === 0) {
-    archiverRunning = false
-    return
-  }
-
-  // Process topics one at a time with a delay
-  let index = 0
-  const processNext = () => {
-    if (index >= toArchive.length) {
+    if (toSend.length === 0) {
       archiverRunning = false
       return
     }
 
-    const topic = toArchive[index]
-    index++
-
-    // Send the topic to the archive endpoint (fire-and-forget).
-    // The country code lets the server find the topic in the visitor's
-    // own country caches (relevant__HK etc.), not just the GB/US/IN ones.
-    fetch('/api/archive-topic', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...topic, countryCode: countryCode || '' }),
-      keepalive: true,
-    })
-      .then(async (res) => {
-        // CRITICAL: only mark as archived when the server actually
-        // archived it (or it was already archived). The OLD code marked
-        // it on ANY response — including 404s — so a topic the server
-        // couldn't find was never retried, and once the live cache
-        // rotated it away the shared link was dead forever (the exact
-        // "?topic=… shows no image card" bug).
-        if (res.ok) {
-          const data = await res.json().catch(() => null)
-          if (data?.ok || data?.alreadyArchived) {
-            markArchived(topic.topicId)
+    // One batch request, sent after a short delay (never competes with
+    // the page's own loading). keepalive lets it survive tab teardown.
+    setTimeout(() => {
+      if (archiverRunning === false) return // safety, never happens
+      fetch('/api/archive-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topicIds: toSend.map((t) => t.topicId),
+          room: roomForFeed(category, countryCode),
+          countryCode: countryCode || '',
+        }),
+        keepalive: true,
+      })
+        .then(async (res) => {
+          if (res.ok) {
+            const data = (await res.json().catch(() => null)) as
+              | { ok?: boolean; archived?: number; alreadyArchived?: number; notFound?: number }
+              | null
+            // Mark everything the server definitively resolved (archived
+            // now OR already archived) — those ids never need re-sending.
+            // notFound ids stay UNmarked → retried on a future load when
+            // the topic has landed in a cache room.
+            if (data?.ok) {
+              const resolved = (data.archived || 0) + (data.alreadyArchived || 0)
+              if (resolved > 0) {
+                // We can't know WHICH ids resolved individually (the
+                // response is aggregate by design — tiny), so mark all
+                // sent ids when notFound === 0; otherwise re-derive the
+                // unmarked set next time from the server's truth (the
+                // 6h TTL re-sends and self-corrects).
+                if ((data.notFound || 0) === 0) {
+                  markArchived(toSend.map((t) => t.topicId))
+                }
+              }
+            }
           }
-        }
-        // Non-ok responses leave the topic UNmarked → retried on the
-        // next page load (the server-side finder now covers every
-        // cache key, so retries succeed).
-      })
-      .catch(() => {
-        // silent — will retry on next page load
-      })
-      .finally(() => {
-        // 2 second delay between topics (gentle on the server)
-        setTimeout(processNext, 2000)
-      })
+        })
+        .catch(() => {
+          // silent — will retry on next page load
+        })
+        .finally(() => {
+          archiverRunning = false
+        })
+    }, 2500)
+  } catch {
+    archiverRunning = false
   }
-
-  // Start processing after a short initial delay (don't compete with page load)
-  setTimeout(processNext, 3000)
 }
