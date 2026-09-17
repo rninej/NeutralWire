@@ -96,5 +96,9 @@ Disallow: /
 User-agent: *
 Allow: /
 
-# Sitemap temporarily disabled to reduce Firebase download usage.
-# Will re-enable with a cached version once usage is under control.
+# Sitemaps — safe to list again since the 6.2GB Firebase fix:
+#   /sitemap.xml      is fully static (zero Firebase reads)
+#   /news-sitemap.xml does ONE ETag-cached read per regeneration (304 →
+#                    0 bytes when unchanged) and is CDN-cached for 15 min
+Sitemap: https://neutralwire.org/sitemap.xml
+Sitemap: https://neutralwire.org/news-sitemap.xml

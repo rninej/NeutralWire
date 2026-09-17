@@ -44,6 +44,7 @@ import {
   Bug,
   Network,
   Timer,
+  Rocket,
 } from 'lucide-react'
 import { getDeviceId } from '@/lib/referral'
 import { COUNTRY_COORDS, latLngToXY } from '@/lib/country-coords'
@@ -830,6 +831,63 @@ export default function DebugPage() {
           </div>
         </div>
 
+        {/* ── Quick-nav (mobile-friendly section jump) ──
+            A sticky, horizontally-scrollable chip row: one tap jumps to any
+            section of this (very long) dashboard. On phones this replaces
+            the endless scroll-and-hunt that made /debug hard to navigate. */}
+        <div className="sticky top-0 z-20 -mx-4 mb-6 bg-background/95 px-4 py-2.5 backdrop-blur md:-mx-6 md:px-6">
+          <nav
+            className="flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label="Dashboard sections"
+          >
+            {[
+              ['#pwa-growth', 'Growth'],
+              ['#feature-flags', 'Flags'],
+              ['#popup-system', 'Popups'],
+              ['#feature-toggles', 'Toggles'],
+              ['#bug-reports', 'Bugs'],
+              ['#mesh-monitor', 'Mesh'],
+              ['#firebase-bandwidth', 'Bandwidth'],
+              ['#traffic', 'Traffic'],
+              ['#push-tools', 'Push'],
+            ].map(([href, label]) => (
+              <a
+                key={href}
+                href={href}
+                className="shrink-0 rounded-full border border-border bg-muted/40 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {label}
+              </a>
+            ))}
+          </nav>
+        </div>
+
+        {/* ── Google Discover Kit ──
+            The growth programme: 10-step plan, drop-in resources and live
+            readiness checks. Its own mobile-first page (public — SEO
+            guidance only, nothing sensitive), one tap from here. */}
+        <Card className="mb-6 border-primary/20 bg-gradient-to-br from-blue-500/5 via-transparent to-red-500/5 p-4 md:p-6">
+          <div className="flex items-center gap-4">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-muted/50">
+              <Rocket className="h-5 w-5 text-primary" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base font-bold">Google Discover Kit</h2>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                Get NeutralWire into the Discover feed — the 10-step plan, every
+                resource, and live readiness checks. Story pages, sitemaps and
+                RSS shipped with it.
+              </p>
+            </div>
+            <a
+              href="/debug/discover"
+              className="shrink-0 rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-transform hover:scale-[1.03]"
+            >
+              Open →
+            </a>
+          </div>
+        </Card>
+
         {loading && !data && (
           <div className="flex items-center justify-center py-24">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -840,7 +898,7 @@ export default function DebugPage() {
             Unique-IP install + daily active user metrics. Every number on
             this card counts DISTINCT IP addresses — one person on two
             devices behind the same IP still counts once. */}
-        <Card className="mb-6 p-4 md:p-6">
+        <Card id="pwa-growth" className="mb-6 scroll-mt-20 p-4 md:p-6">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <Download className="h-5 w-5 text-muted-foreground" />
             <h2 className="text-base font-bold">PWA Growth</h2>
@@ -992,7 +1050,7 @@ export default function DebugPage() {
 
         {/* ── Feature Flags ──
             One-click switches that apply to ALL users instantly. */}
-        <Card className="mb-6 p-4 md:p-6">
+        <Card id="feature-flags" className="mb-6 scroll-mt-20 p-4 md:p-6">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <Zap className="h-5 w-5 text-muted-foreground" />
             <h2 className="text-base font-bold">Feature Flags</h2>
@@ -1050,7 +1108,7 @@ export default function DebugPage() {
             Switch the WHOLE site between the original popup system
             (early install banner + PWA donate popup), the research-timed
             behavioral engine, and the hybrid (smart + first-visit popup). */}
-        <Card className="mb-6 p-4 md:p-6">
+        <Card id="popup-system" className="mb-6 scroll-mt-20 p-4 md:p-6">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <AppWindow className="h-5 w-5 text-muted-foreground" />
             <h2 className="text-base font-bold">Popup System</h2>
@@ -1133,7 +1191,7 @@ export default function DebugPage() {
             The newer features, each removable in one click if it doesn't earn
             its place: the notification Like button, the video Watch button
             and the top-story video preview. */}
-        <Card className="mb-6 p-4 md:p-6">
+        <Card id="feature-toggles" className="mb-6 scroll-mt-20 p-4 md:p-6">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <FlaskConical className="h-5 w-5 text-muted-foreground" />
             <h2 className="text-base font-bold">Feature Toggles</h2>
@@ -1656,7 +1714,7 @@ export default function DebugPage() {
             the AI, which rewrites/regenerates/replaces the broken part and
             writes the fix everywhere (live cache, archive, summaries,
             title-rewrites, video caches, search index). */}
-        <Card className="mb-6 p-4 md:p-6">
+        <Card id="bug-reports" className="mb-6 scroll-mt-20 p-4 md:p-6">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <Bug className="h-5 w-5 text-muted-foreground" />
             <h2 className="text-base font-bold">User Bug Reports</h2>
@@ -1711,7 +1769,7 @@ export default function DebugPage() {
             fallback, verification failure, malformed payload, relay
             switch and cron trigger is recorded here (local ring for this
             browser + the shared Firebase log across all visitors). */}
-        <Card className="mb-6 p-4 md:p-6">
+        <Card id="mesh-monitor" className="mb-6 scroll-mt-20 p-4 md:p-6">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <Network className="h-5 w-5 text-muted-foreground" />
             <h2 className="text-base font-bold">Mesh Relay Monitor</h2>
@@ -1848,7 +1906,7 @@ export default function DebugPage() {
         </Card>
 
         {/* ── Firebase Bandwidth (ETag conditional-read savings) ── */}
-        <Card className="mb-6 p-4 md:p-6">
+        <Card id="firebase-bandwidth" className="mb-6 scroll-mt-20 p-4 md:p-6">
           <div className="mb-4 flex items-center gap-2">
             <h2 className="text-base font-bold">Firebase Bandwidth</h2>
             <span className="text-xs text-muted-foreground">
@@ -1938,7 +1996,7 @@ export default function DebugPage() {
         )}
 
         {data && (
-          <>
+          <div id="traffic" className="scroll-mt-20">
             {/* KPI Cards */}
             <div className="mb-6 grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard
@@ -2052,7 +2110,7 @@ export default function DebugPage() {
             </div>
 
             {/* Push Notification Tools (collapsible) */}
-            <Card className="p-4 md:p-6">
+            <Card id="push-tools" className="scroll-mt-20 p-4 md:p-6">
               <button
                 onClick={() => setShowPushTools(!showPushTools)}
                 className="w-full flex items-center justify-between"
@@ -2123,7 +2181,7 @@ export default function DebugPage() {
                 </div>
               )}
             </Card>
-          </>
+          </div>
         )}
       </div>
     </div>

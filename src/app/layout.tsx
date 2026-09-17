@@ -28,6 +28,24 @@ export const metadata: Metadata = {
     "Is your news feeding you the full picture? NeutralWire compares how left, right, and center outlets cover the SAME story — side by side. See the bias, spot the spin, decide for yourself. Free, no paywalls, auto-detects your country. Try it before your next headline.",
   keywords: ["news", "bias", "media bias", "neutralwire", "news aggregator", "left right center", "unbiased news", "compare news"],
   authors: [{ name: "NeutralWire" }],
+  // ── Google Discover gate (THE eligibility requirement) ──
+  // Discover cards only render with LARGE images when the page allows it:
+  // max-image-preview:large lifts Google's default "standard" image cap.
+  // max-snippet:-1 lets Google use full-length text snippets; the
+  // max-video-preview cap only affects video thumbnails (ours are fine).
+  // NOTE: page-level metadata that sets its own `robots` key would
+  // shallow-REPLACE this — pages must omit `robots` to inherit the gate.
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
+  },
   // NOTE: no `manifest` here — the <head> renders the manifest <link>
   // manually with suppressHydrationWarning, because the launch-gate script
   // rewrites its href (dark ↔ light manifest) pre-hydration. Defining it
