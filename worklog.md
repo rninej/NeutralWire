@@ -156,3 +156,15 @@ Stage Summary:
 - main typechecks again; demo/fake routes and 6MB of accidental binaries are gone; CI is runnable; robots/manifest single-sourced from public/.
 - Follow-ups for the owner: (1) the Google-indexed story URLs re-render with real summaries after this deploy + the next 15-min ISR cycle — URL-inspect a couple in Search Console to force recrawl; (2) summaries accumulate as visitors open stories (and as Googlebot hits story pages, the on-demand generation runs once per story and persists); (3) rotate the GitHub PAT pasted in chat (it was used for this push via a one-time URL, never stored).
 - Known backlog: bias bar image version, Active CPU audit, privacy policy country/city, email swap to moneyisbroken@gmail.com.
+
+---
+Task ID: session24-addendum
+Agent: main (Super Z)
+Task: Git-history note for future sessions.
+
+Work Log:
+- The local Discover commit 6a1e20e (batches' worth of demo files + ~6MB of screenshots committed by accident) NEVER reached the remote — its push was rejected as non-fast-forward and went unnoticed. The remote's real Discover commit was 5a7cc05 (the clean version: story pages, feeds, gate, Kit — no demo files).
+- session24 therefore reset local main to the remote 5a7cc05 and cherry-picked the story-summary fix onto it (46e69e4). Local == remote again; if an old note references 6a1e20e, treat 5a7cc05 as its real landed counterpart.
+
+Stage Summary:
+- Local/remote histories are consistent and clean going forward.
