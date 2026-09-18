@@ -3,7 +3,10 @@ import { cache } from 'react'
 import { notFound } from 'next/navigation'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import { firebaseRead } from '@/lib/firebase-server'
+import { plainSummaryText, isTemplateSummary } from '@/lib/summary-sections'
 import { BiasBar } from '@/components/bias-bar'
+import { StorySummaryLive } from '@/components/story-summary-live'
 import {
   SITE_URL,
   SITE_NAME,
@@ -20,9 +23,13 @@ import {
  * to Googlebot. This route gives every story a permanent, fully
  * server-rendered page:
  *
- *   /story/<topicId>  →  hero photo, headline, summary, dates,
- *                        left/centre/right coverage panel (real outlet
- *                        links), NewsArticle JSON-LD, canonical + OG.
+ *   /story/<topicId>  →  hero photo, headline, NEUTRAL SUMMARY (the
+ *                        same card the app shows — stored LLM summary
+ *                        from summaries/<topicId>, wire-snippet
+ *                        fallback + live on-demand upgrade when none
+ *                        exists yet), dates, left/centre/right
+ *                        coverage panel (real outlet links), NewsArticle
+ *                        JSON-LD, canonical + OG.
  *
  * ── Bandwidth safety (the 6.2 GB rule) ──
  * The topic lookup goes through findTopicAnywhere → archive/<id> first
@@ -43,11 +50,39 @@ import {
 
 export const revalidate = 900 // 15 min ISR — matches the feed cache cadence
 
-// Dedupe the Firebase lookup between generateMetadata + the page render
-// (React `cache` scopes the memo to a single request).
-const getTopic = cache(
-  async (id: string): Promise<(TopicArticle & { archivedAt?: number }) | null> =>
-    findTopicAnywhere(id),
+// Topic lookup + the stored NEUTRAL SUMMARY in one request-scoped memo
+// (React `cache`), so generateMetadata and the page render share a single
+// Firebase round-trip. The summaries/<id> node is tiny (~0.5-1KB) and
+// ETag-cached → 0 bytes on warm instances — the 6.2GB rule holds.
+const getStoryData = cache(
+  async (
+    id: string,
+  ): Promise<{
+    topic: TopicArticle & { archivedAt?: number }
+    storedSummary: string | null
+  } | null> => {
+    const topic = await findTopicAnywhere(id)
+    if (!topic) return null
+
+    // The REAL neutral summary ("The Big Picture / Why It Matters / …")
+    // is generated once by /api/summary and persisted at
+    // summaries/<topicId> — separate from the topic node, whose own
+    // `summary` field is usually just a thin wire snippet. Read the
+    // stored one; template (extractive) leftovers count as absent.
+    let storedSummary: string | null = null
+    try {
+      const stored = await firebaseRead<{ summary?: string }>(
+        `summaries/${id}`,
+      )
+      if (stored?.summary && !isTemplateSummary(stored.summary)) {
+        storedSummary = stored.summary
+      }
+    } catch {
+      // best-effort — the page falls back to topic.summary below
+    }
+
+    return { topic, storedSummary }
+  },
 )
 
 interface StoryProps {
@@ -58,12 +93,14 @@ export async function generateMetadata({
   params,
 }: StoryProps): Promise<Metadata> {
   const { id } = await params
-  const topic = await getTopic(id)
-  if (!topic) return {}
+  const story = await getStoryData(id)
+  if (!story) return {}
+  const { topic, storedSummary } = story
 
   const canonical = `/story/${encodeURIComponent(id)}`
+  // Prefer the real neutral summary (markup stripped) for snippets.
   const description =
-    topic.summary?.slice(0, 200) ||
+    plainSummaryText(storedSummary || topic.summary || '').slice(0, 200) ||
     `How ${topic.articles.length || 'multiple'} outlets across the political spectrum cover this story.`
   const composite = ogImageForTopic(id)
 
@@ -125,6 +162,7 @@ function iso(ts?: number): string {
 function newsArticleJsonLd(
   id: string,
   topic: TopicArticle & { archivedAt?: number },
+  storedSummary: string | null,
 ): string {
   const canonical = `${SITE_URL}/story/${encodeURIComponent(id)}`
   const image = [heroImageForUrl(topic.imageUrl), ogImageForTopic(id)]
@@ -135,7 +173,8 @@ function newsArticleJsonLd(
     '@context': 'https://schema.org',
     '@type': 'NewsArticle',
     headline: topic.title?.slice(0, 110) || 'Untitled story',
-    description: topic.summary || undefined,
+    description:
+      plainSummaryText(storedSummary || topic.summary || '') || undefined,
     image,
     datePublished: iso(topic.firstSeen || topic.latestSeen),
     dateModified: iso(topic.latestSeen || topic.firstSeen),
@@ -168,8 +207,9 @@ const LEAN_META: Record<
 
 export default async function StoryPage({ params }: StoryProps) {
   const { id } = await params
-  const topic = await getTopic(id)
-  if (!topic || !topic.title) notFound()
+  const story = await getStoryData(id)
+  if (!story || !story.topic.title) notFound()
+  const { topic, storedSummary } = story
 
   const hero = heroImageForUrl(topic.imageUrl)
   const firstSeen = topic.firstSeen || topic.latestSeen
@@ -218,11 +258,24 @@ export default async function StoryPage({ params }: StoryProps) {
         <h1 className={`text-2xl font-bold leading-tight tracking-tight ${hero ? 'mt-6' : 'mt-8'} md:text-3xl`}>
           {topic.title}
         </h1>
-        {topic.summary && (
-          <p className="mt-3 text-base leading-relaxed text-muted-foreground md:text-lg">
-            {topic.summary}
-          </p>
-        )}
+
+        {/* THE Neutral Summary — the exact card the app renders. Stored
+            LLM summary in the HTML; when none exists yet the wire snippet
+            renders first and the real summary is generated live on mount
+            (and persisted, so crawlers get it in the raw HTML after the
+            next ISR regen). */}
+        <StorySummaryLive
+          topicId={id}
+          title={topic.title}
+          articles={(topic.articles || []).slice(0, 12).map((a) => ({
+            title: a.title,
+            description: a.description || '',
+            sourceName: a.sourceName,
+            leaning: a.leaning || '',
+          }))}
+          initialSummary={storedSummary || topic.summary || ''}
+          hasStoredSummary={Boolean(storedSummary)}
+        />
 
         {/* Visible dates + coverage + lean distribution (E-E-A-T: dates
             must be human-visible, not just in JSON-LD) */}
@@ -303,7 +356,9 @@ export default async function StoryPage({ params }: StoryProps) {
         {/* NewsArticle structured data */}
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: newsArticleJsonLd(id, topic) }}
+          dangerouslySetInnerHTML={{
+            __html: newsArticleJsonLd(id, topic, storedSummary),
+          }}
         />
       </main>
 

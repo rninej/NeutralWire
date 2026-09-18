@@ -46,6 +46,11 @@ bunx tsc --noEmit  # types
 bun run build      # production build
 ```
 
+`bun run build` needs a `VAPID_PRIVATE_KEY` in `.env` (any valid key —
+web-push validates it at module load; generate one with
+`node scripts/generate-vapid.js`). Production reads the real key from the
+Vercel environment.
+
 No local Firebase setup needed — the RTDB is accessed via its public REST
 API (read the code under `src/lib/firebase-server.ts` for the auth model
 and the ETag conditional-read cache).
