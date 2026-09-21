@@ -16,9 +16,9 @@ export const maxDuration = 15
 /**
  * Server-side feature flags (stored in Firebase under featureFlags/<name>).
  *
- * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, videoWatch, videoPreview, milestoneDonate, meshRelay, userCron }   (public)
+ * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, notifRaiseFix, videoWatch, videoPreview, milestoneDonate, meshRelay, userCron }   (public)
  * POST /api/flags   → set flag(s) for ALL users (password-protected)
- *       body: { password, subtopicNav?, popupSystem?, notifLike?, videoWatch?, videoPreview?, milestoneDonate?, meshRelay?, userCron? }
+ *       body: { password, subtopicNav?, popupSystem?, notifLike?, notifRaiseFix?, videoWatch?, videoPreview?, milestoneDonate?, meshRelay?, userCron? }
  *       — send one or more.
  *
  * Managed flags:
@@ -51,6 +51,19 @@ export const maxDuration = 15
  *       rankings for that user (strong) and everyone else (a bit).
  *       Flipped off in /debug → new notifications ship without the
  *       button (the SW reads the flag from the payload at push time).
+ *
+ *   - notifRaiseFix (boolean, default TRUE): the v27 notification
+ *       RAISE VERIFICATION in sw.js. On Android Chrome, tapping a
+ *       notification while the installed app idles in the background
+ *       opened the story INSIDE the hidden app without ever bringing
+ *       the window to the foreground (WindowClient.focus() resolves
+ *       without raising) — and the notification's Like button looked
+ *       dead for the same reason. With the fix ON, the SW verifies the
+ *       window actually became visible after focus() and, when it
+ *       didn't, re-raises it via clients.openWindow() (the cold-start
+ *       path, which always works). Flipped OFF in /debug → the SW's
+ *       click handler returns to the previous focus-trusting logic
+ *       (next notification tap, after the flag mirror propagates).
  *
  *   - videoWatch (boolean, default TRUE): the experimental Watch button
  *       on article images. Tapping it resolves a video for the story (the
@@ -116,6 +129,7 @@ const VALID_MODES: SubtopicNavMode[] = [
 const NAV_FLAG_PATH = 'featureFlags/subtopicNav'
 const POPUP_FLAG_PATH = 'featureFlags/popupSystem'
 const NOTIF_LIKE_FLAG_PATH = 'featureFlags/notifLike'
+const NOTIF_RAISE_FIX_FLAG_PATH = 'featureFlags/notifRaiseFix'
 const VIDEO_FLAG_PATH = 'featureFlags/videoWatch'
 const VIDEO_PREVIEW_FLAG_PATH = 'featureFlags/videoPreview'
 const MILESTONE_DONATE_FLAG_PATH = 'featureFlags/milestoneDonate'
@@ -127,6 +141,7 @@ const USER_CRON_FLAG_PATH = 'featureFlags/userCron'
 let navMemo: { value: SubtopicNavMode; ts: number } | null = null
 let popupMemo: { value: PopupMode; ts: number } | null = null
 let notifLikeMemo: { value: boolean; ts: number } | null = null
+let notifRaiseFixMemo: { value: boolean; ts: number } | null = null
 let videoMemo: { value: boolean; ts: number } | null = null
 let videoPreviewMemo: { value: boolean; ts: number } | null = null
 let milestoneDonateMemo: { value: boolean; ts: number } | null = null
@@ -168,7 +183,7 @@ function normalizeBooleanFlag(v: unknown, fallback: boolean): boolean {
 export async function GET() {
   // All flags are fetched in parallel — one cold instance pays the
   // RTDB reads at most, then all answers are memoized together.
-  const [navResult, popupResult, notifLikeResult, videoResult, videoPreviewResult, milestoneDonateResult, meshRelayResult, userCronResult] = await Promise.allSettled([
+  const [navResult, popupResult, notifLikeResult, notifRaiseFixResult, videoResult, videoPreviewResult, milestoneDonateResult, meshRelayResult, userCronResult] = await Promise.allSettled([
     (async () => {
       if (navMemo && Date.now() - navMemo.ts < MEMO_TTL_MS) return navMemo.value
       const stored = await firebaseRead<string>(NAV_FLAG_PATH)
@@ -190,6 +205,13 @@ export async function GET() {
       const stored = await firebaseRead<boolean>(NOTIF_LIKE_FLAG_PATH)
       const value = normalizeBooleanFlag(stored, true)
       notifLikeMemo = { value, ts: Date.now() }
+      return value
+    })(),
+    (async () => {
+      if (notifRaiseFixMemo && Date.now() - notifRaiseFixMemo.ts < MEMO_TTL_MS) return notifRaiseFixMemo.value
+      const stored = await firebaseRead<boolean>(NOTIF_RAISE_FIX_FLAG_PATH)
+      const value = normalizeBooleanFlag(stored, true)
+      notifRaiseFixMemo = { value, ts: Date.now() }
       return value
     })(),
     (async () => {
@@ -254,6 +276,8 @@ export async function GET() {
         popupResult.status === 'fulfilled' ? popupResult.value : DEFAULT_POPUP_MODE,
       notifLike:
         notifLikeResult.status === 'fulfilled' ? notifLikeResult.value : true,
+      notifRaiseFix:
+        notifRaiseFixResult.status === 'fulfilled' ? notifRaiseFixResult.value : true,
       videoWatch: videoResult.status === 'fulfilled' ? videoResult.value : true,
       videoPreview:
         videoPreviewResult.status === 'fulfilled' ? videoPreviewResult.value : false,
@@ -278,6 +302,7 @@ export async function POST(req: NextRequest) {
     subtopicNav?: string
     popupSystem?: string
     notifLike?: boolean | string
+    notifRaiseFix?: boolean | string
     videoWatch?: boolean | string
     videoPreview?: boolean | string
     milestoneDonate?: boolean | string
@@ -297,16 +322,17 @@ export async function POST(req: NextRequest) {
   const wantsNav = body.subtopicNav !== undefined
   const wantsPopup = body.popupSystem !== undefined
   const wantsNotifLike = body.notifLike !== undefined
+  const wantsNotifRaiseFix = body.notifRaiseFix !== undefined
   const wantsVideo = body.videoWatch !== undefined
   const wantsVideoPreview = body.videoPreview !== undefined
   const wantsMilestoneDonate = body.milestoneDonate !== undefined
   const wantsMeshRelay = body.meshRelay !== undefined
   const wantsUserCron = body.userCron !== undefined
-  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsVideo && !wantsVideoPreview && !wantsMilestoneDonate && !wantsMeshRelay && !wantsUserCron) {
+  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsNotifRaiseFix && !wantsVideo && !wantsVideoPreview && !wantsMilestoneDonate && !wantsMeshRelay && !wantsUserCron) {
     return NextResponse.json(
       {
         error:
-          'Provide subtopicNav, popupSystem, notifLike, videoWatch, videoPreview, milestoneDonate, meshRelay and/or userCron to set',
+          'Provide subtopicNav, popupSystem, notifLike, notifRaiseFix, videoWatch, videoPreview, milestoneDonate, meshRelay and/or userCron to set',
       },
       { status: 400 },
     )
@@ -352,6 +378,16 @@ export async function POST(req: NextRequest) {
     }
     notifLikeMemo = { value: notifLike, ts: Date.now() }
     console.log(`[flags] notifLike set to '${notifLike}' (applies to ALL users)`)
+  }
+
+  if (wantsNotifRaiseFix) {
+    const notifRaiseFix = normalizeBooleanFlag(body.notifRaiseFix, true)
+    const ok = await firebaseWrite(NOTIF_RAISE_FIX_FLAG_PATH, notifRaiseFix)
+    if (!ok) {
+      return NextResponse.json({ error: 'Firebase write failed (notifRaiseFix)' }, { status: 500 })
+    }
+    notifRaiseFixMemo = { value: notifRaiseFix, ts: Date.now() }
+    console.log(`[flags] notifRaiseFix set to '${notifRaiseFix}' (applies to ALL users)`)
   }
 
   if (wantsVideo) {
@@ -409,6 +445,7 @@ export async function POST(req: NextRequest) {
     ...(wantsNav ? { subtopicNav: body.subtopicNav } : {}),
     ...(wantsPopup ? { popupSystem: body.popupSystem } : {}),
     ...(wantsNotifLike ? { notifLike: normalizeBooleanFlag(body.notifLike, true) } : {}),
+    ...(wantsNotifRaiseFix ? { notifRaiseFix: normalizeBooleanFlag(body.notifRaiseFix, true) } : {}),
     ...(wantsVideo ? { videoWatch: normalizeBooleanFlag(body.videoWatch, true) } : {}),
     ...(wantsVideoPreview ? { videoPreview: normalizeBooleanFlag(body.videoPreview, false) } : {}),
     ...(wantsMilestoneDonate ? { milestoneDonate: normalizeBooleanFlag(body.milestoneDonate, true) } : {}),

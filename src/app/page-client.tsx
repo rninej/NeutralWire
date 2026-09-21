@@ -289,6 +289,7 @@ export default function Home({
   milestoneDonate = true,
   meshRelay = true,
   userCron = true,
+  notifRaiseFix = true,
 }: {
   initialSubtopicNav?: NavVariant
   popupSystem?: PopupMode
@@ -304,6 +305,12 @@ export default function Home({
    *  notification sends trigger only while users are online, via
    *  one-time Firebase leases). Default ON; flipped from /debug. */
   userCron?: boolean
+  /** The v27 sw.js notification RAISE VERIFICATION (notification taps
+   *  actually bring the backgrounded app to the foreground — also what
+   *  makes the notification Like button visibly do something). Default
+   *  ON; flipped from /debug. Mirrored into the SW below so the click
+   *  handler can honour it with zero network. */
+  notifRaiseFix?: boolean
 }) {
   // --- Platform detection (Android / Apple / Other) ---
   // Sets body.platform-{android|apple|other} so the CSS glass rules in
@@ -320,6 +327,29 @@ export default function Home({
   useEffect(() => {
     restoreGradient()
   }, [])
+
+  // ── Mirror the notifRaiseFix flag into the service worker ──
+  // The SW's notificationclick handler must know whether the v27 raise
+  // verification is on — but it can NEVER fetch the flag at click time
+  // (a network wait would burn the tap's transient user activation, after
+  // which the browser refuses to raise any window). So every page load
+  // pushes the SSR-provided value into the SW, which persists it in its
+  // own Cache Storage (nw-sw-flags-v1) and reads it locally on every
+  // future notification tap, even after SW restarts. /debug pushes flips
+  // the same way, instantly, on the admin's own device.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+    ;(async () => {
+      try {
+        const sw =
+          navigator.serviceWorker.controller ||
+          (await navigator.serviceWorker.ready).active
+        sw?.postMessage({ type: 'NW_SW_FLAGS', notifRaiseFix })
+      } catch {
+        // SW not ready yet (first-ever visit) — the next load syncs it.
+      }
+    })()
+  }, [notifRaiseFix])
 
   // ── Idle-preload the lazy chunks ──
   // The heavy overlays (topic detail, user page) are code-split above.

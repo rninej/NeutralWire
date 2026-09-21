@@ -1,6 +1,28 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v27: NOTIFICATION RAISE VERIFICATION — tapping a notification while
+//      the app is ALREADY OPEN in the background opened the story INSIDE
+//      the hidden app without ever bringing the window to the foreground
+//      (user: "it does not open the app but it just opens the news inside
+//      the app"). Root cause: Android Chrome's WindowClient.focus() is
+//      notorious for RESOLVING successfully while leaving a standalone
+//      (installed-PWA) window in the background — the old code trusted
+//      that resolved promise, posted 'open-topic' to the hidden page and
+//      returned, so the user saw nothing (and the notification's Like
+//      button looked dead: feedback + auto-like all landed invisibly).
+//      Now, when the existing window is HIDDEN, focus() is followed by a
+//      350ms visibility re-check; if the window did not actually come to
+//      the foreground, we fall through to clients.openWindow(url) — the
+//      SAME raise path as the cold-start flow the user confirmed works
+//      (&like=1 already rides the URL, so notification Likes still
+//      auto-press), and if openWindow is refused too, the pre-v27
+//      postMessage-to-hidden-window behaviour remains as a last resort.
+//      The whole thing is gated by the notifRaiseFix flag (default ON,
+//      mirrored from /debug via the new NW_SW_FLAGS message + persisted
+//      in the nw-sw-flags-v1 cache) — flipping it OFF in /debug restores
+//      the exact v25 focus-trusting logic. Cache-name bump v26 → v27 so
+//      installed PWAs pick this up on their next launch.
 // v26: OFFLINE FALSE-POSITIVE FIX — a fresh (uncached) load on a slow
 //      connection could lose the 2.5s navigation race, find no cached
 //      HTML, and show the "Waiting for connection…" offline page while
@@ -77,9 +99,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v26'
-const API_CACHE = 'neutralwire-api-v26'
-const IMG_CACHE = 'neutralwire-img-v26'
+const SHELL_CACHE = 'neutralwire-shell-v27'
+const API_CACHE = 'neutralwire-api-v27'
+const IMG_CACHE = 'neutralwire-img-v27'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
@@ -576,6 +598,81 @@ async function checkScheduledNotifications() {
   }
 }
 
+// ---------- SW-local flag store (v27) ----------
+// The /debug "notifRaiseFix" switch must be honoured at NOTIFICATION-CLICK
+// time, when a network fetch is off-limits (it could burn the tap's
+// transient user activation, after which the browser silently refuses to
+// raise any window). So the page mirrors the flag into the SW with a
+// NW_SW_FLAGS postMessage, and the SW persists it here — in a dedicated
+// Cache Storage entry whose name does NOT start with 'neutralwire-', so
+// the version purge above never deletes it across SW updates.
+const SW_FLAG_CACHE = 'nw-sw-flags-v1'
+const SW_FLAG_KEY = '/nw-sw-flags'
+const SW_FLAG_NAMES = ['notifRaiseFix']
+
+let swFlagsMemo = null // loaded once per SW lifetime, updated by messages
+
+async function readSwFlags() {
+  try {
+    const cache = await caches.open(SW_FLAG_CACHE)
+    const res = await cache.match(SW_FLAG_KEY)
+    if (!res) return {}
+    const flags = await res.json()
+    return flags && typeof flags === 'object' ? flags : {}
+  } catch {
+    return {}
+  }
+}
+
+async function getSwFlag(name, fallback) {
+  if (!swFlagsMemo) swFlagsMemo = await readSwFlags()
+  const v = swFlagsMemo[name]
+  return typeof v === 'boolean' ? v : fallback
+}
+
+async function saveSwFlags(next) {
+  swFlagsMemo = next
+  try {
+    const cache = await caches.open(SW_FLAG_CACHE)
+    await cache.put(SW_FLAG_KEY, new Response(JSON.stringify(next)))
+  } catch {
+    // Cache Storage unavailable — the flag lives in memory for this
+    // SW lifetime only (the page re-mirrors it on every load anyway).
+  }
+}
+
+// ---------- Messages from the page ----------
+// 1. NW_SW_FLAGS — mirrors /debug flag values into the SW so the next
+//    notification click (even hours later, after an SW restart) honours
+//    them with zero network. Sent by the homepage (SSR flag prop) on
+//    every load and by /debug the moment a flag is flipped.
+// 2. SKIP_WAITING — the page's registration code already posts this to a
+//    waiting worker; honour it so updates take over immediately.
+self.addEventListener('message', (event) => {
+  const data = event.data
+  if (!data || typeof data !== 'object') return
+  if (data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
+    return
+  }
+  if (data.type === 'NW_SW_FLAGS') {
+    event.waitUntil(
+      (async () => {
+        if (!swFlagsMemo) swFlagsMemo = await readSwFlags()
+        const next = { ...swFlagsMemo }
+        let changed = false
+        for (const name of SW_FLAG_NAMES) {
+          if (typeof data[name] === 'boolean' && data[name] !== next[name]) {
+            next[name] = data[name]
+            changed = true
+          }
+        }
+        if (changed) await saveSwFlags(next)
+      })(),
+    )
+  }
+})
+
 // ---------- Push event handler ----------
 self.addEventListener('push', (event) => {
   let data = {
@@ -721,6 +818,11 @@ self.addEventListener('notificationclick', (event) => {
 
     if (isNotInterested) return
 
+    // v27: the raise-verification fix is flag-gated (default ON) so it is
+    // fully undoable from /debug. Reading the mirror is a LOCAL Cache
+    // Storage hit — no network, the tap's user activation stays intact.
+    const raiseFixOn = await getSwFlag('notifRaiseFix', true)
+
     const clients = await self.clients.matchAll({
       type: 'window',
       includeUncontrolled: true,
@@ -734,38 +836,95 @@ self.addEventListener('notificationclick', (event) => {
       }
     }
 
-    // ── Path A: an existing window — focus it and tell the app to open the
+    // ── Path A: an existing window — raise it and tell the app to open the
     // article. matchAll is local + fast, so the notification's user
-    // activation is still fresh. CRITICAL: if focus() FAILS (some browsers
-    // refuse it for windows the SW doesn't control, or when the activation
-    // was consumed), we do NOT bail out — we fall through to opening a
-    // fresh window. The old code returned unconditionally here, which is
-    // exactly why tapping Like sometimes only dismissed the notification.
+    // activation is still fresh.
     if (targetClient) {
-      let focused = false
-      try {
-        const focusedClient = await targetClient.focus()
-        focused = !!focusedClient
-      } catch {
-        focused = false
-      }
-      if (focused) {
+      if (!raiseFixOn) {
+        // ── LEGACY v25 behaviour (notifRaiseFix OFF in /debug) ──
+        // Trust focus()'s promise unconditionally. Kept verbatim so the
+        // /debug switch is a true undo, not an approximation.
+        let focused = false
         try {
-          // autoLike: true tells the already-open app to press the like
-          // button when the article opens (the &like=1 URL param covers the
-          // cold-start case — this message covers the warm-app case).
-          targetClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
+          const focusedClient = await targetClient.focus()
+          focused = !!focusedClient
         } catch {
-          // silent
+          focused = false
         }
-        return
+        if (focused) {
+          try {
+            // autoLike: true tells the already-open app to press the like
+            // button when the article opens (the &like=1 URL param covers
+            // the cold-start case — this message covers the warm-app case).
+            targetClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
+          } catch {
+            // silent
+          }
+          return
+        }
+        // focus failed → fall through and open a NEW window below.
+      } else {
+        // ── v27 RAISE VERIFICATION ──
+        // On Android Chrome (installed standalone PWA) WindowClient.focus()
+        // can RESOLVE while leaving the window in the background — the app
+        // never appears, the postMessage opens the article invisibly, and
+        // the user (rightly) reports "the notification/like did nothing".
+        // So when the window is hidden we focus, then VERIFY the raise by
+        // re-reading the client's visibilityState; only a window that is
+        // actually on screen gets the in-app open. A window that focus()
+        // failed to raise falls through to openWindow() below — the exact
+        // raise path the cold-start flow uses (which works).
+        const wasVisible = targetClient.visibilityState === 'visible'
+        let raised = false
+        if (wasVisible) {
+          // Already on screen (notification shade over the app) — focus is
+          // a formality that always works.
+          try {
+            raised = !!(await targetClient.focus())
+          } catch {
+            raised = false
+          }
+        } else {
+          let focusResolved = false
+          try {
+            focusResolved = !!(await targetClient.focus())
+          } catch {
+            focusResolved = false
+          }
+          if (focusResolved) {
+            // Give the OS a moment to actually bring the window up, then
+            // re-check its visibility from a fresh matchAll snapshot.
+            await new Promise((resolve) => setTimeout(resolve, 350))
+            try {
+              const recheck = await self.clients.matchAll({
+                type: 'window',
+                includeUncontrolled: true,
+              })
+              const now = recheck.find((c) => c.id === targetClient.id)
+              raised = !!now && now.visibilityState === 'visible'
+            } catch {
+              // matchAll failed — nothing better to trust than focus().
+              raised = true
+            }
+          }
+        }
+        if (raised) {
+          try {
+            targetClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
+          } catch {
+            // silent
+          }
+          return
+        }
+        // Not raised (the silent Android focus failure) → fall through to
+        // Path B: openWindow() reliably raises the installed app window
+        // and navigates it to the URL (like=1 rides along for Like taps).
       }
-      // focus failed → fall through and open a NEW window below.
     }
 
-    // ── Path B: no window (or focusing it failed) — open one. If the topic
-    // URL is rejected, retry with the plain root so the app AT LEAST comes
-    // up instead of nothing.
+    // ── Path B: no window (or focusing/raising it failed) — open one. If
+    // the topic URL is rejected, retry with the plain root so the app AT
+    // LEAST comes up instead of nothing.
     let openedClient = null
     try {
       openedClient = await self.clients.openWindow(url)
@@ -787,6 +946,15 @@ self.addEventListener('notificationclick', (event) => {
           // silent
         }
       }, 1500)
+    } else if (!openedClient && targetClient && topicId) {
+      // v27 last resort: openWindow was refused entirely — at least open
+      // the article in the existing (hidden) window, which is what the
+      // pre-v27 code effectively did. Better than dismissing the tap.
+      try {
+        targetClient.postMessage({ type: 'open-topic', topicId, url, notifId, autoLike: isLike })
+      } catch {
+        // silent
+      }
     }
   })())
 })

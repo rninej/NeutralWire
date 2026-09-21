@@ -567,6 +567,15 @@ export default function DebugPage() {
   const [notifLike, setNotifLike] = React.useState<boolean | null>(null)
   const [notifLikeFlipping, setNotifLikeFlipping] = React.useState(false)
   const [notifLikeResult, setNotifLikeResult] = React.useState<string | null>(null)
+  // Notification raise-fix (v27 sw.js) — tapping a notification while the
+  // app idles in the background now VERIFIES the window actually came to
+  // the foreground (Android Chrome's focus() can resolve without raising
+  // it) and re-raises via openWindow() when it didn't. Also what makes the
+  // notification Like button visibly do something. Default ON; this switch
+  // is the full undo.
+  const [notifRaiseFix, setNotifRaiseFix] = React.useState<boolean | null>(null)
+  const [notifRaiseFixFlipping, setNotifRaiseFixFlipping] = React.useState(false)
+  const [notifRaiseFixResult, setNotifRaiseFixResult] = React.useState<string | null>(null)
   const [videoWatch, setVideoWatch] = React.useState<boolean | null>(null)
   const [videoWatchFlipping, setVideoWatchFlipping] = React.useState(false)
   const [videoWatchResult, setVideoWatchResult] = React.useState<string | null>(null)
@@ -604,6 +613,7 @@ export default function DebugPage() {
             : DEFAULT_POPUP_MODE,
         )
         setNotifLike(d?.notifLike !== false)
+        setNotifRaiseFix(d?.notifRaiseFix !== false)
         setVideoWatch(d?.videoWatch !== false)
         setVideoPreview(d?.videoPreview === true)
         setMilestoneDonate(d?.milestoneDonate !== false)
@@ -614,6 +624,7 @@ export default function DebugPage() {
         setNavMode('cards')
         setPopupMode(DEFAULT_POPUP_MODE)
         setNotifLike(true)
+        setNotifRaiseFix(true)
         setVideoWatch(true)
         setVideoPreview(false)
         setMilestoneDonate(true)
@@ -624,7 +635,7 @@ export default function DebugPage() {
 
   /** POST one boolean flag (shared by the experimental switches). */
   const flipBooleanFlag = async (
-    flag: 'notifLike' | 'videoWatch' | 'videoPreview' | 'milestoneDonate' | 'meshRelay' | 'userCron',
+    flag: 'notifLike' | 'notifRaiseFix' | 'videoWatch' | 'videoPreview' | 'milestoneDonate' | 'meshRelay' | 'userCron',
     value: boolean,
   ): Promise<boolean> => {
     if (!passwordRef.current) return false
@@ -637,6 +648,23 @@ export default function DebugPage() {
       return res.ok
     } catch {
       return false
+    }
+  }
+
+  /**
+   * Push a flag value into THIS device's service worker immediately, so a
+   * flip made here affects the very next notification tap with no reload.
+   * (The homepage mirrors flags the same way on every load for everyone.)
+   */
+  const pushFlagToServiceWorker = async (flags: Record<string, boolean>) => {
+    try {
+      if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+      const sw =
+        navigator.serviceWorker.controller ||
+        (await navigator.serviceWorker.ready).active
+      sw?.postMessage({ type: 'NW_SW_FLAGS', ...flags })
+    } catch {
+      // SW not controlling this page yet — the next homepage load syncs it.
     }
   }
 
@@ -1200,11 +1228,11 @@ export default function DebugPage() {
             </span>
           </div>
           <p className="mb-4 text-sm text-muted-foreground">
-            Like + Watch + the top-story video preview are live for every
-            visitor right now, and the milestone popup carries the donate
-            message. Each switch applies instantly for new
-            notifications / new page loads — no redeploy needed. Flip them
-            back the same way.
+            Like + the notification app-raise fix + Watch + the top-story
+            video preview are live for every visitor right now, and the
+            milestone popup carries the donate message. Each switch applies
+            instantly for new notifications / new page loads — no redeploy
+            needed. Flip them back the same way.
           </p>
 
           <div className="grid max-w-3xl gap-3">
@@ -1281,6 +1309,93 @@ export default function DebugPage() {
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : notifLike ? (
                   'Remove it'
+                ) : (
+                  'Turn on'
+                )}
+              </Button>
+            </div>
+
+            {/* ── Notification raise verification (v27) ── */}
+            <div
+              className={cn(
+                'flex items-start gap-3 rounded-xl border-2 p-4 transition-colors',
+                notifRaiseFix === false ? 'border-border opacity-70' : 'border-border bg-muted/40',
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  notifRaiseFix ? 'bg-blue-500/15 text-blue-500' : 'bg-muted text-muted-foreground',
+                )}
+              >
+                <Smartphone className="h-4.5 w-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold">Bring the app to the front on notification taps</span>
+                  {notifRaiseFix !== null && (
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                        notifRaiseFix
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-muted-foreground/20 text-muted-foreground',
+                      )}
+                    >
+                      {notifRaiseFix ? 'Live' : 'Reverted'}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Fixes: tapping a notification (or its <b>Like</b>) while the
+                  app is open in the background opened the story <i>inside</i>{" "}
+                  the hidden app without ever bringing it to the screen —
+                  Android Chrome's <code>focus()</code> can resolve without
+                  raising the window. The service worker now verifies the app
+                  actually became visible and, when it didn't, re-opens it via{" "}
+                  <code>openWindow()</code> — the same raise path a cold start
+                  uses. Turning this off restores the previous focus-trusting
+                  behaviour; the change applies to this device immediately and
+                  to everyone else on their next app load.
+                </p>
+                {notifRaiseFixResult && (
+                  <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    {notifRaiseFixResult}
+                  </p>
+                )}
+              </div>
+              <Button
+                variant={notifRaiseFix ? 'destructive' : 'default'}
+                size="sm"
+                disabled={notifRaiseFixFlipping || notifRaiseFix === null}
+                onClick={async () => {
+                  if (notifRaiseFixFlipping || notifRaiseFix === null) return
+                  setNotifRaiseFixFlipping(true)
+                  setNotifRaiseFixResult(null)
+                  const next = !notifRaiseFix
+                  const ok = await flipBooleanFlag('notifRaiseFix', next)
+                  if (ok) {
+                    setNotifRaiseFix(next)
+                    // Mirror the flip into THIS device's service worker right
+                    // away — the very next notification tap already honours
+                    // it, no reload needed.
+                    await pushFlagToServiceWorker({ notifRaiseFix: next })
+                    setNotifRaiseFixResult(
+                      next
+                        ? '✓ On — notification taps now verify + raise the app (live here now, everywhere on next load)'
+                        : '✓ Off — previous notification-open behaviour restored (live here now, everywhere on next load)',
+                    )
+                  } else {
+                    setNotifRaiseFixResult('Failed to update (check password)')
+                  }
+                  setNotifRaiseFixFlipping(false)
+                }}
+                className="shrink-0"
+              >
+                {notifRaiseFixFlipping ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : notifRaiseFix ? (
+                  'Turn off'
                 ) : (
                   'Turn on'
                 )}

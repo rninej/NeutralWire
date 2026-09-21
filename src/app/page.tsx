@@ -186,6 +186,32 @@ async function getUserCron(): Promise<boolean> {
   }
 }
 
+// ── Server-rendered notification raise-fix flag ──
+// The v27 sw.js RAISE VERIFICATION (notification taps actually bring the
+// backgrounded app to the foreground; also fixes the "dead" notification
+// Like button). Read server-side with the same 5s-memo pattern and passed
+// as a prop so the client can mirror it into the service worker — the SW
+// needs it at NOTIFICATION-CLICK time, when network fetches are forbidden
+// (they would burn the tap's transient user activation). Default ON;
+// flipping it OFF from /debug restores the previous focus-trusting click
+// behaviour on every device after its next page load (or instantly for
+// the admin's own device — /debug pushes the flip straight into the SW).
+let notifRaiseFixFlagMemo: { value: boolean; ts: number } | null = null
+
+async function getNotifRaiseFix(): Promise<boolean> {
+  if (notifRaiseFixFlagMemo && Date.now() - notifRaiseFixFlagMemo.ts < MESH_FLAG_TTL_MS) {
+    return notifRaiseFixFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<boolean | string>('featureFlags/notifRaiseFix')
+    const value = !(stored === false || stored === 'false')
+    notifRaiseFixFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return true
+  }
+}
+
 /**
  *  Generate dynamic OG metadata for shared links.
  *
@@ -285,6 +311,9 @@ export default async function Page() {
   const meshRelay = await getMeshRelay()
   const userCron = await getUserCron()
 
+  // Notification raise-fix flag (default ON; switched from /debug).
+  const notifRaiseFix = await getNotifRaiseFix()
+
   // Personal override (Account → Feature Flags → "Your header style"):
   // a cookie, so the server sees it during SSR — the visitor's own pick
   // renders in the very first paint, no flash. Invalid values fall back
@@ -308,6 +337,7 @@ export default async function Page() {
           milestoneDonate={milestoneDonate}
           meshRelay={meshRelay}
           userCron={userCron}
+          notifRaiseFix={notifRaiseFix}
         />
       </VideoPreviewProvider>
     </VideoWatchProvider>
