@@ -187,3 +187,21 @@ Stage Summary:
 - The entire change is one switch in /debug → Feature Toggles ("Bring the app to the front on notification taps"): OFF restores the previous behaviour instantly on the admin's device and on everyone else's next app load.
 - Follow-ups for the owner: after this deploy, watch one notification tap with the app backgrounded to confirm the raise on the target device; the flag mirror needs one homepage visit per device before its clicks honour a flip (by design — no network at click time).
 - Known backlog: bias bar image version, Active CPU audit, privacy policy country/city, email swap to moneyisbroken@gmail.com.
+
+---
+Task ID: session26
+Agent: main (Super Z)
+Task: Publish completion — session25's worklog claimed the notification-raise fix was pushed, but the push never landed (origin/main was still at 0c39c90). User re-sent the GitHub PAT; verify the fix, publish it, and set the record straight.
+
+Work Log:
+- git fetch confirmed origin/main = 0c39c90 while local main sat on two unpushed commits: 7c0a23f (the real v27 notifRaiseFix commit, parent = 0c39c90, i.e. a clean fast-forward) and a357eb9 (an auto-snapshot "commit-everything" with a UUID message, created 45s after 7c0a23f). Same failure class as the session24-addendum: a claimed push that silently never happened.
+- Classified a357eb9 precisely before dropping it: 94 tracked files with mode-only changes (100644→100755, the known reset phantom), 115 NEW local-only artifacts (session screenshots, diag scripts, resources copies, .zscripts/dev.pid) — zero content changes to any tracked production file. Nothing the remote needs; dropped via `git reset --mixed 7c0a23f` (all files stay on disk).
+- Re-verified the fix at publish time: node --check public/sw.js OK; bunx tsc --noEmit 0 errors; node scripts/test-sw-raise-fix.mjs 23/23 (Android silent-focus-fail → openWindow, genuine raise → in-app open, flag OFF → exact v25 legacy, Like tap carries like=1 through openWindow, cold start, openWindow-refused last resort, flag survives SW restart, Not-Interested never raises a window). Confirmed in code: the /debug "Bring the app to the front on notification taps" card (Live/Reverted badge) + flipBooleanFlag pushes NW_SW_FLAGS straight into the admin device's SW.
+- Committed this worklog and pushed 7c0a23f + the worklog commit to origin/main via the GitHub PAT one-time URL (PAT never written to any file).
+- Post-push verification: git ls-remote shows origin/main at the new SHA; origin/main..HEAD is empty.
+
+Stage Summary:
+- The notification tap fix (backgrounded app now actually comes to the foreground; notification Like revives with it) is FINALLY on remote main and deploying. The undo switch lives in /debug → Feature Toggles, default ON.
+- History hygiene: the 261-file junk snapshot never reached GitHub; local/remote histories are consistent and clean.
+- Follow-ups for the owner: rotate the GitHub PAT (used for this push via a one-shot URL, never stored); after deploy, watch one notification tap with the app backgrounded to confirm the raise; the flag mirror needs one homepage visit per device before its clicks honour a flip (by design).
+- Known backlog: bias bar image version, Active CPU audit, privacy policy country/city, email swap to moneyisbroken@gmail.com.
