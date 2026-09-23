@@ -5,6 +5,7 @@ import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { firebaseRead } from '@/lib/firebase-server'
 import { plainSummaryText, isTemplateSummary } from '@/lib/summary-sections'
+import { generateStorySummaryBounded } from '@/lib/summary-generate'
 import { BiasBar } from '@/components/bias-bar'
 import { StorySummaryLive } from '@/components/story-summary-live'
 import {
@@ -23,13 +24,16 @@ import {
  * to Googlebot. This route gives every story a permanent, fully
  * server-rendered page:
  *
- *   /story/<topicId>  →  hero photo, headline, NEUTRAL SUMMARY (the
- *                        same card the app shows — stored LLM summary
- *                        from summaries/<topicId>, wire-snippet
- *                        fallback + live on-demand upgrade when none
- *                        exists yet), dates, left/centre/right
- *                        coverage panel (real outlet links), NewsArticle
- *                        JSON-LD, canonical + OG.
+ *   /story/<topicId>  →  NOTIFICATION IMAGE hero (the story photo
+ *                        composited with the NEUTRALWIRE banner + the
+ *                        L/C/R bias bar — the same image push
+ *                        notifications attach), headline, NEUTRAL
+ *                        SUMMARY (the same card the app shows — stored
+ *                        LLM summary from summaries/<topicId>, generated
+ *                        DURING the render when none exists yet so the
+ *                        raw HTML always ships complete), dates,
+ *                        left/centre/right coverage panel (real outlet
+ *                        links), NewsArticle JSON-LD, canonical + OG.
  *
  * ── Bandwidth safety (the 6.2 GB rule) ──
  * The topic lookup goes through findTopicAnywhere → archive/<id> first
@@ -49,6 +53,10 @@ import {
  */
 
 export const revalidate = 900 // 15 min ISR — matches the feed cache cadence
+// A cold story render may wait up to ~8s for the neutral summary's LLM
+// generation (see getStoryData) — 30s keeps Vercel from killing a slow
+// first render of an un-summarized story (ISR regens run inside it too).
+export const maxDuration = 30
 
 // Topic lookup + the stored NEUTRAL SUMMARY in one request-scoped memo
 // (React `cache`), so generateMetadata and the page render share a single
@@ -81,6 +89,36 @@ const getStoryData = cache(
       // best-effort — the page falls back to topic.summary below
     }
 
+    // ── THE INDEXING FIX (Sep 2026) ──
+    // No stored summary → GENERATE IT DURING THIS RENDER (same shared
+    // pipeline as /api/summary, bounded ~8s) instead of shipping a thin
+    // wire snippet and letting the client swap the real summary in AFTER
+    // load. Googlebot saw exactly that "suddenly loads" pattern (initial
+    // HTML ≠ final content + layout shift) and refused to index 27 story
+    // pages. Now the raw HTML ships the complete neutral summary on the
+    // FIRST render; a timeout keeps the generation alive via after() so
+    // it persists and the next ISR regen (≤15 min) has it in the HTML.
+    // The cron refresh pre-generates summaries for new stories too, so
+    // this path is the exception, not the rule.
+    if (!storedSummary) {
+      try {
+        storedSummary = await generateStorySummaryBounded(
+          id,
+          topic.title,
+          (topic.articles || []).slice(0, 12).map((a) => ({
+            title: a.title,
+            description: a.description || '',
+            sourceName: a.sourceName,
+            leaning: a.leaning || '',
+          })),
+          topic.summary || '',
+          8000,
+        )
+      } catch {
+        // never break the page render over summary generation
+      }
+    }
+
     return { topic, storedSummary }
   },
 )
@@ -102,14 +140,20 @@ export async function generateMetadata({
   const description =
     plainSummaryText(storedSummary || topic.summary || '').slice(0, 200) ||
     `How ${topic.articles.length || 'multiple'} outlets across the political spectrum cover this story.`
-  const composite = ogImageForTopic(id)
+  // THE NOTIFICATION IMAGE (user request, Sep 2026): the /api/og-image
+  // composite — the story's photo with the NEUTRALWIRE banner + the
+  // L/C/R bias bar — exactly what push notifications attach. It is now
+  // the PRIMARY og:image (and JSON-LD image + page hero + sitemap image)
+  // so Google indexes the branded bias-bar image, not a bare photo.
+  const composite = new URL(ogImageForTopic(id), SITE_URL).toString()
 
-  // Prefer the real photo for the social card; the branded composite is
-  // the guaranteed-rendering fallback (and second image in the array).
-  const images: Array<{ url: string; width: number; height: number }> = []
+  // Composite FIRST (the branded image Google/Discover should pick);
+  // the raw photo stays as the guaranteed second candidate.
+  const images: Array<{ url: string; width: number; height: number }> = [
+    { url: composite, width: 1200, height: 630 },
+  ]
   const hero = heroImageForUrl(topic.imageUrl)
   if (hero) images.push({ url: hero, width: 1200, height: 675 })
-  images.push({ url: composite, width: 1200, height: 630 })
 
   return {
     title: `${topic.title} — ${SITE_NAME}`,
@@ -165,7 +209,9 @@ function newsArticleJsonLd(
   storedSummary: string | null,
 ): string {
   const canonical = `${SITE_URL}/story/${encodeURIComponent(id)}`
-  const image = [heroImageForUrl(topic.imageUrl), ogImageForTopic(id)]
+  // Composite (photo + NW banner + bias bar) FIRST — the branded image
+  // Google should index for this story (matches og:image + the hero).
+  const image = [ogImageForTopic(id), heroImageForUrl(topic.imageUrl)]
     .filter((u): u is string => Boolean(u))
     .map((u) => new URL(u, SITE_URL).toString())
 
@@ -211,7 +257,10 @@ export default async function StoryPage({ params }: StoryProps) {
   if (!story || !story.topic.title) notFound()
   const { topic, storedSummary } = story
 
-  const hero = heroImageForUrl(topic.imageUrl)
+  // The VISIBLE hero image is the notification composite (photo + NW
+  // banner + bias bar) — what the user asked Google to index the story
+  // with. It always renders, even without a photo (dark branded card).
+  const composite = ogImageForTopic(id)
   const firstSeen = topic.firstSeen || topic.latestSeen
   const latestSeen = topic.latestSeen || topic.firstSeen
   const byLean: Record<'left' | 'center' | 'right', typeof topic.articles> = {
@@ -242,28 +291,28 @@ export default async function StoryPage({ params }: StoryProps) {
       </header>
 
       <main className="mx-auto max-w-3xl px-4 pb-16">
-        {/* Hero — the Discover card image. Real photo only; no placeholder
-            when the story has none (same policy as notifications). */}
-        {hero && (
-          <img
-            src={hero}
-            alt={topic.title}
-            className="mt-4 aspect-video w-full rounded-xl border border-border bg-muted object-cover"
-            loading="eager"
-            fetchPriority="high"
-          />
-        )}
+        {/* Hero — the notification image: the story photo composited
+            with the NEUTRALWIRE banner + the L/C/R bias bar (1200×630,
+            rendered by /api/og-image and CDN-cached 7 days). */}
+        <img
+          src={composite}
+          alt={topic.title}
+          className="mt-4 aspect-[1200/630] w-full rounded-xl border border-border bg-muted object-cover"
+          loading="eager"
+          fetchPriority="high"
+        />
 
         {/* Headline block */}
-        <h1 className={`text-2xl font-bold leading-tight tracking-tight ${hero ? 'mt-6' : 'mt-8'} md:text-3xl`}>
+        <h1 className={`text-2xl font-bold leading-tight tracking-tight mt-6 md:text-3xl`}>
           {topic.title}
         </h1>
 
-        {/* THE Neutral Summary — the exact card the app renders. Stored
-            LLM summary in the HTML; when none exists yet the wire snippet
-            renders first and the real summary is generated live on mount
-            (and persisted, so crawlers get it in the raw HTML after the
-            next ISR regen). */}
+        {/* THE Neutral Summary — the exact card the app renders. The
+            summary is generated DURING the render when missing (see
+            getStoryData), so the raw HTML normally ships the complete
+            LLM summary — what Googlebot indexes. The client-side
+            upgrade below remains only as the rare fallback for when the
+            render-time generation failed (e.g. a provider outage). */}
         <StorySummaryLive
           topicId={id}
           title={topic.title}

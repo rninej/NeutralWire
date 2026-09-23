@@ -6,6 +6,7 @@ import { aggregateMyCountryViaGdelt } from '@/lib/gdelt-aggregator'
 import { refreshCategory } from '@/lib/news-cache'
 import { sourcesForCountry } from '@/lib/country-detect'
 import { consumeLease, jobRecentlyRan, markJobRun, CRON_JOB_INTERVALS } from '@/lib/mesh/lease-server'
+import { preGenerateSummaries } from '@/lib/summary-generate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -93,8 +94,12 @@ export async function GET(req: NextRequest) {
   }
 
   // ── Rotation: relevant/GB is ALWAYS refreshed (default landing page),
-  // one RSS category rotates by UTC hour (each refreshed every ~3.5h),
-  // and mycountry/GB (GDELT) runs last in the parallel set.
+  // 'top' is ALWAYS refreshed (the flagship category — the sitemap's
+  // priority room; it previously went 6 DAYS stale because only a user
+  // opening the Top tab ever refreshed it, which silently EMPTIED the
+  // top-only news sitemap Google was reading), one RSS category rotates
+  // by UTC hour (each refreshed every ~3.5h), and mycountry/GB (GDELT)
+  // runs last in the parallel set.
   const countrySourceIds = sourcesForCountry('GB')
   const hour = new Date().getUTCHours()
   const rotation = ['world', 'politics', 'business', 'technology', 'science', 'health', 'sports']
@@ -102,6 +107,7 @@ export async function GET(req: NextRequest) {
 
   const categoriesToRefresh = [
     { cat: 'relevant' as Category, country: 'GB', isMyCountry: false },
+    { cat: 'top' as Category, country: '', isMyCountry: false },
     { cat: rotatedCategory as Category, country: '', isMyCountry: false },
     { cat: 'mycountry' as Category, country: 'GB', isMyCountry: true },
   ]
@@ -129,6 +135,9 @@ export async function GET(req: NextRequest) {
     return {
       label: cat + (country ? `/${country}` : ''),
       startedAt,
+      // The RAW refresh promise (resolves to the aggregate result with
+      // .topics) — kept for the summary pre-generation below.
+      raw: promise,
       // Resolve to a per-category status object (refreshCategory returns
       // null on failure → topics: 0; it logs the error internally).
       done: promise.then((result) => ({
@@ -169,6 +178,37 @@ export async function GET(req: NextRequest) {
     console.log(
       `[cron/refresh-all] all refreshes settled after ${Date.now() - t0}ms (response went out earlier)`,
     )
+
+    // ── SUMMARY PRE-GENERATION (the Google indexing fix, Sep 2026) ──
+    // Story pages must ship their complete neutral summary in the RAW
+    // HTML or Google refuses to index them (the "summary suddenly loads"
+    // problem). Pre-generating summaries for the NEWEST stories right
+    // after each refresh means Googlebot — arriving via the news sitemap
+    // minutes later — reads a story page whose summary is already
+    // persisted: a pure cache read, no render-time LLM wait. Bounded:
+    // newest-first, ≤4 topics per tick, skipped entirely when the tick is
+    // already deep into its maxDuration budget. Best-effort by design.
+    try {
+      const elapsed = Date.now() - t0
+      if (elapsed < 40_000) {
+        const settled = await Promise.allSettled(refreshes.map((r) => r.raw))
+        const freshTopics = settled.flatMap((s) =>
+          s.status === 'fulfilled' && s.value?.topics ? s.value.topics : [],
+        )
+        if (freshTopics.length > 0) {
+          const generated = await preGenerateSummaries(freshTopics, { max: 4 })
+          console.log(
+            `[cron/refresh-all] pre-generated ${generated} neutral summar${generated === 1 ? 'y' : 'ies'} of ${freshTopics.length} fresh topics (${Date.now() - t0}ms into the tick)`,
+          )
+        }
+      } else {
+        console.log(
+          `[cron/refresh-all] skipping summary pre-generation — tick already at ${elapsed}ms`,
+        )
+      }
+    } catch (err) {
+      console.warn('[cron/refresh-all] summary pre-generation failed:', err)
+    }
   })
 
   const ms = Date.now() - t0

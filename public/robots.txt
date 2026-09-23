@@ -98,7 +98,11 @@ Allow: /
 
 # Sitemaps — safe to list again since the 6.2GB Firebase fix:
 #   /sitemap.xml      is fully static (zero Firebase reads)
-#   /news-sitemap.xml does ONE ETag-cached read per regeneration (304 →
-#                    0 bytes when unchanged) and is CDN-cached for 15 min
+#   /news-sitemap.xml scans EVERY live room (all categories + country
+#                    feeds, not just 'top') through ETag-cached reads
+#                    (unchanged rooms cost 0 bytes), stops at 200 fresh
+#                    stories, and is CDN-cached for 15 min — it re-derives
+#                    itself after every cron refresh, so new story pages
+#                    are listed automatically with fresh lastmod values.
 Sitemap: https://neutralwire.org/sitemap.xml
 Sitemap: https://neutralwire.org/news-sitemap.xml
