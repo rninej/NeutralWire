@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import webpush from 'web-push'
-import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { firebaseDelete, firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { readCachedNews, isVirtualCategory } from '@/lib/news-cache'
 import { consumeLease, jobRecentlyRan, markJobRun, CRON_JOB_INTERVALS } from '@/lib/mesh/lease-server'
+import { buildBriefingPayload } from '@/lib/push/briefing-payload'
 import { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } from '@/lib/vapid'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import type { Category } from '@/lib/news-sources'
@@ -225,6 +226,30 @@ export async function GET(req: NextRequest) {
   }
   if (!authorized) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // ── Rogue-instance guard (the Sep 23 incident class) ──
+  // This route writes REAL per-device "sent" marks to the production
+  // database (the DB URL is compiled into firebase-server). A LOCAL
+  // dev/standalone server reached by a browser (the user-cron mesh
+  // triggers its OWN origin, and the DB is shared) would happily mark
+  // every in-window device "sent" while its local/throwaway VAPID key
+  // makes every actual push fail with 403 — silently cancelling that
+  // timezone's briefings for the entire day. Refuse non-dry runs from
+  // local origins unless explicitly overridden with ?allowLocal=1.
+  const isLocalOrigin =
+    /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.nextUrl.origin)
+  if (isLocalOrigin && !dryRun && req.nextUrl.searchParams.get('allowLocal') !== '1') {
+    return NextResponse.json(
+      {
+        ok: false,
+        refused: 'local-origin',
+        message:
+          'Refusing to send pushes from a local instance: it would write real device marks to the production database while pushes fail with a local VAPID key (this silently cancels the day’s briefings for whole timezones). Use ?dry=1 for diagnostics or ?allowLocal=1 to deliberately override.',
+        ts: Date.now(),
+      },
+      { status: 403 },
+    )
   }
 
   if (viaLease && !dryRun && !forceSlot) {
@@ -482,6 +507,7 @@ export async function GET(req: NextRequest) {
 
     let sentCount = 0
     let failedCount = 0
+    let firstError: string | null = null
     const allSentTopicIds = new Set<string>()
     const allSentFingerprints = new Set<string>()
 
@@ -550,17 +576,15 @@ export async function GET(req: NextRequest) {
           ? `${origin}/api/og-image?topicId=${encodeURIComponent(bestStory.topicId)}&title=${encodeURIComponent(bestStory.title.slice(0, 80))}&leanLeft=${bestStory.leanLeft}&leanCenter=${bestStory.leanCenter}&leanRight=${bestStory.leanRight}&imageUrl=${encodeURIComponent(bestStory.imageUrl)}`
           : null
 
-        const payload = JSON.stringify({
+        // Size-guarded: a monster imageUrl (URL-encoded inside the
+        // og-image proxy URL) must never make web-push throw for every
+        // device that picks this story — the guard strips the image
+        // and, in the absurd worst case, truncates the body.
+        const payload = buildBriefingPayload({
           title: slotLabels[target.slot],
           body: bestStory.title.slice(0, 100),
           url: `/?topic=${bestStory.topicId}`,
-          icon: '/icon-192.png',
-          // Badge icon MUST be monochrome (white on transparent) for Android.
-          // Android applies its own tint and shows a white square if the badge
-          // icon has color. This is the NW monogram in white silhouette.
-          badge: '/badge-96.png',
-          // undefined is dropped by JSON.stringify — no photo, no image.
-          image: ogImageUrl ?? undefined,
+          image: ogImageUrl,
           tag: `briefing-${target.slot}`,
           notifId: `tz_${target.dateKey}_${target.slot}_${target.deviceId.slice(-6)}`,
           // Like-button gate (featureFlags/notifLike, read once per run
@@ -655,7 +679,25 @@ export async function GET(req: NextRequest) {
         await new Promise((r) => setTimeout(r, 100))
       } catch (err) {
         failedCount++
-        console.warn(`[trigger-tz] Failed: ${target.deviceId.slice(0, 8)}:`, err instanceof Error ? err.message : err)
+        const errMsg = err instanceof Error ? err.message : String(err)
+        if (!firstError) firstError = errMsg
+        console.warn(`[trigger-tz] Failed: ${target.deviceId.slice(0, 8)}:`, errMsg)
+        // ── Roll back the "sent" mark (the Sep 23 lesson) ──
+        // The mark is written BEFORE the push so a function kill mid-loop
+        // can't double-send. But a CAUGHT error means nothing was
+        // delivered — leaving the mark in place silently burns this
+        // device's briefing slot for the REST OF THE DAY. (Sep 23: a run
+        // whose pushes all failed marked every London device "sent" in
+        // the 07:00 and 12:00 UTC windows — morning + lunch briefings
+        // vanished for the whole timezone with zero visibility.) Un-mark
+        // so the next in-window trigger (mesh 20 min / external cron
+        // 30 min — the ±15-minute windows always catch at least one more
+        // pass) retries the device. A function KILL (no catch) still
+        // keeps the mark — the ambiguous case stays safe against
+        // double-sends.
+        await firebaseDelete(
+          `devices/${target.deviceId}/sentSlotsToday/${target.slot}`,
+        )
       }
     }
 
@@ -666,6 +708,7 @@ export async function GET(req: NextRequest) {
       message: 'Notifications dispatched',
       sent: sentCount,
       failed: failedCount,
+      firstError,
       toNotify: toNotify.length,
       totalDevices,
       uniqueStories: allSentTopicIds.size,
