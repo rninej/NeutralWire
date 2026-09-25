@@ -703,7 +703,14 @@ export default function Home({
           loadMore()
         }
       },
-      { rootMargin: '200px' }, // start loading 200px before reaching the bottom
+      // Start loading ~800px (about one mobile screen) before the
+      // sentinel enters the viewport. The old 200px margin fired too late
+      // on mobile: users reached the bottom while the fetch was still in
+      // flight and stared at blank space that looked like the end of the
+      // feed ("it makes it seem as if there is nothing else to scroll
+      // down to"). With a full screen of headroom the next page is
+      // usually rendered before the user ever sees the bottom.
+      { rootMargin: '800px' },
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
@@ -2776,9 +2783,23 @@ export default function Home({
                 )}
 
                 {/* Infinite scroll sentinel + loading animation */}
-                <div ref={sentinelRef} className="flex justify-center py-8">
-                  {loadingMore && (
-                    <div className="grid w-full max-w-[1440px] grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {/* The skeleton row renders whenever MORE PAGES EXIST —
+                    not only while a fetch is in flight. While idle it still
+                    communicates "there is more below" (the blank gap under
+                    the last card previously looked like the end of the
+                    feed); once the observer fires (800px early) it simply
+                    stays put until the real cards replace it. Tapping it
+                    is a manual load-more fallback for the rare browser
+                    where IntersectionObserver never fires. */}
+                <div
+                  ref={sentinelRef}
+                  className="py-8"
+                  onClick={() => {
+                    if (hasMore && !loadingMore) loadMore()
+                  }}
+                >
+                  {hasMore && (
+                    <div className="grid w-full max-w-[1440px] cursor-pointer grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                       {Array.from({ length: 4 }).map((_, i) => (
                         <motion.div
                           key={i}
@@ -2788,15 +2809,24 @@ export default function Home({
                           className="h-64 shimmer rounded-lg bg-muted"
                         />
                       ))}
+                      <div className="col-span-full flex items-center justify-center gap-2 pt-1 text-xs text-muted-foreground">
+                        <span
+                          className={`inline-block h-3 w-3 rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground${
+                            loadingMore ? ' animate-spin' : ''
+                          }`}
+                          aria-hidden
+                        />
+                        {loadingMore ? 'Loading more stories…' : 'More stories below — keep scrolling'}
+                      </div>
                     </div>
                   )}
-                  {!loadingMore && !hasMore && (
+                  {!hasMore && (
                     <motion.div
                       initial={{ opacity: 0, y: 6 }}
                       whileInView={{ opacity: 1, y: 0 }}
                       viewport={{ once: true, margin: '-20px' }}
                       transition={{ duration: 0.4, ease: 'easeOut' }}
-                      className="text-sm text-muted-foreground"
+                      className="flex justify-center text-sm text-muted-foreground"
                     >
                       You've reached the end of the news.
                     </motion.div>

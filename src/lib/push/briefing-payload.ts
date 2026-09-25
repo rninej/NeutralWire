@@ -24,6 +24,13 @@ export interface BriefingPayloadInput {
   body: string
   /** In-app destination, e.g. "/?topic=<topicId>". */
   url: string
+  /** Site origin (e.g. "https://neutralwire.org") — icon/badge MUST be
+   *  ABSOLUTE URLs: several Android/iOS display paths fail to resolve
+   *  relative paths in the push payload, which is exactly the "mini icon
+   *  missing in the header" bug (pushify.ts learned this lesson first:
+   *  "iOS requires full URLs, not relative paths"). The SW also
+   *  absolutizes as a belt-and-braces backstop. */
+  origin: string
   /** Composite og-image URL, or null/undefined when the story has no photo. */
   image?: string | null
   /** Notification tag, e.g. "briefing-evening". */
@@ -46,8 +53,8 @@ export function buildBriefingPayload(input: BriefingPayloadInput): string {
     title: input.title,
     body: input.body,
     url: input.url,
-    icon: '/icon-192.png',
-    badge: '/badge-96.png',
+    icon: `${input.origin}/icon-192.png`,
+    badge: `${input.origin}/badge-96.png`,
     image: input.image ?? undefined,
     tag: input.tag,
     notifId: input.notifId,

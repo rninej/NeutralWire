@@ -1,6 +1,17 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v28: PUSH DISPLAY URL ABSOLUTIZATION — icon, badge, image and action
+//      button icons in the push payload are now resolved to ABSOLUTE URLs
+//      (new URL(u, self.location.origin)) before showNotification(). Some
+//      Android/iOS display paths fail to fetch RELATIVE payload paths
+//      ("/icon-192.png"), which showed a generic icon / dropped the big
+//      picture — the "20-30% of notifications arrive without the NW mini
+//      icon and without the image though the story clearly has a photo"
+//      bug. The briefing sender now ships absolute URLs too (and pre-warms
+//      the composite image at the CDN), but the SW-side absolutization
+//      backstops EVERY send path (broadcast, scheduled, test pushes).
+//      Cache-name bump v27 → v28 so installed PWAs pick this up.
 // v27: NOTIFICATION RAISE VERIFICATION — tapping a notification while
 //      the app is ALREADY OPEN in the background opened the story INSIDE
 //      the hidden app without ever bringing the window to the foreground
@@ -99,9 +110,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v27'
-const API_CACHE = 'neutralwire-api-v27'
-const IMG_CACHE = 'neutralwire-img-v27'
+const SHELL_CACHE = 'neutralwire-shell-v28'
+const API_CACHE = 'neutralwire-api-v28'
+const IMG_CACHE = 'neutralwire-img-v28'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
@@ -702,6 +713,21 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  // ── v28: absolutize EVERY display URL ──
+  // icon / badge / image / action icons must be ABSOLUTE URLs — several
+  // Android/iOS notification display paths fail to resolve relative
+  // paths, degrading the notification to a generic icon and/or dropping
+  // the big picture. Resolving against the SW's own origin fixes every
+  // send path, including older senders that still ship relative paths.
+  const toAbs = (u) => {
+    if (!u || typeof u !== 'string') return u
+    try {
+      return new URL(u, self.location.origin).href
+    } catch {
+      return u
+    }
+  }
+
   // ── Notification action buttons ──
   // Max 2 actions render (Android Chrome / desktop Chrome). iOS Safari
   // doesn't render notification actions at all — those users still get a
@@ -718,8 +744,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: data.body,
-    icon: data.icon,
-    badge: data.badge,
+    icon: toAbs(data.icon),
+    badge: toAbs(data.badge),
     tag: data.tag,
     data: {
       url: data.url,
@@ -729,8 +755,8 @@ self.addEventListener('push', (event) => {
       // the notification data, not the payload).
       likeButton: data.likeButton !== false,
     },
-    image: data.image,
-    actions,
+    image: data.image ? toAbs(data.image) : data.image,
+    actions: actions.map((a) => ({ ...a, icon: toAbs(a.icon) })),
   }
 
   event.waitUntil(

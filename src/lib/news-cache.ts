@@ -28,6 +28,7 @@
  */
 
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { dropNearDuplicateTopics } from '@/lib/push/story-dedup'
 import { writeTopicIndex } from '@/lib/topic-lookup'
 import type { Category } from '@/lib/news-sources'
 import type { CategoryCachePayload, TopicArticle } from '@/lib/news-aggregator'
@@ -201,6 +202,15 @@ export async function refreshMeshManifestForRoom(cacheKey: string): Promise<void
  * Write the cached payload for a category. Updates the updatedAt timestamp
  * and stamps the current CACHE_VERSION so future reads can detect when the
  * cache is from an older source set.
+ *
+ * ── Near-duplicate drop (Sep 2026) ──
+ * Rooms are REPLACED on every refresh and topicId is derived from the
+ * title, so the same event re-headlined across refreshes (or fetched
+ * through both RSS and GDELT) entered the room as a SECOND topic — the
+ * feed and the briefing candidates then showed/sent the same news twice
+ * (the OpenAI/Australia complaint). dropNearDuplicateTopics keeps the
+ * higher-ranked (fresher/better-covered) twin and drops the rest BEFORE
+ * the room, mesh manifest, topic index and sitemap ever see them.
  */
 export async function writeCachedNews(
   category: Category,
@@ -209,11 +219,17 @@ export async function writeCachedNews(
   articleCount: number,
   sourceCount: number,
 ): Promise<boolean> {
+  const dedupedTopics = dropNearDuplicateTopics(topics)
+  if (dedupedTopics.length !== topics.length) {
+    console.log(
+      `[news-cache] near-dup drop in ${cachePath(category, country)}: ${topics.length} → ${dedupedTopics.length}`,
+    )
+  }
   const payload: CategoryCachePayload = {
     updatedAt: Date.now(),
     sourceCount,
     articleCount,
-    topics,
+    topics: dedupedTopics,
     cacheVersion: CACHE_VERSION,
   }
   const path = cachePath(category, country)
@@ -231,7 +247,7 @@ export async function writeCachedNews(
     // 48 rooms (up to 6.44MB per lookup — a top driver of the 6.2GB/month
     // Firebase download bill). One small PATCH (~1-2KB) per refresh.
     const room = path.replace(/^newsCache\//, '')
-    await writeTopicIndex(room, topics)
+    await writeTopicIndex(room, dedupedTopics)
   }
   return ok
 }

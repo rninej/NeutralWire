@@ -18,12 +18,13 @@ function check(name: string, cond: boolean, extra = '') {
 
 console.log('briefing-payload unit tests')
 
-// ── 1. Normal payload: untouched, image preserved ──
+// ── 1. Normal payload: untouched, image preserved, ABSOLUTE icons ──
 {
   const p = buildBriefingPayload({
     title: 'Evening Briefing',
     body: 'Trump says he can do business with Burnham but criticises terrible deal',
     url: '/?topic=a11ebt4j',
+    origin: 'https://neutralwire.org',
     image: 'https://neutralwire.org/api/og-image?topicId=a11ebt4j&title=Trump%20says&imageUrl=https%3A%2F%2Fimg.example.com%2Fa.jpg',
     tag: 'briefing-evening',
     notifId: 'tz_2026-09-23_evening_abc123',
@@ -31,8 +32,10 @@ console.log('briefing-payload unit tests')
   })
   const o = JSON.parse(p)
   check('1a. image preserved on normal payload', typeof o.image === 'string' && o.image.includes('og-image'))
-  check('1b. all fields present', o.title === 'Evening Briefing' && o.icon === '/icon-192.png' && o.badge === '/badge-96.png' && o.tag === 'briefing-evening' && o.notifId.includes('abc123') && o.likeButton === true && o.url === '/?topic=a11ebt4j')
-  check('1c. under soft limit', p.length <= 3800, `len=${p.length}`)
+  check('1b. all fields present', o.title === 'Evening Briefing' && o.tag === 'briefing-evening' && o.notifId.includes('abc123') && o.likeButton === true && o.url === '/?topic=a11ebt4j')
+  check('1c. ABSOLUTE icon URL (Android/iOS display paths)', o.icon === 'https://neutralwire.org/icon-192.png', `icon=${o.icon}`)
+  check('1d. ABSOLUTE badge URL (monochrome header icon)', o.badge === 'https://neutralwire.org/badge-96.png', `badge=${o.badge}`)
+  check('1e. under soft limit', p.length <= 3800, `len=${p.length}`)
 }
 
 // ── 2. Monster imageUrl: image stripped, payload sendable ──
@@ -43,6 +46,7 @@ console.log('briefing-payload unit tests')
     title: 'Morning Briefing',
     body: 'At least 169 killed in Colombia earthquake in years',
     url: '/?topic=akjlmjx',
+    origin: 'https://neutralwire.org',
     image: 'https://neutralwire.org/api/og-image?topicId=akjlmjx&imageUrl=' + encodeURIComponent(monsterImg),
     tag: 'briefing-morning',
     notifId: 'tz_2026-09-23_morning_def456',
@@ -59,11 +63,13 @@ console.log('briefing-payload unit tests')
 {
   const p = buildBriefingPayload({
     title: 'Lunch Briefing', body: 'A short headline', url: '/?topic=xyz',
+    origin: 'https://neutralwire.org',
     image: null, tag: 'briefing-lunch', notifId: 'tz_x', likeButton: true,
   })
   const o = JSON.parse(p)
   check('3a. null image → no image key', !('image' in o))
   check('3b. payload small', p.length < 500, `len=${p.length}`)
+  check('3c. icons still absolute without image', o.icon === 'https://neutralwire.org/icon-192.png')
 }
 
 // ── 4. Pathological body (worst case): truncated to 60 ──
@@ -72,6 +78,7 @@ console.log('briefing-payload unit tests')
     title: 'Evening Briefing',
     body: 'B'.repeat(9000),
     url: '/?topic=' + 'u'.repeat(2000),
+    origin: 'https://neutralwire.org',
     image: 'https://neutralwire.org/api/og-image?topicId=x&imageUrl=' + encodeURIComponent('https://img.example.com/' + 'z'.repeat(2500)),
     tag: 'briefing-evening', notifId: 'tz_y', likeButton: true,
   })
@@ -88,6 +95,7 @@ console.log('briefing-payload unit tests')
   const img = 'https://img.example.com/' + 'a'.repeat(600)
   const base = buildBriefingPayload({
     title: 'Morning Briefing', body: 'x'.repeat(100), url: '/?topic=t1',
+    origin: 'https://neutralwire.org',
     image: img, tag: 'briefing-morning', notifId: 'tz_z', likeButton: true,
   })
   check('5a. mid-size payload keeps image', JSON.parse(base).image === img)

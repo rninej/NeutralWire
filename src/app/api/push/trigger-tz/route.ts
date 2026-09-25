@@ -4,6 +4,11 @@ import { firebaseDelete, firebaseRead, firebaseWrite } from '@/lib/firebase-serv
 import { readCachedNews, isVirtualCategory } from '@/lib/news-cache'
 import { consumeLease, jobRecentlyRan, markJobRun, CRON_JOB_INTERVALS } from '@/lib/mesh/lease-server'
 import { buildBriefingPayload } from '@/lib/push/briefing-payload'
+import {
+  titleSignature,
+  isNearDuplicateSignature,
+  dropNearDuplicateTopics,
+} from '@/lib/push/story-dedup'
 import { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } from '@/lib/vapid'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import type { Category } from '@/lib/news-sources'
@@ -58,50 +63,21 @@ type Slot = keyof typeof SLOT_TARGETS
 const HISTORY_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
 
 /**
- * Generate a SEMANTIC FINGERPRINT for a story title.
- *
- * This normalizes the title by:
- *   1. Lowercasing
- *   2. Removing all numbers (so "139 killed" and "169 killed" match)
- *   3. Removing common articles/stopwords ("the", "a", "in", "of", etc.)
- *   4. Sorting the remaining keywords alphabetically (so word order doesn't matter)
- *
- * Two stories about the SAME EVENT with different numbers/wording will
- * produce the SAME fingerprint:
- *   "At least 169 killed in Colombia's largest earthquake in years"
- *   "At least 139 killed in Colombia's largest earthquake in years"
- *   → both become: "colombia earthquake killed largest years"
- *
- * This prevents duplicate notifications when a story develops (death toll
- * updates, headline rewording, etc.) — the second version is recognized
- * as the same story and skipped.
+ * Semantic story dedup lives in src/lib/push/story-dedup.ts (stemmed
+ * keyword-set similarity + entity-overlap rules). It replaces the old
+ * local storyFingerprint(): the EXACT-match sorted-keyword fingerprint
+ * could not catch "same event, slightly different words" — the Sep-2026
+ * OpenAI/Australia incident sent the SAME NEWS twice in one day because
+ * the re-headlined twin produced a different keyword set and a new
+ * topicId. The shared module now guards (1) the candidate pool, (2) the
+ * freshness filter vs sent-history, and (3) the within-run picks.
  */
-const FINGERPRINT_STOPWORDS = new Set([
-  'the', 'a', 'an', 'in', 'of', 'at', 'to', 'for', 'on', 'and', 'or',
-  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'by', 'with',
-  'from', 'as', 'its', 'it', 'that', 'this', 'these', 'those', 'has',
-  'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might',
-  'not', 'no', 'but', 'if', 'then', 'than', 'so', 'do', 'does', 'did',
-  'about', 'after', 'before', 'more', 'most', 'some', 'any', 'all',
-  'new', 'says', 'said', 'say', 'report', 'reports', 'amid', 'while',
-  'over', 'under', 'up', 'down', 'out', 'off', 'into', 'onto', 'upon',
-])
 
-function storyFingerprint(title: string): string {
-  const cleaned = title
-    .toLowerCase()
-    .replace(/[^a-z\s]/g, ' ') // remove numbers + punctuation
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter((w) => w.length >= 3 && !FINGERPRINT_STOPWORDS.has(w))
-    .sort()
-    .join(' ')
-  // Only return a fingerprint if we have at least 3 significant keywords
-  // (otherwise the fingerprint is too generic and might block unrelated stories)
-  const wordCount = cleaned.split(' ').filter(Boolean).length
-  return wordCount >= 3 ? cleaned : ''
-}
+// Near-duplicate matching against sent-history is aggressive only inside
+// this window: a re-headlined twin within 3 days is the SAME news for the
+// user (the OpenAI/Australia complaint), while a story that re-emerges
+// after 3 days can be a genuine new development of the running saga.
+const NEAR_DUP_WINDOW_MS = 72 * 60 * 60 * 1000
 
 function getLocalTime(timezone: string): { hour: number; minute: number; dateKey: string } | null {
   if (!timezone) return null
@@ -454,6 +430,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, message: 'No stories after filter', sent: 0, toNotify: toNotify.length, ts: Date.now() })
     }
 
+    // ── 3b. Near-duplicate drop INSIDE the candidate pool ──
+    // The same event legitimately lives in several rooms (mycountry +
+    // world + technology…). topicId-level dedup keeps both entries; the
+    // stemmed-similarity pass keeps the FIRST (highest-priority room,
+    // priority order: mycountry, relevant, world, technology, business,
+    // science, top) and drops the re-headlined twins so the pool that the
+    // per-device scoring sees contains ONE story per event.
+    const beforeNearDupDrop = candidates.length
+    candidates = dropNearDuplicateTopics(candidates)
+    if (candidates.length !== beforeNearDupDrop) {
+      console.log(`[trigger-tz] Near-dup candidate drop: ${beforeNearDupDrop} → ${candidates.length}`)
+    }
+
     // ── 4. Load + prune global sent-history ──
     // The sent-history tracks BOTH topicIds AND semantic fingerprints.
     // topicIds catch exact duplicates (same story re-sent).
@@ -478,21 +467,39 @@ export async function GET(req: NextRequest) {
       console.log(`[trigger-tz] Pruned ${prunedCount} old entries from sent-history`)
     }
 
-    // ── Filter fresh stories using BOTH topicId AND fingerprint ──
-    // A story is "fresh" if:
-    //   - Its topicId is NOT in sentSet (not the exact same story), AND
-    //   - Its fingerprint is NOT in sentSet (not a semantic duplicate)
-    // This prevents "139 killed" and "169 killed" from both being sent.
+    // ── Filter fresh stories using topicId + signature + NEAR-DUPLICATE ──
+    // A story is "fresh" when NONE of these hold:
+    //   - its topicId is in sentSet (exact same story),
+    //   - its stemmed signature exactly matches a sent signature,
+    //   - it NEAR-DUPLICATES a signature sent in the last 72h (the
+    //     "OpenAI hacked Australia" twice-in-a-day bug: re-headlined twin,
+    //     different words, different topicId — the exact-match-only guard
+    //     passed it straight through).
+    const recentSigEntries: Array<{ sig: string; ts: number }> = []
+    for (const [key, ts] of Object.entries(prunedHistory)) {
+      if (key.includes(' ') && typeof ts === 'number' && now - ts <= NEAR_DUP_WINDOW_MS) {
+        recentSigEntries.push({ sig: key, ts })
+      }
+    }
+    let nearDupBlocked = 0
     const freshStories = candidates.filter((s) => {
       if (sentSet.has(s.topicId)) return false // exact duplicate
-      const fp = storyFingerprint(s.title)
-      if (fp && sentSet.has(fp)) return false // semantic duplicate
+      const sig = titleSignature(s.title)
+      if (sig && sentSet.has(sig)) return false // exact signature duplicate
+      if (sig) {
+        for (const e of recentSigEntries) {
+          if (isNearDuplicateSignature(s.title, e.sig)) {
+            nearDupBlocked++
+            return false // semantic near-duplicate of recently-sent news
+          }
+        }
+      }
       return true
     })
 
     if (freshStories.length === 0) {
       console.log('[trigger-tz] All stories already sent — skipping')
-      return NextResponse.json({ ok: true, message: 'All stories already sent', sent: 0, toNotify: toNotify.length, ts: Date.now() })
+      return NextResponse.json({ ok: true, message: 'All stories already sent', sent: 0, toNotify: toNotify.length, nearDupBlocked, ts: Date.now() })
     }
 
     // ── 5. Send PERSONALIZED push per device ──
@@ -509,7 +516,10 @@ export async function GET(req: NextRequest) {
     let failedCount = 0
     let firstError: string | null = null
     const allSentTopicIds = new Set<string>()
-    const allSentFingerprints = new Set<string>()
+    const allSentSignatures: string[] = []
+    // og-image URLs already pre-warmed at the CDN this run (keyed by URL:
+    // the same story picked by several devices shares one composite URL).
+    const prewarmedImages = new Set<string>()
 
     ensureVapid()
 
@@ -543,27 +553,35 @@ export async function GET(req: NextRequest) {
         // ── Pick the BEST story for THIS device ──
         // Score each fresh story based on the device's interests + engagement.
         // Stories already sent to OTHER devices in this run are deprioritized
-        // (so different users get different stories when possible).
-        // ALSO deprioritize stories whose FINGERPRINT matches a story already
-        // sent in this run (catches "139 killed" vs "169 killed" — same event,
-        // different numbers, sent to different devices in the same cron run).
+        // (so different users get different stories when possible), INCLUDING
+        // near-duplicate re-headlines of stories already picked in this run
+        // (catches "139 killed" vs "169 killed" — same event, different
+        // numbers — and the OpenAI/Australia same-event-different-words twin).
         const scored = freshStories.map((s) => {
-          const fp = storyFingerprint(s.title)
+          const sig = titleSignature(s.title)
           const alreadySentTopic = allSentTopicIds.has(s.topicId)
-          const alreadySentFp = fp && allSentFingerprints.has(fp)
+          let alreadySentNearDup = false
+          if (sig) {
+            for (const sent of allSentSignatures) {
+              if (isNearDuplicateSignature(s.title, sent)) {
+                alreadySentNearDup = true
+                break
+              }
+            }
+          }
           return {
             story: s,
             score: scoreStoryForDevice(s, target.interests, target.engagement)
               - (alreadySentTopic ? 50 : 0)        // deprioritize exact dup
-              - (alreadySentFp ? 50 : 0),          // deprioritize semantic dup
+              - (alreadySentNearDup ? 50 : 0),     // deprioritize semantic dup
           }
         })
         scored.sort((a, b) => b.score - a.score)
         const bestStory = scored[0].story
 
         allSentTopicIds.add(bestStory.topicId)
-        const bestFp = storyFingerprint(bestStory.title)
-        if (bestFp) allSentFingerprints.add(bestFp)
+        const bestSig = titleSignature(bestStory.title)
+        if (bestSig) allSentSignatures.push(bestSig)
 
         // ── Notification image — ONLY when the article HAS a photo ──
         // The /api/og-image endpoint composites the article photo + NW
@@ -584,6 +602,10 @@ export async function GET(req: NextRequest) {
           title: slotLabels[target.slot],
           body: bestStory.title.slice(0, 100),
           url: `/?topic=${bestStory.topicId}`,
+          // ABSOLUTE icon/badge URLs — some Android/iOS display paths
+          // fail to resolve relative paths in the payload (the
+          // "mini icon missing in the notification header" bug).
+          origin,
           image: ogImageUrl,
           tag: `briefing-${target.slot}`,
           notifId: `tz_${target.dateKey}_${target.slot}_${target.deviceId.slice(-6)}`,
@@ -592,24 +614,61 @@ export async function GET(req: NextRequest) {
           likeButton: notifLike,
         })
 
+        // ── Pre-warm the composite image at the CDN BEFORE the push ──
+        // Android/iOS fetch the notification image AT DISPLAY TIME with
+        // a short internal deadline. /api/og-image composites photo +
+        // banner + bias bar on its FIRST request (serverless cold start
+        // + remote photo fetch up to 8s) — cold, it regularly misses that
+        // deadline, and the OS degrades the notification to the compact
+        // layout: NO big image and NO icon overlay (the "20-30% of
+        // notifications arrive without the image though the story clearly
+        // has a photo" bug). Fetching the exact URL once per story here
+        // (bounded 6s) warms the Vercel edge cache (s-maxage=604800) so
+        // the OS display fetch is a fast edge HIT. Only the FIRST device
+        // picking this story pays the wait; every later device AND every
+        // later OS fetch rides the cache.
+        if (ogImageUrl && !prewarmedImages.has(ogImageUrl)) {
+          prewarmedImages.add(ogImageUrl)
+          try {
+            await fetch(ogImageUrl, {
+              signal: AbortSignal.timeout(6000),
+              headers: {
+                'User-Agent':
+                  'Mozilla/5.0 (compatible; NeutralWireBot/1.0; +https://neutralwire.org)',
+                Accept: 'image/jpeg',
+              },
+            }).catch(() => {}) // best-effort — a cold edge is still correct, just slower
+          } catch {
+            // best-effort
+          }
+        }
+
         await webpush.sendNotification(
           target.subscription as webpush.PushSubscription,
           payload,
+          {
+            // TTL 1h — a briefing older than that is stale by design.
+            TTL: 3600,
+            // 'high' urgency = FCM high-priority on Android → immediate
+            // delivery instead of Doze batching (matches the pushify path).
+            urgency: 'high',
+          },
         )
         sentCount++
 
-        // Record BOTH topicId AND fingerprint in global history.
+        // Record topicId AND stemmed signature in global history.
         // topicId prevents exact duplicates (same story re-sent).
-        // fingerprint prevents semantic duplicates (same event, different
-        // numbers — e.g. "139 killed" → "169 killed" won't be sent again).
+        // signature prevents semantic duplicates — now with stemmed
+        // near-duplicate matching (see story-dedup.ts), so the
+        // re-headlined twin of a sent story can no longer slip through.
         await firebaseWrite(
           `notification-sent-history/${bestStory.topicId}`,
           now,
         ).catch(() => {})
-        const sentFp = storyFingerprint(bestStory.title)
-        if (sentFp) {
+        const sentSig = titleSignature(bestStory.title)
+        if (sentSig) {
           await firebaseWrite(
-            `notification-sent-history/${sentFp}`,
+            `notification-sent-history/${sentSig}`,
             now,
           ).catch(() => {})
         }
@@ -701,7 +760,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    console.log(`[trigger-tz] Complete: ${sentCount} sent, ${failedCount} failed, ${allSentTopicIds.size} unique stories in ${Date.now() - t0}ms`)
+    console.log(`[trigger-tz] Complete: ${sentCount} sent, ${failedCount} failed, ${allSentTopicIds.size} unique stories, ${nearDupBlocked} near-dup blocked, in ${Date.now() - t0}ms`)
 
     return NextResponse.json({
       ok: true,
@@ -712,6 +771,7 @@ export async function GET(req: NextRequest) {
       toNotify: toNotify.length,
       totalDevices,
       uniqueStories: allSentTopicIds.size,
+      nearDupBlocked,
       skipBreakdown: { skipNoSub, skipNotStandalone, skipNoTimezone, skipNotInWindow, skipAlreadySent },
       historyPruned: prunedCount,
       dryRun,
