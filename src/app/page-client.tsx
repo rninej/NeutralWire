@@ -703,14 +703,21 @@ export default function Home({
           loadMore()
         }
       },
-      // Start loading ~800px (about one mobile screen) before the
-      // sentinel enters the viewport. The old 200px margin fired too late
-      // on mobile: users reached the bottom while the fetch was still in
-      // flight and stared at blank space that looked like the end of the
-      // feed ("it makes it seem as if there is nothing else to scroll
-      // down to"). With a full screen of headroom the next page is
-      // usually rendered before the user ever sees the bottom.
-      { rootMargin: '800px' },
+      // Start loading ~1800px (about two mobile screens) before the
+      // sentinel enters the viewport. 800px (one screen) still lost the
+      // race on mobile: the next page's JSON has to travel function →
+      // Firebase → render, and a moderate fling covers 800px in ~0.4s,
+      // so users caught the fetch in flight and stared at blank space
+      // that looked like the end of the feed. Two screens of headroom
+      // hides multi-second fetch latencies entirely.
+      //
+      // FIREBASE COST: ~zero. A full-scroll visitor fetches exactly the
+      // same pages — just seconds earlier. The only waste is ONE
+      // prefetched page for a visitor who abandons mid-scroll, and
+      // /api/news pages are CDN-cached (s-maxage=300): the Firebase read
+      // happens at most once per 5 min per page URL across ALL visitors,
+      // so prefetches from extra visitors are absorbed by the CDN edge.
+      { rootMargin: '1800px' },
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
@@ -2806,7 +2813,11 @@ export default function Home({
                           initial={{ opacity: 0, y: 8 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ duration: 0.28, delay: i * 0.04, ease: 'easeOut' }}
-                          className="h-64 shimmer rounded-lg bg-muted"
+                          /* Compact on mobile: 2 short skeletons instead
+                             of 4×256px (a whole phone screen of gray
+                             boxes — read as broken, not "more coming").
+                             sm+ keeps the full 4-card row. */
+                          className={`shimmer rounded-lg bg-muted h-44 sm:h-56 lg:h-64${i > 1 ? ' hidden sm:block' : ''}`}
                         />
                       ))}
                       <div className="col-span-full flex items-center justify-center gap-2 pt-1 text-xs text-muted-foreground">
@@ -3675,7 +3686,19 @@ function SectionedFeed({
             key={key}
             initial={{ opacity: 0, y: 12 }}
             whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-40px' }}
+            /* Reveal ONE SCREEN EARLY, not 40px late. Every section is
+               ~1000px tall on mobile (a full screen); with the old
+               '-40px' the section below the fold rendered fully
+               INVISIBLE (opacity 0) while still occupying its height —
+               a whole screen of white space between sections. A fast
+               fling then flew through still-fading sections ("seems
+               like there are no more news" + the next hero 'popping
+               up'). A POSITIVE margin EXPANDS the observer root, so the
+               section is fully opaque — and its images loading — before
+               it can enter the viewport. The data was already fetched
+               with the page: this changes reveal timing only, ZERO
+               extra Firebase reads. */
+            viewport={{ once: true, margin: '1000px' }}
             transition={{ duration: 0.35, delay: Math.min(sectionIdx * 0.06, 0.3), ease: [0.16, 1, 0.3, 1] }}
             className="nw-cv-section"
           >
@@ -3822,7 +3845,9 @@ function BlindspotSectionedFeed({
             key={key}
             initial={{ opacity: 0, y: 16 }}
             whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-40px' }}
+            /* Same one-screen-early reveal as SectionedFeed — see the
+               comment there for the full rationale. */
+            viewport={{ once: true, margin: '1000px' }}
             transition={{
               duration: 0.35,
               delay: Math.min(sectionIdx * 0.06, 0.3),
@@ -4054,7 +4079,8 @@ function MobileTopicLayout({
         <motion.section
           initial={{ opacity: 0, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: '-40px' }}
+          /* One-screen-early reveal — see SectionedFeed for why. */
+          viewport={{ once: true, margin: '1000px' }}
           transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
           className="nw-cv-section"
         >
@@ -4076,7 +4102,16 @@ function MobileTopicLayout({
             key={chunkIdx}
             initial={{ opacity: 0, y: 12 }}
             whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-40px' }}
+            /* THE mobile white-space fix: each chunk is ~1000px (one
+               phone screen). '-40px' kept the next chunk invisible
+               until its top edge entered the viewport, so finishing a
+               chunk's cards meant a full screen of blank below — "it
+               seems like there are no more news". '1000px' reveals
+               (and lets images start loading for) the next chunk while
+               the user is still a screen away: the cards are simply
+               THERE when the current ones run out. Zero extra Firebase
+               — the chunk's data was already fetched with its page. */
+            viewport={{ once: true, margin: '1000px' }}
             transition={{ duration: 0.35, delay: Math.min(chunkIdx * 0.06, 0.3), ease: [0.16, 1, 0.3, 1] }}
             className="nw-cv-section"
           >
