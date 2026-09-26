@@ -404,3 +404,18 @@ Stage Summary:
 - Custom-topic first fills are structurally <10s (deadline race + warm fills + AI keyword fallback), proven by the strict latency harness even in the 429-throttled sandbox.
 - The Pixel 8 Pro lone-+ row is fixed at the root (glue, not sizing); the search TypeError is guarded client- and server-side.
 - Deliverable is commit a773ed7 on main — awaiting the GitHub PAT from the user to push (then Vercel auto-deploys). Standing reminders: rotate the previously pasted PAT; Stripe/Resend keys + digest cron still to be configured on Vercel.
+
+---
+Task ID: session36
+Agent: main (Super Z)
+Task: Push session35's PAT-blocked deliverable to GitHub main with the user-provided PAT.
+
+Work Log:
+- User supplied the GitHub PAT in chat; verified session35 state first: a773ed7 (16 files, +741/-199: teaser model, golden-diamond branding, flagship newsletter card, <10s fill KPI + AI fallback, Pixel 8 Pro lone-+ fix, search crash guards) + 63db1e5 (worklog) sitting on top of remote 473f60c; all verification (tsc 0 errors, eslint clean, next build green, strict latency harness p50=7.7s max=8.0s < 10s KPI, agent-browser E2E, VLM 3/3) already documented as PASS in session35 — code unchanged since.
+- Dropped the phantom auto-snapshot 7298629 (UUID message; only local download/verify/*.png screenshots + 2 one-off VLM review scripts — no source) via git reset --mixed 63db1e5; those artifacts remain untracked locally.
+- Pushed main -> main with the PAT inline (never written to files or git config): 473f60c..63db1e5 accepted.
+- Verified via ls-remote: refs/heads/main = 63db1e5ce359b790f85b743238c966d0d9385952 = local tip. Vercel auto-deploys from main.
+
+Stage Summary:
+- Session35 batch is now LIVE-pending Vercel build: every premium surface uses the teaser pattern (visible-but-locked -> upgrade dialog), golden brilliant-cut diamond is the global premium mark, gradients render in Light+Dark, first custom-topic fills are structurally <10s (deadline race + warm fill + AI keyword fallback), Pixel 8 Pro default layout is 2 rows with + glued to the last chip, and the search TypeError is guarded client- and server-side.
+- Standing reminders: rotate the pasted PAT (it has now appeared in chat twice); configure Stripe/Resend keys on Vercel (checkout is TEST MODE, digest lands in outbox); attach the external cron to /api/cron/digest.
