@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { generateReferralCode } from '@/lib/referral'
-import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { generateGuestCodeSmart, generateAlphanumericCode } from '@/lib/referral'
+import { firebaseRead, firebaseWrite, firebasePatch } from '@/lib/firebase-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -47,13 +47,26 @@ export async function POST(req: NextRequest) {
     }
 
     // No valid existing code — create a new one.
-    let code = generateReferralCode()
+    //
+    // Code-space management: the numeric 6-digit space holds 900,000 codes;
+    // once counters/guestCodes crosses the overflow threshold every NEW
+    // code is alphanumeric (see referral.ts). If the numeric space is
+    // somehow still saturated (collision retries exhausted) we ALSO fall
+    // back to alphanumeric here — the code can never fail to be unique.
+    let code = await generateGuestCodeSmart()
     let attempts = 0
     let collision = await firebaseRead(`referrals/${code}`)
     while (collision && attempts < 10) {
-      code = generateReferralCode()
+      code = await generateGuestCodeSmart()
       collision = await firebaseRead(`referrals/${code}`)
       attempts++
+    }
+    // Final fallback: alphanumeric (billions of combinations).
+    if (collision) {
+      do {
+        code = generateAlphanumericCode()
+        collision = await firebaseRead(`referrals/${code}`)
+      } while (collision)
     }
 
     await firebaseWrite(`referrals/${code}`, {
@@ -62,6 +75,10 @@ export async function POST(req: NextRequest) {
       totalClicks: 0,
       successfulReferrals: 0,
     })
+
+    // Track total codes issued (drives the numeric→alphanumeric overflow).
+    const issued = (await firebaseRead<number>('counters/guestCodes')) || 0
+    await firebasePatch('counters', { guestCodes: issued + 1 }).catch(() => {})
 
     return NextResponse.json({
       code,

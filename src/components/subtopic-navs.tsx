@@ -38,12 +38,15 @@ import { ChevronDown, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ScrollHint } from './scroll-arrow'
 import {
+  CATEGORY_LABELS,
   PRIMARY_CATEGORIES,
   SECONDARY_CATEGORIES,
   type Category,
+  type FeedCategory,
 } from '@/lib/news-sources'
 import type { CountryInfo } from '@/lib/country-detect'
 import { CategoryIcon, categoryLabel } from './category-nav'
+import { AddTopicChip, CustomTopicChips } from '@/components/add-topic-button'
 import {
   getDockPicks,
   orderDockCategories,
@@ -51,8 +54,8 @@ import {
 } from '@/lib/dock-topics'
 
 export interface SubtopicNavProps {
-  category: Category
-  onSelect: (c: Category) => void
+  category: FeedCategory
+  onSelect: (c: FeedCategory) => void
   country?: CountryInfo | null
 }
 
@@ -72,7 +75,7 @@ export function SubtopicTabs({
   showArrow,
 }: SubtopicNavProps & { showArrow?: boolean }) {
   const scrollRef = React.useRef<HTMLDivElement>(null)
-  const chipRefs = React.useRef<Partial<Record<Category, HTMLButtonElement | null>>>({})
+  const chipRefs = React.useRef<Partial<Record<string, HTMLButtonElement | null>>>({})
   const [canLeft, setCanLeft] = React.useState(false)
   const [canRight, setCanRight] = React.useState(false)
 
@@ -127,6 +130,7 @@ export function SubtopicTabs({
           return (
             <button
               key={cat}
+              data-cat={cat}
               ref={(el) => {
                 chipRefs.current[cat] = el
               }}
@@ -153,6 +157,17 @@ export function SubtopicTabs({
             </button>
           )
         })}
+
+        {/* Premium custom subtopics + the golden-diamond add button */}
+        <CustomTopicChips
+          activeCategory={category}
+          onSelect={(c) => onSelect(c as FeedCategory)}
+          chipClassName="h-11 sm:h-10 px-3.5 text-sm sm:text-[15px]"
+          activeChipClassName="text-foreground"
+        />
+        <div className="flex items-center pl-1">
+          <AddTopicChip compact />
+        </div>
       </div>
 
       {/* Edge fades — same affordance as the cards nav */}
@@ -325,6 +340,7 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
     return (
       <motion.button
         key={cat}
+        data-cat={cat}
         type="button"
         role="tab"
         aria-selected={active}
@@ -390,6 +406,14 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
             {renderPill(cat)}
           </React.Fragment>
         ))}
+        {/* Premium custom subtopics + the golden-diamond add button */}
+        <CustomTopicChips
+          activeCategory={category}
+          onSelect={(c) => onSelect(c as FeedCategory)}
+          chipClassName="h-6 px-3"
+          activeChipClassName="bg-foreground text-background shadow-sm"
+        />
+        <AddTopicChip compact />
       </div>
     )
   }
@@ -413,6 +437,15 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
       </div>
       <div ref={row2Ref} className="flex w-full items-center gap-1">
         {ALL_CATS.slice(6).map(renderPill)}
+        {/* Premium custom subtopics + the golden-diamond add button —
+            appended to the second row, after the built-ins. */}
+        <CustomTopicChips
+          activeCategory={category}
+          onSelect={(c) => onSelect(c as FeedCategory)}
+          chipClassName="h-6 px-3"
+          activeChipClassName="bg-foreground text-background shadow-sm"
+        />
+        <AddTopicChip compact />
       </div>
     </div>
   )
@@ -434,6 +467,7 @@ export function SubtopicTiles({ category, onSelect, country }: SubtopicNavProps)
         return (
           <motion.button
             key={cat}
+            data-cat={cat}
             type="button"
             role="tab"
             aria-selected={active}
@@ -545,6 +579,7 @@ function CategorySheet({
                     return (
                       <motion.button
                         key={cat}
+                        data-cat={cat}
                         type="button"
                         onClick={() => {
                           onSelect(cat)
@@ -565,6 +600,21 @@ function CategorySheet({
                       </motion.button>
                     )
                   })}
+
+                  {/* Premium custom subtopics + the golden-diamond add
+                      button — inside the sheet grid like any topic. */}
+                  <CustomTopicChips
+                    activeCategory={category}
+                    onSelect={(c) => {
+                      onSelect(c as FeedCategory)
+                      onClose()
+                    }}
+                    chipClassName="h-14 border rounded-xl px-3.5"
+                    activeChipClassName="border-foreground bg-foreground text-background shadow-sm"
+                  />
+                  <div className="flex items-center">
+                    <AddTopicChip compact />
+                  </div>
                 </div>
               </motion.div>
             </motion.div>,
@@ -682,6 +732,7 @@ export function SubtopicHeaderDock({ category, onSelect, country }: SubtopicNavP
           return (
             <button
               key={cat}
+              data-cat={cat}
               ref={(el) => {
                 chipRefs.current[cat] = el
               }}
@@ -705,6 +756,17 @@ export function SubtopicHeaderDock({ category, onSelect, country }: SubtopicNavP
             </button>
           )
         })}
+        {/* Premium custom subtopics + the golden-diamond add button —
+            dock-tile styling so they read as first-class dock items. */}
+        <CustomTopicChips
+          activeCategory={category}
+          onSelect={(c) => onSelect(c as FeedCategory)}
+          chipClassName="h-[52px] w-[72px] flex-col justify-center gap-1 rounded-xl text-[10px] px-1"
+          activeChipClassName="bg-foreground text-background shadow-sm"
+        />
+        <div className="flex shrink-0 items-center px-1">
+          <AddTopicChip compact />
+        </div>
       </div>
 
       {/* Edge fades — hint there's more to scroll on narrow screens */}

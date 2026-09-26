@@ -17,8 +17,11 @@ import {
   Send,
   ThumbsUp,
   ThumbsDown,
+  Download,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { PremiumDiamond } from '@/components/premium-ui'
+import { useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { BiasBar } from '@/components/bias-bar'
@@ -822,6 +825,11 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
               </AnimatePresence>
             </span>
           </button>
+
+          {/* Export / download (Ultra) — Markdown, text or JSON file of
+              the full story: title, neutral summary, bias split, every
+              source + links. */}
+          <ExportButton topicId={topic.topicId} />
         </div>
         </div>
       </motion.div>
@@ -1698,6 +1706,72 @@ function SummarySkeleton() {
         <div className="h-3 w-full shimmer rounded bg-muted" />
         <div className="h-3 w-5/6 shimmer rounded bg-muted" />
       </div>
+    </div>
+  )
+}
+
+// ── Export / download button (Ultra) ────────────────────────────────────
+// Saves the full story — title, neutral summary, bias split, every source
+// with its leaning + link — as Markdown, plain text or JSON. The download
+// streams from /api/export/[topicId] (server-side Ultra gate as well).
+function ExportButton({ topicId }: { topicId: string }) {
+  const sub = useSubscription()
+  const [open, setOpen] = React.useState(false)
+  const unlocked = sub.model === 'donation' || sub.entitlements.articleExport
+
+  if (!unlocked) {
+    return (
+      <button
+        type="button"
+        onClick={() => openUpgradeDialog('articleExport')}
+        className="flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-3.5 py-1.5 text-xs font-semibold text-amber-600 transition-opacity hover:opacity-90 dark:text-amber-400"
+        aria-label="Export this story (Ultra)"
+        title="Export & download this story — Ultra"
+      >
+        <PremiumDiamond className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Export</span>
+      </button>
+    )
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label="Export this story"
+        className="flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-3.5 py-1.5 text-xs font-semibold text-amber-600 transition-opacity hover:opacity-90 dark:text-amber-400"
+      >
+        <PremiumDiamond className="h-3.5 w-3.5" />
+        <span>Export</span>
+      </button>
+      {open ? (
+        <>
+          <button
+            type="button"
+            aria-label="Close export menu"
+            className="fixed inset-0 z-10 cursor-default"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute right-0 top-full z-20 mt-1.5 w-40 overflow-hidden rounded-lg border bg-background shadow-lg">
+            {(['md', 'txt', 'json'] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => {
+                  setOpen(false)
+                  window.location.href = `/api/export/${encodeURIComponent(topicId)}?format=${f}`
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium hover:bg-muted/60"
+              >
+                <Download className="h-3.5 w-3.5 text-muted-foreground" />
+                {f === 'md' ? 'Markdown (.md)' : f === 'txt' ? 'Plain text (.txt)' : 'JSON (.json)'}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
     </div>
   )
 }

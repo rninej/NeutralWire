@@ -20,6 +20,7 @@ import {
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -45,6 +46,10 @@ import {
   Network,
   Timer,
   Rocket,
+  Gem,
+  Crown,
+  Search,
+  X,
 } from 'lucide-react'
 import { getDeviceId } from '@/lib/referral'
 import { COUNTRY_COORDS, latLngToXY } from '@/lib/country-coords'
@@ -599,6 +604,22 @@ export default function DebugPage() {
   const [userCronFlipping, setUserCronFlipping] = React.useState(false)
   const [userCronResult, setUserCronResult] = React.useState<string | null>(null)
 
+  // ── Monetization model (subscription tiers vs the original donations) ──
+  const [monetizationModel, setMonetizationModel] = React.useState<'subscription' | 'donation' | null>(null)
+  const [monetizationFlipping, setMonetizationFlipping] = React.useState(false)
+  const [monetizationResult, setMonetizationResult] = React.useState<string | null>(null)
+
+  // ── Subscription Manager (grant/remove premium by guest code) ──
+  const [subIdentifier, setSubIdentifier] = React.useState('')
+  const [subLookup, setSubLookup] = React.useState<{
+    kind: string
+    label: string
+    currentTier?: string
+    email?: string | null
+  } | null>(null)
+  const [subBusy, setSubBusy] = React.useState(false)
+  const [subResult, setSubResult] = React.useState<string | null>(null)
+
   React.useEffect(() => {
     fetch('/api/flags')
       .then((r) => (r.ok ? r.json() : null))
@@ -619,6 +640,7 @@ export default function DebugPage() {
         setMilestoneDonate(d?.milestoneDonate !== false)
         setMeshRelay(d?.meshRelay !== false)
         setUserCron(d?.userCron !== false)
+        setMonetizationModel(d?.monetizationModel === 'donation' ? 'donation' : 'subscription')
       })
       .catch(() => {
         setNavMode('cards')
@@ -630,6 +652,7 @@ export default function DebugPage() {
         setMilestoneDonate(true)
         setMeshRelay(true)
         setUserCron(true)
+        setMonetizationModel('subscription')
       })
   }, [])
 
@@ -648,6 +671,84 @@ export default function DebugPage() {
       return res.ok
     } catch {
       return false
+    }
+  }
+
+  /** Switch the WHOLE SITE between the subscription tier model and the
+   *  original donation model (the monetization master switch). */
+  const setMonetization = async (model: 'subscription' | 'donation') => {
+    if (!passwordRef.current || monetizationFlipping) return
+    setMonetizationFlipping(true)
+    setMonetizationResult(null)
+    try {
+      const res = await fetch('/api/flags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordRef.current, monetizationModel: model }),
+      })
+      if (res.ok) {
+        setMonetizationModel(model)
+        setMonetizationResult(
+          model === 'donation'
+            ? 'Donation model LIVE for everyone on their next page load — the classic Ko-fi site, all premium gates open.'
+            : 'Subscription model LIVE for everyone on their next page load — premium gates on, donation popups stood down.',
+        )
+      } else {
+        setMonetizationResult('Flip failed — check the admin password.')
+      }
+    } catch {
+      setMonetizationResult('Network error — try again.')
+    } finally {
+      setMonetizationFlipping(false)
+    }
+  }
+
+  /** Subscription Manager: lookup / grant / remove a user's tier by guest
+   *  code, device id or email (the testing back door). */
+  const subManagerAction = async (
+    action: 'lookup' | 'set',
+    tier?: 'free' | 'premium' | 'ultra',
+  ) => {
+    if (!passwordRef.current || subBusy || !subIdentifier.trim()) return
+    setSubBusy(true)
+    setSubResult(null)
+    try {
+      const res = await fetch('/api/debug/subscription', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: passwordRef.current,
+          identifier: subIdentifier.trim(),
+          ...(action === 'lookup' ? { action: 'lookup' } : { tier: tier || 'premium' }),
+        }),
+      })
+      const data = (await res.json()) as {
+        ok?: boolean
+        error?: string
+        lookup?: { kind: string; label: string; currentTier?: string; email?: string | null }
+        target?: { kind: string; label: string; currentTier?: string; email?: string | null }
+        tier?: string
+      }
+      if (!res.ok || !data.ok) {
+        setSubResult(data.error || 'Request failed.')
+        setSubLookup(null)
+        return
+      }
+      if (action === 'lookup') {
+        setSubLookup(data.lookup || null)
+        setSubResult(null)
+      } else {
+        setSubLookup(data.target || null)
+        setSubResult(
+          `Done — ${data.target?.label || subIdentifier.trim()} is now ${
+            data.tier === 'free' ? 'FREE (subscription removed)' : String(data.tier).toUpperCase()
+          }. They'll see it on their next page load.`
+        )
+      }
+    } catch {
+      setSubResult('Network error — try again.')
+    } finally {
+      setSubBusy(false)
     }
   }
 
@@ -1213,6 +1314,177 @@ export default function DebugPage() {
               </span>
             )}
           </div>
+        </Card>
+
+        {/* ── Monetization Model ──
+            THE master switch: subscription tiers (premium/ultra gates live,
+            donation popups stood down) vs the ORIGINAL donation model
+            (Ko-fi popups, every gate open). Flips the whole site back and
+            forth in one click. */}
+        <Card id="monetization" className="mb-6 scroll-mt-20 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Gem className="h-5 w-5 text-amber-500" />
+            <h2 className="text-base font-bold">Monetization Model</h2>
+            <span className="ml-auto text-xs text-muted-foreground">
+              Subscription tiers ↔ the original donation site
+            </span>
+          </div>
+          <p className="mb-4 text-sm text-muted-foreground">
+            <strong>Subscription</strong> runs the tier model: free keeps the full classic
+            experience, while Premium (£3/$3/€3) unlocks custom subtopics, archive search,
+            the email digest, gradient themes and personal flags, and Ultra
+            (£20/$20/€20) adds API access + article export. <strong>Donation</strong>{" "}
+            flips the whole site back to the original Ko-fi model — every premium gate
+            stands down. Applies to all users on their next page load.
+          </p>
+          <div className="grid max-w-4xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setMonetization('subscription')}
+              disabled={monetizationFlipping || monetizationModel === null}
+              className={cn(
+                'flex flex-col items-start gap-1.5 rounded-xl border-2 p-3.5 text-left transition-colors disabled:opacity-60',
+                monetizationModel === 'subscription'
+                  ? 'border-amber-500 bg-amber-500/10'
+                  : 'border-border hover:bg-muted/50',
+              )}
+            >
+              <span className="flex items-center gap-2 text-sm font-bold">
+                <Gem className="h-4 w-4 text-amber-500" />
+                Subscription tiers
+                {monetizationModel === 'subscription' && (
+                  <span className="rounded-full bg-foreground px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-background">
+                    Live
+                  </span>
+                )}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Premium £3/$3/€3 · Ultra £20/$20/€20 · gated features · no donate popups
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMonetization('donation')}
+              disabled={monetizationFlipping || monetizationModel === null}
+              className={cn(
+                'flex flex-col items-start gap-1.5 rounded-xl border-2 p-3.5 text-left transition-colors disabled:opacity-60',
+                monetizationModel === 'donation'
+                  ? 'border-foreground bg-muted'
+                  : 'border-border hover:bg-muted/50',
+              )}
+            >
+              <span className="flex items-center gap-2 text-sm font-bold">
+                <Heart className="h-4 w-4 fill-pink-400 text-pink-500" />
+                Original donations
+                {monetizationModel === 'donation' && (
+                  <span className="rounded-full bg-foreground px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-background">
+                    Live
+                  </span>
+                )}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                The classic Ko-fi site — everything unlocked for everyone
+              </span>
+            </button>
+          </div>
+          {monetizationFlipping && (
+            <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Switching for all users…
+            </p>
+          )}
+          {monetizationResult && (
+            <p className="mt-3 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              {monetizationResult}
+            </p>
+          )}
+        </Card>
+
+        {/* ── Subscription Manager ──
+            Give/remove someone's premium (mainly for testing): paste their
+            guest code (the one in their Account page), a device id or an
+            account email, look them up, then grant or remove. */}
+        <Card id="subscription-manager" className="mb-6 scroll-mt-20 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Crown className="h-5 w-5 text-amber-500" />
+            <h2 className="text-base font-bold">Subscription Manager</h2>
+            <span className="ml-auto text-xs text-muted-foreground">
+              Give / remove someone's Premium — testing
+            </span>
+          </div>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Enter their <strong>guest code</strong> (the referral code shown in their
+            Account page — 6 digits, or alphanumeric once the code space overflows), a
+            device id (<code>d_…</code>) or an account email. Lookup shows who it
+            resolves to; the buttons grant or remove instantly (their next page load
+            picks it up). Guest-code grants work even for logged-out users.
+          </p>
+          <div className="flex max-w-2xl flex-col gap-2 sm:flex-row">
+            <Input
+              value={subIdentifier}
+              onChange={(e) => {
+                setSubIdentifier(e.target.value)
+                setSubLookup(null)
+                setSubResult(null)
+              }}
+              placeholder="Guest code (e.g. 482913) · device id · email"
+              className="flex-1"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') subManagerAction('lookup')
+              }}
+            />
+            <Button
+              variant="outline"
+              onClick={() => subManagerAction('lookup')}
+              disabled={subBusy || !subIdentifier.trim()}
+              className="gap-2"
+            >
+              {subBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              Lookup
+            </Button>
+          </div>
+          {subLookup && (
+            <div className="mt-3 max-w-2xl rounded-lg border bg-muted/40 px-3 py-2 text-xs">
+              <div className="font-semibold">{subLookup.label}</div>
+              <div className="mt-0.5 text-muted-foreground">
+                Resolved via {subLookup.kind}
+                {subLookup.email ? ` · account ${subLookup.email}` : ''}
+                {' · current tier: '}
+                <strong className="text-foreground">{(subLookup.currentTier || 'free').toUpperCase()}</strong>
+              </div>
+            </div>
+          )}
+          <div className="mt-3 flex max-w-2xl flex-wrap gap-2">
+            <Button
+              onClick={() => subManagerAction('set', 'premium')}
+              disabled={subBusy || !subIdentifier.trim()}
+              className="gap-2"
+            >
+              <Gem className="h-4 w-4" />
+              Grant Premium
+            </Button>
+            <Button
+              onClick={() => subManagerAction('set', 'ultra')}
+              disabled={subBusy || !subIdentifier.trim()}
+              className="gap-2"
+            >
+              <Crown className="h-4 w-4" />
+              Grant Ultra
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => subManagerAction('set', 'free')}
+              disabled={subBusy || !subIdentifier.trim()}
+              className="gap-2"
+            >
+              <X className="h-4 w-4" />
+              Remove subscription
+            </Button>
+          </div>
+          {subResult && (
+            <p className="mt-3 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              {subResult}
+            </p>
+          )}
         </Card>
 
         {/* ── Feature Toggles ──

@@ -1647,3 +1647,29 @@ html.nw-settled #nw-app-root {
 body:has([role='dialog'][aria-modal='true']) [aria-label='Cookie consent'] {
   display: none !important;
 }
+
+/* ── Personal feature flags (Premium) ─────────────────────────────────
+   Set from Account → Feed → My feature flags (src/lib flags stored in
+   localStorage 'neutralwire:my-flags'; page-client mirrors them onto
+   <html> as nw-* classes live). Each one is a REAL, functional tweak:
+
+   • nw-compact       — denser feed: tighter grid gap + slimmer card
+                        images (16/9 instead of 16/10) → more stories
+                        per screen.
+   • nw-bigtext       — larger base text (112.5% ≈ 18px) — everything
+                        scaled via rem follows.
+   • nw-hide-blindspots — removes the Blindspots chip from every
+                        subtopic-header variant (chips carry
+                        data-cat="blindspots").                 */
+html.nw-compact [data-feed-grid] {
+  gap: 0.75rem !important;
+}
+html.nw-compact [data-feed-grid] .aspect-\[16\/10\] {
+  aspect-ratio: 16 / 9;
+}
+html.nw-bigtext {
+  font-size: 112.5%;
+}
+html.nw-hide-blindspots [data-cat='blindspots'] {
+  display: none !important;
+}

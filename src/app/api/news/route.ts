@@ -13,6 +13,7 @@ import {
   CACHE_CONSTANTS,
 } from '@/lib/news-cache'
 import { firebaseRead } from '@/lib/firebase-server'
+import { readCustomFeed, refreshCustomTopic } from '@/lib/custom-topics'
 import {
   detectCountryServer,
   sourcesForCountry,
@@ -111,7 +112,25 @@ function boostTopics(topics: TopicArticle[], boostMap: Record<string, number>): 
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams
-  const category = (sp.get('category') || 'relevant') as Category
+  const rawCategory = sp.get('category') || 'relevant'
+
+  // ── CUSTOM SUBTOPIC FEEDS (Premium) ──
+  // category=custom:<topicId> — served from the customFeeds cache the
+  // refresh cron maintains (GDELT + AI filter). Cache-first like every
+  // other category; a missing feed does ONE synchronous first fill
+  // (GDELT-only, no AI pass — speed first; the cron adds the AI polish).
+  if (rawCategory.startsWith('custom:')) {
+    return handleCustomTopic(
+      rawCategory.slice('custom:'.length),
+      limitFor(sp),
+      minCoverageFor(sp),
+      sp.get('slim') === '1',
+      offsetFor(sp),
+      Date.now(),
+    )
+  }
+
+  const category = rawCategory as Category
   const limit = Math.min(40, Math.max(5, Number(sp.get('limit') || '24')))
   const minCoverage = Math.max(1, Math.min(8, Number(sp.get('minCoverage') || '1')))
   const slim = sp.get('slim') === '1' // strips articles array → ~80% smaller response
@@ -294,6 +313,66 @@ export async function GET(req: NextRequest) {
   })
   response.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600')
   return response
+}
+
+/** Small param helpers for the custom-topic early return (kept tiny so
+ *  the main path's inline reads stay unchanged). */
+function limitFor(sp: URLSearchParams): number {
+  return Math.min(40, Math.max(5, Number(sp.get('limit') || '24')))
+}
+function minCoverageFor(sp: URLSearchParams): number {
+  return Math.max(1, Math.min(8, Number(sp.get('minCoverage') || '1')))
+}
+function offsetFor(sp: URLSearchParams): number {
+  return Math.max(0, Number(sp.get('offset') || '0'))
+}
+
+/**
+ * Custom subtopic feed handler — cache-first, one synchronous fill on miss.
+ * Same response shape as the main categories so the client feed code,
+ * skeletons and infinite scroll all work unchanged.
+ */
+async function handleCustomTopic(
+  topicId: string,
+  limit: number,
+  minCoverage: number,
+  slim: boolean,
+  offset: number,
+  t0: number,
+) {
+  let feed = await readCustomFeed(topicId)
+  let filledNow = false
+
+  if (!feed || !Array.isArray(feed.topics)) {
+    // One synchronous first fill (GDELT-only; the cron's AI pass refines it).
+    try {
+      feed = (await refreshCustomTopic(topicId, { aiFilter: false })) || null
+      filledNow = true
+    } catch {
+      feed = null
+    }
+  }
+
+  const topics = (feed?.topics || [])
+    .filter((t) => t.coverage >= minCoverage)
+    .slice(offset, offset + limit)
+    .map((t) => (slim ? { ...t, articles: [] } : t))
+
+  const res = NextResponse.json({
+    category: `custom:${topicId}`,
+    country: '',
+    countryName: '',
+    topics,
+    cached: !filledNow,
+    fresh: true,
+    refreshing: false,
+    sourceCount: feed?.sourceCount ?? 0,
+    articleCount: feed?.articleCount ?? topics.length,
+    fetchedAt: feed?.updatedAt ? new Date(feed.updatedAt).toISOString() : new Date().toISOString(),
+    ms: Date.now() - t0,
+  })
+  res.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600')
+  return res
 }
 
 function applyFilters(

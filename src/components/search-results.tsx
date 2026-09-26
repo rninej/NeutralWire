@@ -2,12 +2,14 @@
 
 import * as React from 'react'
 import { motion } from 'framer-motion'
-import { Loader2, Search as SearchIcon } from 'lucide-react'
+import { Loader2, Search as SearchIcon, Lock } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Clock, Globe, History } from 'lucide-react'
 import { BiasBar } from '@/components/bias-bar'
 import { cn, safeImageUrl } from '@/lib/utils'
+import { PremiumDiamond } from '@/components/premium-ui'
+import { openUpgradeDialog } from '@/lib/subscription-client'
 import type { TopicArticle, FeedArticle } from '@/lib/news-aggregator'
 
 interface SearchHit {
@@ -16,6 +18,10 @@ interface SearchHit {
   matchedField: 'title' | 'summary' | 'source'
   snippet: string
   fromArchive?: boolean
+  /** Archive story older than 3 months + visitor not Premium: the card
+   *  still renders (title/date/summary visible) but clicking opens the
+   *  upgrade prompt instead of the story. Direct /story links stay open. */
+  premiumLocked?: boolean
 }
 
 interface SearchResponse {
@@ -73,14 +79,16 @@ export function SearchResults({
   // show ONE card (the topic card), not one card per article. Embedded
   // mode also drops topics already rendered by the local grid above.
   const seenTopicIds = new Set<string>(excludeTopicIds || [])
-  const uniqueTopics: Array<TopicArticle & { fromArchive?: boolean }> = []
+  const uniqueTopics: Array<TopicArticle & { fromArchive?: boolean; premiumLocked?: boolean }> = []
   const archiveHitIds = new Set<string>()
+  const lockedTopicIds = new Set<string>()
   for (const hit of result?.hits || []) {
     if (!seenTopicIds.has(hit.topic.topicId)) {
       seenTopicIds.add(hit.topic.topicId)
-      uniqueTopics.push(hit.topic)
+      uniqueTopics.push({ ...hit.topic, premiumLocked: hit.premiumLocked })
     }
     if (hit.fromArchive) archiveHitIds.add(hit.topic.topicId)
+    if (hit.premiumLocked) lockedTopicIds.add(hit.topic.topicId)
   }
 
   // Embedded (hiddenIfEmpty) mode: show nothing until there's something to
@@ -147,6 +155,7 @@ export function SearchResults({
             topic={topic}
             index={i}
             fromArchive={archiveHitIds.has(topic.topicId)}
+            locked={lockedTopicIds.has(topic.topicId)}
             onOpen={onOpenTopic}
           />
         ))}
@@ -159,11 +168,13 @@ function SearchTopicCard({
   topic,
   index = 0,
   fromArchive = false,
+  locked = false,
   onOpen,
 }: {
   topic: TopicArticle
   index?: number
   fromArchive?: boolean
+  locked?: boolean
   onOpen?: (topic: TopicArticle) => void
 }) {
   const [imgError, setImgError] = React.useState(false)
@@ -176,6 +187,13 @@ function SearchTopicCard({
   const showImage = imageUrl && !imgError
 
   const handleClick = () => {
+    // Premium archive lock: the story is LISTED but older-than-3-months
+    // archive clicks open the upgrade prompt (only in SEARCH — direct
+    // story links are untouched).
+    if (locked) {
+      openUpgradeDialog('archiveSearchOld')
+      return
+    }
     onOpen?.(topic)
   }
 
@@ -202,10 +220,21 @@ function SearchTopicCard({
             {fromArchive && (
               <Badge
                 variant="outline"
-                className="gap-1 border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-700 dark:text-amber-400"
+                className={cn(
+                  'gap-1 border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-700 dark:text-amber-400',
+                )}
               >
                 <History className="h-2.5 w-2.5" />
                 Archive
+              </Badge>
+            )}
+            {locked && (
+              <Badge
+                variant="outline"
+                className="gap-1 border-amber-500/60 bg-amber-500/15 text-[10px] font-bold text-amber-600 dark:text-amber-300"
+              >
+                <Lock className="h-2.5 w-2.5" />
+                3+ months — Premium
               </Badge>
             )}
             <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -242,8 +271,17 @@ function SearchTopicCard({
               {total} {total === 1 ? 'article' : 'articles'} across the spectrum
             </span>
             <span className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground">
-              <Globe className="h-2.5 w-2.5" />
-              Open in NeutralWire
+              {locked ? (
+                <>
+                  <PremiumDiamond className="h-3 w-3" />
+                  Unlock with Premium
+                </>
+              ) : (
+                <>
+                  <Globe className="h-2.5 w-2.5" />
+                  Open in NeutralWire
+                </>
+              )}
             </span>
           </div>
         </div>

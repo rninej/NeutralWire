@@ -5,6 +5,7 @@ import {
   readSearchIndex,
   type SearchIndexEntry,
 } from '@/lib/search-index'
+import { getRequesterTier } from '@/lib/subscriptions'
 import type { CategoryCachePayload, TopicArticle, FeedArticle } from '@/lib/news-aggregator'
 
 export const runtime = 'nodejs'
@@ -21,6 +22,11 @@ interface SearchHit {
   snippet: string
   /** true when the hit comes from the permanent archive (older story). */
   fromArchive?: boolean
+  /** true when this archive story is older than 3 months AND the visitor
+   *  is not Premium — the UI shows it but opens the upgrade prompt when
+   *  clicked (direct story links are NEVER affected; the gate exists only
+   *  here, in search results). */
+  premiumLocked?: boolean
 }
 
 interface SearchResponse {
@@ -32,6 +38,8 @@ interface SearchResponse {
   archiveSearched: number
   /** How many archive entries were newly indexed by this request. */
   indexedNow: number
+  /** The visitor's tier (so the UI can explain the lock state). */
+  premiumTier?: string
   ms: number
 }
 
@@ -56,6 +64,18 @@ export async function GET(req: NextRequest) {
   const maxHits = Math.min(60, Math.max(5, Number(sp.get('limit') || '20')))
 
   const t0 = Date.now()
+
+  // ── Premium archive gate ──
+  // Archive stories older than 3 months: still LISTED in search results
+  // (title, date, summary) but `premiumLocked` tells the UI to open the
+  // upgrade prompt instead of the story when the visitor isn't Premium.
+  // Lives ONLY here — direct /story/<id> links (notifications, Google,
+  // old shares) remain fully open for everyone, per the spec.
+  const requester = await getRequesterTier(req)
+  const archiveUnlocked = requester.allUnlocked || requester.tier !== 'free'
+  const ARCHIVE_LOCK_MS = 91 * 24 * 60 * 60 * 1000 // ~3 months
+  const lockIfOld = (iso: number, fromArchive: boolean): boolean =>
+    !archiveUnlocked && fromArchive && iso > 0 && Date.now() - iso > ARCHIVE_LOCK_MS
 
   if (!q || q.length < 2) {
     // Useless query — still nudge the index toward convergence.
@@ -233,6 +253,11 @@ export async function GET(req: NextRequest) {
     return b.article.iso - a.article.iso
   })
 
+  // Stamp the premium lock AFTER sorting so it can't change ranking.
+  for (const hit of hits) {
+    hit.premiumLocked = lockIfOld(hit.article.iso || hit.topic.latestSeen || 0, hit.fromArchive === true)
+  }
+
   return NextResponse.json({
     query: q,
     hits: hits.slice(0, maxHits),
@@ -240,6 +265,7 @@ export async function GET(req: NextRequest) {
     categoriesSearched,
     archiveSearched,
     indexedNow,
+    premiumTier: requester.tier,
     ms: Date.now() - t0,
   } satisfies SearchResponse)
 }

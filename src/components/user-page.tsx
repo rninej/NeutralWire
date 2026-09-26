@@ -34,6 +34,13 @@ import {
 import { getOrCreateGuestName } from '@/lib/guest-name'
 import { ThemeSwitcher } from '@/components/theme-toggle'
 import { FeatureFlagsCard } from '@/components/feature-flags'
+import {
+  SubscriptionAccountSection,
+  DigestPrefsCard,
+  PersonalFlagsCard,
+} from '@/components/subscription-account'
+import { PremiumBadge } from '@/components/premium-ui'
+import { useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
 import { GRADIENT_PRESETS } from '@/lib/use-theme-reveal'
 import {
   setThemeFamilyStored,
@@ -484,6 +491,9 @@ export function UserPage({ onClose }: UserPageProps) {
                   </p>
                 </Card>
 
+                {/* Subscription — tier card / sign in & out (the tier model) */}
+                <SubscriptionAccountSection />
+
                 {/* Refer others — compact */}
                 <Card className="p-4">
                   <div className="mb-3 flex items-center gap-2">
@@ -656,6 +666,10 @@ export function UserPage({ onClose }: UserPageProps) {
 
                 {/* Feature flags — your header style + admin default */}
                 <FeatureFlagsCard />
+
+                {/* Personal feature flags (Premium) — compact cards, hide
+                    Blindspots, larger text — all functional. */}
+                <PersonalFlagsCard />
               </div>
             )}
 
@@ -674,48 +688,12 @@ export function UserPage({ onClose }: UserPageProps) {
                   {/* Solid themes (mode control + family grid) */}
                   <ThemeSwitcher />
 
-                  {/* Gradient presets */}
-                  <div className="mt-4 border-t pt-4">
-                    <h3 className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      Gradient backgrounds
-                    </h3>
-                    <div className="grid grid-cols-3 gap-2">
-                      {GRADIENT_PRESETS.map((g) => (
-                        <GradientPreset key={g.id} id={g.id} label={g.label} gradient={g.gradient} />
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Custom gradient maker — collapsed by default (it's the
-                      longest control; one tap unfolds it). */}
-                  <button
-                    type="button"
-                    onClick={() => setShowGradientMaker((v) => !v)}
-                    aria-expanded={showGradientMaker}
-                    className="mt-3 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-                  >
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Custom gradient maker
-                    <ChevronDown
-                      className={cn(
-                        'ml-auto h-4 w-4 transition-transform',
-                        showGradientMaker && 'rotate-180',
-                      )}
-                    />
-                  </button>
-                  <AnimatePresence initial={false}>
-                    {showGradientMaker && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.25, ease: EASE_OUT }}
-                        className="overflow-hidden"
-                      >
-                        <CustomGradientMaker />
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                  {/* Gradient presets — PREMIUM in the subscription model
+                      (free in the donation model). */}
+                  <GradientSectionGated
+                    showMaker={showGradientMaker}
+                    onToggleMaker={() => setShowGradientMaker((v) => !v)}
+                  />
                 </Card>
               </div>
             )}
@@ -787,27 +765,13 @@ export function UserPage({ onClose }: UserPageProps) {
                   )}
                 </Card>
 
-                {/* Support — compact single row + button */}
-                <Card className="p-4">
-                  <div className="mb-2.5 flex items-center gap-2">
-                    <Heart className="h-4 w-4 fill-pink-400 text-pink-500" strokeWidth={2} />
-                    <h2 className="text-sm font-bold">Support NeutralWire</h2>
-                  </div>
-                  <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-                    Free, ad-free, paywall-free. A coffee on Ko-fi covers the
-                    server + AI costs.
-                  </p>
-                  <a
-                    href="https://ko-fi.com/neutralwire"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 rounded-md bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pink-600 active:scale-95 transition-all"
-                  >
-                    <Heart className="h-4 w-4 fill-white" strokeWidth={2} />
-                    Donate on Ko-fi
-                    <ExternalLink className="h-3.5 w-3.5 opacity-80" />
-                  </a>
-                </Card>
+                {/* AI email digest (Premium) — from once a week to 3× a day */}
+                <DigestPrefsCard />
+
+                {/* Support — compact single row + button. In the subscription
+                    model the Ko-fi ask stands down (Premium is the support
+                    path); the donation model keeps it, exactly as before. */}
+                <SupportCardGated />
 
                 {/* Footer note */}
                 <div className="px-1 pb-2 text-center text-[11px] text-muted-foreground">
@@ -843,6 +807,117 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
 // Re-export so consumers can use AnimatePresence with the user page (the
 // exit animation needs to be wrapped).
 export const UserPageAnimatePresence = AnimatePresence
+
+/**
+ * GradientSectionGated — the gradient presets + custom gradient maker,
+ * PREMIUM in the subscription model, open to everyone in the donation
+ * model (the original behaviour). The header carries the Premium badge;
+ * a free visitor tapping a preset gets the upgrade dialog.
+ */
+function GradientSectionGated({
+  showMaker,
+  onToggleMaker,
+}: {
+  showMaker: boolean
+  onToggleMaker: () => void
+}) {
+  const sub = useSubscription()
+  const unlocked = sub.model === 'donation' || sub.entitlements.gradientThemes
+
+  return (
+    <div className="mt-4 border-t pt-4">
+      <div className="mb-2 flex items-center gap-2">
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          Gradient backgrounds
+        </h3>
+        {sub.model === 'subscription' ? <PremiumBadge className="ml-auto" /> : null}
+      </div>
+      {unlocked ? (
+        <>
+          <div className="grid grid-cols-3 gap-2">
+            {GRADIENT_PRESETS.map((g) => (
+              <GradientPreset key={g.id} id={g.id} label={g.label} gradient={g.gradient} />
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={onToggleMaker}
+            aria-expanded={showMaker}
+            className="mt-3 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Custom gradient maker
+            <ChevronDown
+              className={cn(
+                'ml-auto h-4 w-4 transition-transform',
+                showMaker && 'rotate-180',
+              )}
+            />
+          </button>
+          <AnimatePresence initial={false}>
+            {showMaker && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.25, ease: EASE_OUT }}
+                className="overflow-hidden"
+              >
+                <CustomGradientMaker />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={() => openUpgradeDialog('gradientThemes')}
+          className="flex w-full flex-col items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-4 text-center"
+        >
+          <div className="flex items-center gap-1.5 text-sm font-semibold">
+            <Sparkles className="h-4 w-4 text-amber-500" />
+            10 gradient looks + custom maker
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Aurora, Sunset, Deep Ocean… — Premium at {sub.pricing.premium.display}/month
+          </span>
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * SupportCardGated — the Ko-fi donation card: shown in the DONATION model
+ * (the original site); in the subscription model Premium is the support
+ * path, so the card stands down.
+ */
+function SupportCardGated() {
+  const sub = useSubscription()
+  if (sub.model === 'subscription') return null
+  return (
+    <Card className="p-4">
+      <div className="mb-2.5 flex items-center gap-2">
+        <Heart className="h-4 w-4 fill-pink-400 text-pink-500" strokeWidth={2} />
+        <h2 className="text-sm font-bold">Support NeutralWire</h2>
+      </div>
+      <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+        Free, ad-free, paywall-free. A coffee on Ko-fi covers the
+        server + AI costs.
+      </p>
+      <a
+        href="https://ko-fi.com/neutralwire"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-2 rounded-md bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pink-600 active:scale-95 transition-all"
+      >
+        <Heart className="h-4 w-4 fill-white" strokeWidth={2} />
+        Donate on Ko-fi
+        <ExternalLink className="h-3.5 w-3.5 opacity-80" />
+      </a>
+    </Card>
+  )
+}
 
 // ── Gradient preset button ──
 // Shows the gradient as a swatch; clicking it applies the gradient as a

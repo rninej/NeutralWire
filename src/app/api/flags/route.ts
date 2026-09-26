@@ -16,9 +16,9 @@ export const maxDuration = 15
 /**
  * Server-side feature flags (stored in Firebase under featureFlags/<name>).
  *
- * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, notifRaiseFix, videoWatch, videoPreview, milestoneDonate, meshRelay, userCron }   (public)
+ * GET  /api/flags   → { subtopicNav, popupSystem, notifLike, notifRaiseFix, videoWatch, videoPreview, milestoneDonate, meshRelay, userCron, monetizationModel }   (public)
  * POST /api/flags   → set flag(s) for ALL users (password-protected)
- *       body: { password, subtopicNav?, popupSystem?, notifLike?, notifRaiseFix?, videoWatch?, videoPreview?, milestoneDonate?, meshRelay?, userCron? }
+ *       body: { password, subtopicNav?, popupSystem?, notifLike?, notifRaiseFix?, videoWatch?, videoPreview?, milestoneDonate?, meshRelay?, userCron?, monetizationModel? }
  *       — send one or more.
  *
  * Managed flags:
@@ -111,6 +111,16 @@ export const maxDuration = 15
  * values server-side on load (page.tsx SSR) so a flip propagates on the
  * next page load with no wrong-design flash.
  *
+ *   - monetizationModel: 'subscription' | 'donation' — THE MONETIZATION
+ *       SWITCH. 'subscription' (default) runs the tier model: free tier
+ *       keeps the full classic experience (aggregation, bias bar, full
+ *       articles, sources, PWA) while premium/ultra gates (custom
+ *       subtopics, archive search >3mo, email digest, gradient themes,
+ *       personal flags, API/export) are enforced. 'donation' flips the
+ *       whole site back to the ORIGINAL Ko-fi donation model — every
+ *       premium gate stands down and the classic donate popups return.
+ *       Flipped from /debug → next page load is the old site again.
+ *
  * AUTH for POST: same password gate as the analytics endpoints — SHA-256
  * hash comparison, timing-safe.
  */
@@ -135,6 +145,7 @@ const VIDEO_PREVIEW_FLAG_PATH = 'featureFlags/videoPreview'
 const MILESTONE_DONATE_FLAG_PATH = 'featureFlags/milestoneDonate'
 const MESH_RELAY_FLAG_PATH = 'featureFlags/meshRelay'
 const USER_CRON_FLAG_PATH = 'featureFlags/userCron'
+const MONETIZATION_MODEL_FLAG_PATH = 'featureFlags/monetizationModel'
 
 // Per-instance memos (10s) — bound Firebase reads when many clients hit
 // this endpoint simultaneously on a warm serverless instance.
@@ -147,6 +158,7 @@ let videoPreviewMemo: { value: boolean; ts: number } | null = null
 let milestoneDonateMemo: { value: boolean; ts: number } | null = null
 let meshRelayMemo: { value: boolean; ts: number } | null = null
 let userCronMemo: { value: boolean; ts: number } | null = null
+let monetizationMemo: { value: 'subscription' | 'donation'; ts: number } | null = null
 const MEMO_TTL_MS = 10 * 1000
 
 function sha256(s: string): string {
@@ -183,7 +195,7 @@ function normalizeBooleanFlag(v: unknown, fallback: boolean): boolean {
 export async function GET() {
   // All flags are fetched in parallel — one cold instance pays the
   // RTDB reads at most, then all answers are memoized together.
-  const [navResult, popupResult, notifLikeResult, notifRaiseFixResult, videoResult, videoPreviewResult, milestoneDonateResult, meshRelayResult, userCronResult] = await Promise.allSettled([
+  const [navResult, popupResult, notifLikeResult, notifRaiseFixResult, videoResult, videoPreviewResult, milestoneDonateResult, meshRelayResult, userCronResult, monetizationResult] = await Promise.allSettled([
     (async () => {
       if (navMemo && Date.now() - navMemo.ts < MEMO_TTL_MS) return navMemo.value
       const stored = await firebaseRead<string>(NAV_FLAG_PATH)
@@ -256,6 +268,15 @@ export async function GET() {
       userCronMemo = { value, ts: Date.now() }
       return value
     })(),
+    (async () => {
+      if (monetizationMemo && Date.now() - monetizationMemo.ts < MEMO_TTL_MS) return monetizationMemo.value
+      const stored = await firebaseRead<string>(MONETIZATION_MODEL_FLAG_PATH)
+      // DEFAULT SUBSCRIPTION — the tier model is the live experience;
+      // an explicit 'donation' flips the whole site back.
+      const value = stored === 'donation' ? 'donation' : 'subscription'
+      monetizationMemo = { value, ts: Date.now() }
+      return value
+    })(),
   ])
 
   // ── CDN cache (Fluid CPU) ──
@@ -287,6 +308,10 @@ export async function GET() {
         meshRelayResult.status === 'fulfilled' ? meshRelayResult.value : true,
       userCron:
         userCronResult.status === 'fulfilled' ? userCronResult.value : true,
+      monetizationModel:
+        monetizationResult.status === 'fulfilled'
+          ? monetizationResult.value
+          : 'subscription',
     },
     {
       headers: {
@@ -308,6 +333,7 @@ export async function POST(req: NextRequest) {
     milestoneDonate?: boolean | string
     meshRelay?: boolean | string
     userCron?: boolean | string
+    monetizationModel?: string
   }
   try {
     body = await req.json()
@@ -328,11 +354,12 @@ export async function POST(req: NextRequest) {
   const wantsMilestoneDonate = body.milestoneDonate !== undefined
   const wantsMeshRelay = body.meshRelay !== undefined
   const wantsUserCron = body.userCron !== undefined
-  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsNotifRaiseFix && !wantsVideo && !wantsVideoPreview && !wantsMilestoneDonate && !wantsMeshRelay && !wantsUserCron) {
+  const wantsMonetization = body.monetizationModel !== undefined
+  if (!wantsNav && !wantsPopup && !wantsNotifLike && !wantsNotifRaiseFix && !wantsVideo && !wantsVideoPreview && !wantsMilestoneDonate && !wantsMeshRelay && !wantsUserCron && !wantsMonetization) {
     return NextResponse.json(
       {
         error:
-          'Provide subtopicNav, popupSystem, notifLike, notifRaiseFix, videoWatch, videoPreview, milestoneDonate, meshRelay and/or userCron to set',
+          'Provide subtopicNav, popupSystem, notifLike, notifRaiseFix, videoWatch, videoPreview, milestoneDonate, meshRelay, userCron and/or monetizationModel to set',
       },
       { status: 400 },
     )
@@ -347,6 +374,12 @@ export async function POST(req: NextRequest) {
   if (wantsPopup && (!body.popupSystem || !POPUP_MODES.includes(body.popupSystem as PopupMode))) {
     return NextResponse.json(
       { error: `popupSystem must be one of: ${POPUP_MODES.join(', ')}` },
+      { status: 400 },
+    )
+  }
+  if (wantsMonetization && body.monetizationModel !== 'donation' && body.monetizationModel !== 'subscription') {
+    return NextResponse.json(
+      { error: 'monetizationModel must be donation or subscription' },
       { status: 400 },
     )
   }
@@ -440,6 +473,16 @@ export async function POST(req: NextRequest) {
     console.log(`[flags] userCron set to '${userCron}' (applies to ALL users)`)
   }
 
+  if (wantsMonetization) {
+    const monetizationModel = body.monetizationModel === 'donation' ? 'donation' : 'subscription'
+    const ok = await firebaseWrite(MONETIZATION_MODEL_FLAG_PATH, monetizationModel)
+    if (!ok) {
+      return NextResponse.json({ error: 'Firebase write failed (monetizationModel)' }, { status: 500 })
+    }
+    monetizationMemo = { value: monetizationModel, ts: Date.now() }
+    console.log(`[flags] monetizationModel set to '${monetizationModel}' (applies to ALL users)`)
+  }
+
   return NextResponse.json({
     ok: true,
     ...(wantsNav ? { subtopicNav: body.subtopicNav } : {}),
@@ -451,5 +494,6 @@ export async function POST(req: NextRequest) {
     ...(wantsMilestoneDonate ? { milestoneDonate: normalizeBooleanFlag(body.milestoneDonate, true) } : {}),
     ...(wantsMeshRelay ? { meshRelay: normalizeBooleanFlag(body.meshRelay, true) } : {}),
     ...(wantsUserCron ? { userCron: normalizeBooleanFlag(body.userCron, true) } : {}),
+    ...(wantsMonetization ? { monetizationModel: body.monetizationModel } : {}),
   })
 }

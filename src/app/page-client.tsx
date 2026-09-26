@@ -23,7 +23,13 @@ import {
   PRIMARY_CATEGORIES,
   SECONDARY_CATEGORIES,
   type Category,
+  type FeedCategory,
+  isCustomCategory,
 } from '@/lib/news-sources'
+import { SubscriptionProvider, useSubscription } from '@/lib/subscription-client'
+import { UpgradeDialog } from '@/components/premium-ui'
+import { getCustomTopics, CUSTOM_TOPICS_EVENT } from '@/lib/custom-topics-client'
+import { getMyFlags, MY_FLAGS_EVENT } from '@/components/subscription-account'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { TopicCard } from '@/components/topic-card'
 import { PwaInstallPrompt } from '@/components/pwa-install-prompt'
@@ -290,6 +296,7 @@ export default function Home({
   meshRelay = true,
   userCron = true,
   notifRaiseFix = true,
+  monetizationModel = 'subscription',
 }: {
   initialSubtopicNav?: NavVariant
   popupSystem?: PopupMode
@@ -311,6 +318,11 @@ export default function Home({
    *  ON; flipped from /debug. Mirrored into the SW below so the click
    *  handler can honour it with zero network. */
   notifRaiseFix?: boolean
+  /** THE MONETIZATION SWITCH (SSR-provided): 'subscription' = the tier
+   *  model (premium gates live, donation popups stand down); 'donation'
+   *  = the original Ko-fi donation site (all gates open). Flipped from
+   *  /debug; also re-checked live by the popups leaf via useSubscription. */
+  monetizationModel?: 'donation' | 'subscription'
 }) {
   // --- Platform detection (Android / Apple / Other) ---
   // Sets body.platform-{android|apple|other} so the CSS glass rules in
@@ -397,8 +409,35 @@ export default function Home({
   // 'relevant' (no window), client expected 'politics' (from URL). React 19
   // used the server value and the client value was lost — the "Relevant" tab
   // stayed highlighted even when the URL said ?category=politics.
-  const [category, setCategoryState] = useState<Category>('relevant')
+  const [category, setCategoryState] = useState<FeedCategory>('relevant')
   const [view, setView] = useState<View>('feed')
+
+  // ── The visitor's custom subtopic list (live — re-reads when topics
+  // are added/removed in the picker, so the feed header label + nav
+  // chips stay in sync without a reload). ──
+  const [customTopics, setCustomTopics] = useState<Array<{ id: string; label: string }>>([])
+  useEffect(() => {
+    setCustomTopics(getCustomTopics())
+    const onChanged = () => setCustomTopics(getCustomTopics())
+    window.addEventListener(CUSTOM_TOPICS_EVENT, onChanged)
+    return () => window.removeEventListener(CUSTOM_TOPICS_EVENT, onChanged)
+  }, [])
+
+  // ── Personal feature flags (Premium) → <html> classes, live ──
+  // compactFeed / hideBlindspots / bigText map to nw-* classes (see
+  // globals.css). Applied instantly when toggled in the Account sheet.
+  useEffect(() => {
+    const apply = () => {
+      const flags = getMyFlags()
+      const root = document.documentElement
+      root.classList.toggle('nw-compact', Boolean(flags.compactFeed))
+      root.classList.toggle('nw-bigtext', Boolean(flags.bigText))
+      root.classList.toggle('nw-hide-blindspots', Boolean(flags.hideBlindspots))
+    }
+    apply()
+    window.addEventListener(MY_FLAGS_EVENT, apply)
+    return () => window.removeEventListener(MY_FLAGS_EVENT, apply)
+  }, [])
 
   // ── Category ref (always-current value, used by URL listeners + fetch guard) ──
   // Declared here (before the URL-listener useEffect) so the listener can
@@ -420,7 +459,7 @@ export default function Home({
   //   1. Double-highlight glitch (state + URL were out of sync)
   //   2. Refresh losing the subtopic (URL now has ?category=)
   //   3. Each subtopic having its own shareable link
-  const setCategory = React.useCallback((cat: Category) => {
+  const setCategory = React.useCallback((cat: FeedCategory) => {
     // Record the click time so URL listeners don't override it
     lastClickAtRef.current = Date.now()
     setCategoryState(cat)
@@ -478,8 +517,13 @@ export default function Home({
       const params = new URLSearchParams(window.location.search)
       // Don't override if a topic is open (/?topic= takes priority)
       if (params.has('topic')) return
-      const cat = params.get('category') as Category | null
-      const resolved = cat && validCategories.includes(cat) ? cat : 'relevant'
+      const cat = params.get('category') as FeedCategory | null
+      // Custom subtopic categories (custom:<id>) are as valid as the 11
+      // built-ins — they are shareable URLs too.
+      const resolved: FeedCategory =
+        cat && (isCustomCategory(cat) || validCategories.includes(cat as Category))
+          ? cat
+          : 'relevant'
       // No-redundant-set: only update if the URL differs from current state.
       // This prevents unnecessary re-renders that could race with a click.
       if (resolved !== categoryRef.current) {
@@ -1913,9 +1957,9 @@ export default function Home({
   // refetch is invisible. Category switches, manual country changes and
   // the first load still show the skeleton (different category / topics
   // were just cleared / nothing to keep).
-  const lastFetchCatRef = React.useRef<Category | null>(null)
+  const lastFetchCatRef = React.useRef<FeedCategory | null>(null)
   const fetchData = React.useCallback(
-    async (cat: Category, mc: number, country?: CountryInfo | null) => {
+    async (cat: FeedCategory, mc: number, country?: CountryInfo | null) => {
       // For virtual categories, include the country param ONLY when we
       // already know it (manual override or cached detection). When country
       // is still null (very first visit), the request goes out WITHOUT the
@@ -1924,6 +1968,10 @@ export default function Home({
       // When the fresh detection lands and differs, the effect re-runs with
       // the correct country param.
       const isVirtual = cat === 'relevant' || cat === 'mycountry'
+      // Custom subtopic feeds (custom:<id>) are served by the same
+      // /api/news endpoint from the customFeeds cache — they flow through
+      // the exact same path as a plain category.
+      const isCustom = isCustomCategory(cat)
 
       const reqId = ++reqIdRef.current
       const silent = lastFetchCatRef.current === cat && topicsRef.current.length > 0
@@ -1952,6 +2000,7 @@ export default function Home({
         let json: NewsResponse | null = null
         const canMesh =
           meshRelay &&
+          !isCustom &&
           cat !== 'blindspots' &&
           (isVirtual ? !!country : true)
         if (canMesh) {
@@ -2275,6 +2324,7 @@ export default function Home({
     // html.nw-release #nw-app-root fades/rises the whole app in the same
     // beat the PWA launch splash fades out, so a cold start goes
     // splash → fully loaded feed with no skeleton flash in between).
+    <SubscriptionProvider initialModel={monetizationModel}>
     <div id="nw-app-root" className="flex min-h-screen flex-col">
       {/* ── Offline mode banner ──
           Big, prominent banner shown when the browser is offline. The SW
@@ -2732,14 +2782,19 @@ export default function Home({
                         olderTopics={olderTopics}
                         onOpenDetail={handleOpenDetail}
                         onDismiss={handleDismissTopic}
-                        label={CATEGORY_LABELS[category] || category}
+                        label={
+                          isCustomCategory(category)
+                            ? customTopics.find((t) => `custom:${t.id}` === category)?.label ||
+                              'Your topic'
+                            : CATEGORY_LABELS[category as Category] || category
+                        }
                         onSearchClick={openSearch}
                       />
                     )}
                   </>
                 ) : (
                   /* Default grid for other categories / search */
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  <div data-feed-grid className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                     {featured && (
                       <TopicCard
                         key={featured.topicId + (featured.imageUrl || '')}
@@ -2909,19 +2964,15 @@ export default function Home({
       <IosNotificationPrompt />
       <PwaOnboarding />
 
-      {/* In the PWA: the ORIGINAL mode brings back the classic Ko-fi
-          donation popup; the smart modes celebrate milestones instead —
-          and (milestoneDonate flag, default ON) that celebration body is
-          the user-requested "If you love NeutralWire's free mission,
-          Please Donate" message + a real Donate-on-Ko-fi button,
-          switchable back to the original celebration-only body from
-          /debug. The two systems are mutually exclusive by design —
-          both count stories opened on this surface. */}
-      {popupSystem === 'original' ? (
-        <DonatePopupLegacy />
-      ) : (
-        <MilestoneCelebration donateMode={milestoneDonate} />
-      )}
+      {/* ── MONETIZATION POPUPS — donation vs subscription model ──
+          'donation' model → the ORIGINAL Ko-fi popup / milestone-donate
+          celebration (the classic site, exactly as before).
+          'subscription' model → donation asks stand down: milestones
+          still celebrate, but with the donate body OFF (premium is the
+          support path now). Live-switchable from /debug — this leaf
+          reads the CURRENT model from the subscription provider, so a
+          flip applies without a reload of this tree. */}
+      <MonetizationPopups popupSystem={popupSystem} milestoneDonate={milestoneDonate} />
 
       {/* User page (account / referral / personalization / themes / support)
           — wrapped in AnimatePresence so the entrance + exit animations
@@ -2983,7 +3034,38 @@ export default function Home({
         )}
       </AnimatePresence>
     </div>
+    {/* The upgrade dialog (paywall + account + checkout) — mounted once,
+        opened from anywhere via the neutralwire:upgrade-open event. */}
+    <UpgradeDialog />
+    </SubscriptionProvider>
   )
+}
+
+/**
+ * Monetization popups leaf — decides between the ORIGINAL donation
+ * popups and the subscription-era celebration, reading the CURRENT
+ * monetization model from the subscription provider (so /debug flips
+ * apply without reloading, and the SSR prop is only the first paint).
+ */
+function MonetizationPopups({
+  popupSystem,
+  milestoneDonate,
+}: {
+  popupSystem: PopupMode
+  milestoneDonate: boolean
+}) {
+  const sub = useSubscription()
+  if (sub.model === 'donation') {
+    // The OG donation model, byte-for-byte the old behaviour.
+    return popupSystem === 'original' ? (
+      <DonatePopupLegacy />
+    ) : (
+      <MilestoneCelebration donateMode={milestoneDonate} />
+    )
+  }
+  // Subscription model: donation asks stand down; milestones still
+  // celebrate (pure celebration, donate body off).
+  return popupSystem === 'original' ? null : <MilestoneCelebration donateMode={false} />
 }
 
 function CategoryTab({

@@ -323,6 +323,35 @@ export async function firebasePing(): Promise<boolean> {
 }
 
 /**
+ * Push (append) a child under a path with a server-generated key (REST
+ * POST). Returns the generated key, or null on failure. Used by the
+ * subscriptions audit log (fire-and-forget writes).
+ */
+export async function firebasePush<T = unknown>(path: string, value: T): Promise<string | null> {
+  const url = `${DB_URL}/${path}.json`
+  try {
+    const res = await withTimeout(
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(value),
+        cache: 'no-store',
+      }),
+      FETCH_TIMEOUT_MS + 4000,
+    )
+    if (!res.ok) {
+      console.warn(`[firebase] push ${path} failed: HTTP ${res.status}`)
+      return null
+    }
+    const out = (await res.json()) as { name?: string } | null
+    return out?.name ?? null
+  } catch (err) {
+    console.warn(`[firebase] push ${path} error:`, err)
+    return null
+  }
+}
+
+/**
  * Delete a node at the given path (REST DELETE). Used by the mesh
  * lease system (one-time lease consumption) and log trimming.
  */

@@ -54,6 +54,23 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number]
 
+/**
+ * A feed category INCLUDING Premium custom subtopics (`custom:<topicId>`).
+ * The header navs and the /api/news route accept this widened type: a
+ * custom topic flows through the exact same fetch path
+ * (/api/news?category=custom:ai) and renders with the standard feed
+ * layout. Plain `Category` values remain valid everywhere.
+ */
+export type FeedCategory = Category | `custom:${string}`
+
+export function isCustomCategory(c: string): c is `custom:${string}` {
+  return c.startsWith('custom:')
+}
+
+export function customTopicId(c: string): string {
+  return c.startsWith('custom:') ? c.slice('custom:'.length) : ''
+}
+
 export const CATEGORY_LABELS: Record<Category, string> = {
   relevant: 'Relevant',
   mycountry: 'My Country',

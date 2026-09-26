@@ -212,6 +212,28 @@ async function getNotifRaiseFix(): Promise<boolean> {
   }
 }
 
+// ── Server-rendered monetization model flag (subscription vs donation) ──
+// THE MONETIZATION SWITCH, read server-side with the same 5s-memo
+// pattern so the first paint already knows which popup system + gates
+// run. 'subscription' (default) = tier model; 'donation' = the ORIGINAL
+// Ko-fi donation site with every premium gate stood down.
+let monetizationModelFlagMemo: { value: 'subscription' | 'donation'; ts: number } | null = null
+const MONETIZATION_FLAG_TTL_MS = 5 * 1000
+
+async function getMonetizationModel(): Promise<'subscription' | 'donation'> {
+  if (monetizationModelFlagMemo && Date.now() - monetizationModelFlagMemo.ts < MONETIZATION_FLAG_TTL_MS) {
+    return monetizationModelFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<string>('featureFlags/monetizationModel')
+    const value = stored === 'donation' ? 'donation' : 'subscription'
+    monetizationModelFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return 'subscription'
+  }
+}
+
 /**
  *  Generate dynamic OG metadata for shared links.
  *
@@ -314,6 +336,10 @@ export default async function Page() {
   // Notification raise-fix flag (default ON; switched from /debug).
   const notifRaiseFix = await getNotifRaiseFix()
 
+  // Monetization model flag — subscription tiers (default) vs the
+  // original donation model; switched from /debug.
+  const monetizationModel = await getMonetizationModel()
+
   // Personal override (Account → Feature Flags → "Your header style"):
   // a cookie, so the server sees it during SSR — the visitor's own pick
   // renders in the very first paint, no flash. Invalid values fall back
@@ -338,6 +364,7 @@ export default async function Page() {
           meshRelay={meshRelay}
           userCron={userCron}
           notifRaiseFix={notifRaiseFix}
+          monetizationModel={monetizationModel}
         />
       </VideoPreviewProvider>
     </VideoWatchProvider>

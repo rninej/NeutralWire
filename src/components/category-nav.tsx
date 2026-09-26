@@ -13,6 +13,7 @@ import {
   FlaskConical,
   HeartPulse,
   Trophy,
+  Gem,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ScrollHint } from './scroll-arrow'
@@ -21,8 +22,10 @@ import {
   PRIMARY_CATEGORIES,
   SECONDARY_CATEGORIES,
   type Category,
+  type FeedCategory,
 } from '@/lib/news-sources'
 import type { CountryInfo } from '@/lib/country-detect'
+import { AddTopicChip, CustomTopicChips } from '@/components/add-topic-button'
 
 /**
  * CategoryNav — the "cards" subtopic header system.
@@ -57,8 +60,13 @@ import type { CountryInfo } from '@/lib/country-detect'
  *  Shared by ALL subtopic-nav variants (cards / tabs / tiles / sheet /
  *  dock) so every design speaks the same icon language.
  */
-export function CategoryIcon({ cat, className }: { cat: Category; className?: string }) {
+export function CategoryIcon({ cat, className }: { cat: Category | string; className?: string }) {
   const cls = cn('h-[18px] w-[18px] shrink-0', className)
+  // Premium custom subtopics carry the golden-diamond Gem mark — the
+  // same brand symbol as the + button and the picker.
+  if (typeof cat === 'string' && cat.startsWith('custom:')) {
+    return <Gem className={cn(cls, 'text-amber-500')} />
+  }
   switch (cat) {
     case 'relevant':
       return <Sparkles className={cls} />
@@ -107,8 +115,22 @@ export function displayCode(code: string): string {
 }
 
 /** Shared helper: human label for a category ('mycountry' shows the
- *  visitor's actual country code, e.g. "UK", when known). */
-export function categoryLabel(cat: Category, country?: CountryInfo | null): string {
+ *  visitor's actual country code, e.g. "UK", when known).
+ *  Custom subtopic categories (custom:<id>) resolve to the topic's own
+ *  label from the visitor's local list. */
+export function categoryLabel(cat: Category | string, country?: CountryInfo | null): string {
+  if (typeof cat === 'string' && cat.startsWith('custom:')) {
+    const id = cat.slice('custom:'.length)
+    try {
+      const raw = localStorage.getItem('neutralwire:custom-topics')
+      if (raw) {
+        const list = JSON.parse(raw) as Array<{ id: string; label: string }>
+        const found = Array.isArray(list) ? list.find((t) => t?.id === id) : null
+        if (found?.label) return found.label
+      }
+    } catch {}
+    return 'My topic'
+  }
   return cat === 'mycountry'
     ? country?.code && country.code !== 'INT'
       ? displayCode(country.code)
@@ -122,8 +144,8 @@ export function CategoryNav({
   country,
   showArrow,
 }: {
-  category: Category
-  onSelect: (c: Category) => void
+  category: FeedCategory
+  onSelect: (c: FeedCategory) => void
   country?: CountryInfo | null
   showArrow?: boolean
 }) {
@@ -142,7 +164,8 @@ export function CategoryNav({
   // tug the whole document around.
   const centreActive = React.useCallback((smooth: boolean) => {
     const container = scrollRef.current
-    const chip = chipRefs.current[category]
+    // Custom-topic chips register themselves under their `custom:<id>` key.
+    const chip = chipRefs.current[category as Category]
     if (!container || !chip) return
     const target =
       chip.offsetLeft - container.clientWidth / 2 + chip.clientWidth / 2
@@ -194,6 +217,7 @@ export function CategoryNav({
           return (
             <motion.button
               key={cat}
+              data-cat={cat}
               ref={(el) => {
                 chipRefs.current[cat] = el
               }}
@@ -232,6 +256,15 @@ export function CategoryNav({
             </motion.button>
           )
         })}
+
+        {/* ── Premium custom subtopic chips (golden diamond mark) ── */}
+        <CustomTopicChips
+          activeCategory={category}
+          onSelect={(c) => onSelect(c as FeedCategory)}
+        />
+
+        {/* ── The + button with the golden diamond corner (Premium) ── */}
+        <AddTopicChip />
       </div>
 
       {/* Left edge fade — only when scrolled away from the start */}

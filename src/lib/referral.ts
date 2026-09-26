@@ -53,10 +53,52 @@ export function getDeviceId(): string {
 
 // ---------- Referral code generation ----------
 /**
- * Generate a random 6-digit referral code.
+ * Generate a random 6-digit referral code (guest code).
  */
 export function generateReferralCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString()
+}
+
+/**
+ * Generate an ALPHANUMERIC guest code (base36, 6 chars, ≥1 letter so it can
+ * never collide with the numeric 6-digit space). Used when the numeric
+ * guest-code space is exhausted — see `generateGuestCodeSmart` below.
+ */
+export function generateAlphanumericCode(): string {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789' // no confusables (i,l,o,0,1)
+  let code = ''
+  let hasLetter = false
+  for (let i = 0; i < 6; i++) {
+    const c = chars[Math.floor(Math.random() * chars.length)]
+    if (/[a-z]/.test(c)) hasLetter = true
+    code += c
+  }
+  return hasLetter ? code : code.slice(0, 5) + chars[Math.floor(Math.random() * 24)]
+}
+
+/**
+ * Code-space capacity planning (the user spec: "if amount of users exceed
+ * the total possible from the 6 digit guest code it automatically turns
+ * the code into alphanumeric").
+ *
+ * The numeric space holds 900,000 codes (100000-999999). We track the
+ * total codes ever issued in Firebase `counters/guestCodes`. Once the
+ * count crosses OVERFLOW_THRESHOLD (a 10% safety margin under capacity),
+ * every NEW code is alphanumeric — 36^6 ≈ 2.1 billion combinations, and
+ * existing numeric codes keep working forever (lookups are by exact key).
+ */
+export const GUEST_CODE_OVERFLOW_THRESHOLD = 900_000
+
+export async function generateGuestCodeSmart(): Promise<string> {
+  const { firebaseRead } = await import('@/lib/firebase-server')
+  let issued = 0
+  try {
+    const n = await firebaseRead<number>('counters/guestCodes')
+    issued = typeof n === 'number' ? n : 0
+  } catch {}
+  return issued >= GUEST_CODE_OVERFLOW_THRESHOLD
+    ? generateAlphanumericCode()
+    : generateReferralCode()
 }
 
 /**

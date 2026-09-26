@@ -179,6 +179,38 @@ export async function GET(req: NextRequest) {
       `[cron/refresh-all] all refreshes settled after ${Date.now() - t0}ms (response went out earlier)`,
     )
 
+    // ── CUSTOM SUBTOPIC REFRESH (Premium, low-load tail) ──
+    // The user spec: "if something is wrong during the refresh rss cron job
+    // when there is less load from others a request is sent to ai api with
+    // news articles and the ai properly filters it". Runs AFTER the main
+    // refreshes settle (this tail), only when the tick has budget left,
+    // rotating a few subscribed topics per tick (hour-bucketed spread —
+    // each topic refreshes ~daily, the AI filter runs here where load is
+    // low). Topics nobody subscribes to cost zero.
+    try {
+      const elapsed = Date.now() - t0
+      if (elapsed < 45_000) {
+        const { customTopicsDueForRefresh, refreshCustomTopic } = await import('@/lib/custom-topics')
+        const due = await customTopicsDueForRefresh(3)
+        for (const topicId of due) {
+          try {
+            const feed = await refreshCustomTopic(topicId, { aiFilter: true })
+            console.log(
+              `[cron/refresh-all] custom topic '${topicId}' refreshed: ${feed?.topics?.length || 0} topics, ${feed?.articleCount || 0} articles (${Date.now() - t0}ms into the tick)`,
+            )
+          } catch (err) {
+            console.warn(`[cron/refresh-all] custom topic '${topicId}' refresh failed:`, err)
+          }
+        }
+      } else {
+        console.log(
+          `[cron/refresh-all] skipping custom-topic refresh — tick already at ${elapsed}ms`,
+        )
+      }
+    } catch (err) {
+      console.warn('[cron/refresh-all] custom-topic refresh pass failed:', err)
+    }
+
     // ── SUMMARY PRE-GENERATION (the Google indexing fix, Sep 2026) ──
     // Story pages must ship their complete neutral summary in the RAW
     // HTML or Google refuses to index them (the "summary suddenly loads"
