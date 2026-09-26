@@ -19,6 +19,8 @@ import {
   ExternalLink,
   ChevronDown,
   ShieldCheck,
+  Mail,
+  Lock,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -38,8 +40,9 @@ import {
   SubscriptionAccountSection,
   DigestPrefsCard,
   PersonalFlagsCard,
+  OPEN_AUTH_EVENT,
 } from '@/components/subscription-account'
-import { PremiumBadge } from '@/components/premium-ui'
+import { PremiumBadge, PremiumDiamond } from '@/components/premium-ui'
 import { useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
 import { GRADIENT_PRESETS } from '@/lib/use-theme-reveal'
 import {
@@ -88,6 +91,7 @@ const EASE_OUT = [0.16, 1, 0.3, 1] as const
 
 export function UserPage({ onClose }: UserPageProps) {
   const pageRef = React.useRef<HTMLDivElement | null>(null)
+  const sub = useSubscription()
 
   // ── Active tab (persisted for the session so reopening lands where
   // the user left off — nice touch, zero cost) ──
@@ -469,6 +473,49 @@ export function UserPage({ onClose }: UserPageProps) {
             {/* ═══════════════════ PROFILE ═══════════════════ */}
             {tab === 'profile' && (
               <div className="space-y-4">
+                {/* ── Create-account banner (subscription model, logged
+                    out) — the explicit "create an account" option the
+                    header Account button leads to. Tapping a button
+                    scrolls nothing: it flips the Subscription card below
+                    straight into the wanted auth mode. ── */}
+                {sub.model === 'subscription' && !sub.loading && !sub.loggedIn ? (
+                  <Card className="border-amber-500/40 bg-amber-500/5 p-4">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/15">
+                        <PremiumDiamond className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-bold">You&apos;re browsing as a guest</div>
+                        <div className="mt-0.5 text-xs leading-snug text-muted-foreground">
+                          Create a free account to subscribe to Premium, keep it on every
+                          device, and unlock the AI email digest.
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <Button
+                        onClick={() =>
+                          window.dispatchEvent(
+                            new CustomEvent(OPEN_AUTH_EVENT, { detail: { mode: 'register' } }),
+                          )
+                        }
+                      >
+                        <Mail className="h-4 w-4" /> Create account
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          window.dispatchEvent(
+                            new CustomEvent(OPEN_AUTH_EVENT, { detail: { mode: 'signin' } }),
+                          )
+                        }
+                      >
+                        <Lock className="h-4 w-4" /> Sign in
+                      </Button>
+                    </div>
+                  </Card>
+                ) : null}
+
                 {/* Identity — compact single row */}
                 <Card className="p-4">
                   <div className="flex items-center gap-3">

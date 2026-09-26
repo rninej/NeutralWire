@@ -158,15 +158,22 @@ export function SubtopicTabs({
           )
         })}
 
-        {/* Premium custom subtopics + the golden-diamond add button */}
+        {/* Premium custom subtopics + the golden-diamond add button —
+            same height/padding as the tabs so the row reads as one bar */}
         <CustomTopicChips
           activeCategory={category}
           onSelect={(c) => onSelect(c as FeedCategory)}
           chipClassName="h-11 sm:h-10 px-3.5 text-sm sm:text-[15px]"
+          iconClassName="h-4 w-4"
           activeChipClassName="text-foreground"
         />
-        <div className="flex items-center pl-1">
-          <AddTopicChip compact />
+        <div className="flex shrink-0 items-center pl-1">
+          <AddTopicChip
+            chipClassName="h-11 sm:h-10 rounded-full px-3.5 text-sm sm:text-[15px]"
+            diamondClassName="h-3 w-3"
+            iconClassName="h-4 w-4"
+            label=""
+          />
         </div>
       </div>
 
@@ -406,14 +413,21 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
             {renderPill(cat)}
           </React.Fragment>
         ))}
-        {/* Premium custom subtopics + the golden-diamond add button */}
+        {/* Premium custom subtopics + the golden-diamond add button —
+            pill geometry (h-7, wide font) so they match this row */}
         <CustomTopicChips
           activeCategory={category}
           onSelect={(c) => onSelect(c as FeedCategory)}
-          chipClassName="h-6 px-3"
+          chipClassName="h-7 px-3 text-[13px]"
+          iconClassName="h-3.5 w-3.5"
           activeChipClassName="bg-foreground text-background shadow-sm"
         />
-        <AddTopicChip compact />
+        <AddTopicChip
+          chipClassName="h-7 rounded-full px-2.5 text-[13px]"
+          diamondClassName="h-3 w-3"
+          iconClassName="h-3.5 w-3.5"
+          label="Add"
+        />
       </div>
     )
   }
@@ -437,16 +451,32 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
       </div>
       <div ref={row2Ref} className="flex w-full items-center gap-1">
         {ALL_CATS.slice(6).map(renderPill)}
-        {/* Premium custom subtopics + the golden-diamond add button —
-            appended to the second row, after the built-ins. */}
-        <CustomTopicChips
-          activeCategory={category}
-          onSelect={(c) => onSelect(c as FeedCategory)}
-          chipClassName="h-6 px-3"
-          activeChipClassName="bg-foreground text-background shadow-sm"
+        {/* The golden-diamond + button — pill-height, icon-only (~26px),
+            INHERITING the adaptive font. The old fixed-size chip forced
+            the stepper to shrink every pill. */}
+        <AddTopicChip
+          chipClassName="h-6 rounded-md px-1.5"
+          diamondClassName="h-2.5 w-2.5"
+          iconClassName="h-3 w-3"
+          label=""
         />
-        <AddTopicChip compact />
       </div>
+
+      {/* ── Pinned custom topics — their OWN scrollable strip ──
+          Never inside the two adaptive rows: pinned topics at a readable
+          12px would re-squeeze (or clip) the built-ins, which is exactly
+          the "the + button made the subtopics small" regression. The
+          strip scrolls horizontally like the cards nav; it only renders
+          while the visitor actually has pinned topics, so the header
+          height is unchanged for everyone else. */}
+      <CustomTopicChips
+        activeCategory={category}
+        onSelect={(c) => onSelect(c as FeedCategory)}
+        rowClassName="no-scrollbar -mx-1 flex w-full items-center gap-1 overflow-x-auto px-1 py-0.5"
+        chipClassName="h-7 rounded-md px-2 text-[12px]"
+        iconClassName="h-3.5 w-3.5"
+        activeChipClassName="bg-foreground text-background shadow-sm"
+      />
     </div>
   )
 }
@@ -602,18 +632,24 @@ function CategorySheet({
                   })}
 
                   {/* Premium custom subtopics + the golden-diamond add
-                      button — inside the sheet grid like any topic. */}
+                      button — 56px tile geometry so they match the sheet. */}
                   <CustomTopicChips
                     activeCategory={category}
                     onSelect={(c) => {
                       onSelect(c as FeedCategory)
                       onClose()
                     }}
-                    chipClassName="h-14 border rounded-xl px-3.5"
+                    chipClassName="h-14 border rounded-xl px-3.5 text-sm"
+                    iconClassName="h-4 w-4"
                     activeChipClassName="border-foreground bg-foreground text-background shadow-sm"
                   />
                   <div className="flex items-center">
-                    <AddTopicChip compact />
+                    <AddTopicChip
+                      chipClassName="h-14 rounded-xl px-3.5 text-sm"
+                      diamondClassName="h-3.5 w-3.5"
+                      label="Add"
+                      labelClassName=""
+                    />
                   </div>
                 </div>
               </motion.div>
@@ -762,10 +798,17 @@ export function SubtopicHeaderDock({ category, onSelect, country }: SubtopicNavP
           activeCategory={category}
           onSelect={(c) => onSelect(c as FeedCategory)}
           chipClassName="h-[52px] w-[72px] flex-col justify-center gap-1 rounded-xl text-[10px] px-1"
+          iconClassName="h-[15px] w-[15px]"
           activeChipClassName="bg-foreground text-background shadow-sm"
         />
         <div className="flex shrink-0 items-center px-1">
-          <AddTopicChip compact />
+          <AddTopicChip
+            chipClassName="h-[52px] w-[72px] flex-col justify-center gap-1 rounded-xl px-1 text-[10px]"
+            diamondClassName="h-3 w-3"
+            iconClassName="h-5 w-5"
+            label="Add"
+            labelClassName=""
+          />
         </div>
       </div>
 

@@ -90,8 +90,8 @@ const FEATURE_COPY: Record<UpgradeFeature, { title: string; blurb: string }> = {
     blurb: 'Ten exclusive gradient looks (plus a custom gradient maker) for your NeutralWire.',
   },
   personalFlags: {
-    title: 'Personal feature flags',
-    blurb: 'Fine-tune your NeutralWire — compact cards, hidden tabs, text size and more.',
+    title: 'Pick your own header style',
+    blurb: 'Choose how NeutralWire looks to you — big chips, bold tabs, maxi pills and 7 more designs.',
   },
   apiAccess: {
     title: 'NeutralWire API access',
@@ -107,22 +107,30 @@ const FEATURE_COPY: Record<UpgradeFeature, { title: string; blurb: string }> = {
   },
 }
 
+const FREE_FEATURES = [
+  'Every story, the bias bar & all sources',
+  'All 11 subtopic feeds',
+  'The PWA — install & offline',
+]
 const PREMIUM_FEATURES = [
-  'Custom subtopics — 550+ to pick from, AI creates anything else',
-  'Search the full archive (older than 3 months)',
-  'AI email digest — once a week up to 3 times a day',
-  'Gradient themes + custom gradient maker',
-  'Personal feature flags',
+  'Custom subtopics — 550+ or AI-made',
+  'Your header style — 10 designs',
+  'Full archive search',
+  'AI email digest',
+  'Gradient themes',
 ]
 const ULTRA_FEATURES = [
   'Everything in Premium',
-  'API access to the NeutralWire feed',
-  'Export or download any article',
+  'Feed API access',
+  'Export & download articles',
 ]
 
 // ── The dialog ──────────────────────────────────────────────────────────
 
 type AuthMode = 'choose' | 'signin' | 'register'
+
+/** Shared tier ids for the 3-tier grid (Free / Premium / Ultra). */
+export type TierId = 'free' | 'premium' | 'ultra'
 
 export function UpgradeDialog() {
   const sub = useSubscription()
@@ -134,12 +142,17 @@ export function UpgradeDialog() {
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [success, setSuccess] = React.useState<string | null>(null)
-  const [selectedTier, setSelectedTier] = React.useState<'premium' | 'ultra'>('premium')
+  const [selectedTier, setSelectedTier] = React.useState<TierId>('premium')
 
   React.useEffect(() => {
     const onOpen = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { feature?: UpgradeFeature } | undefined
+      const detail = (e as CustomEvent).detail as
+        | { feature?: UpgradeFeature; tier?: TierId }
+        | undefined
       setFeature(detail?.feature || 'premium')
+      if (detail?.tier === 'premium' || detail?.tier === 'ultra') {
+        setSelectedTier(detail.tier)
+      }
       setOpen(true)
       setSuccess(null)
       setError(null)
@@ -281,7 +294,7 @@ export function UpgradeDialog() {
             exit={{ y: 40, opacity: 0, scale: 0.98 }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
             onClick={(e) => e.stopPropagation()}
-            className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl border bg-background p-5 shadow-2xl sm:rounded-2xl"
+            className="max-h-[92dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-t-2xl border bg-background p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:p-5 sm:pb-5"
           >
             {/* Header */}
             <div className="mb-4 flex items-start gap-3">
@@ -342,20 +355,40 @@ export function UpgradeDialog() {
               </div>
             ) : (
               <>
-                {/* ── Tier cards ── */}
-                <div className="grid grid-cols-2 gap-3">
-                  <TierCard
+                {/* ── Tier cards: all three levels, side by side on sm+,
+                    stacked full-width rows on mobile (no squeezed 3-column
+                    cramming on a 390px screen). Free shows what stays
+                    included; Premium/Ultra are the selectable plans. */}
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-2.5">
+                  <TierCard3
+                    id="free"
+                    selected={false}
+                    current={sub.tier === 'free'}
+                    onSelect={() => {}}
+                    name="Free"
+                    price={`${sub.pricing.premium.symbol}0`}
+                    tag="forever"
+                    features={FREE_FEATURES}
+                  />
+                  <TierCard3
+                    id="premium"
                     selected={selectedTier === 'premium'}
+                    current={sub.tier === 'premium'}
                     onSelect={() => setSelectedTier('premium')}
                     name="Premium"
                     price={`${price.display}/mo`}
+                    tag="most popular"
                     features={PREMIUM_FEATURES}
+                    highlight
                   />
-                  <TierCard
+                  <TierCard3
+                    id="ultra"
                     selected={selectedTier === 'ultra'}
+                    current={sub.tier === 'ultra'}
                     onSelect={() => setSelectedTier('ultra')}
                     name="Ultra"
                     price={`${ultraPrice.display}/mo`}
+                    tag="for builders"
                     features={ULTRA_FEATURES}
                     ultra
                   />
@@ -450,7 +483,7 @@ export function UpgradeDialog() {
                 <Button
                   className="mt-4 w-full"
                   size="lg"
-                  onClick={() => startCheckout(selectedTier)}
+                  onClick={() => startCheckout(selectedTier === 'ultra' ? 'ultra' : 'premium')}
                   disabled={busy}
                 >
                   {busy ? (
@@ -468,11 +501,6 @@ export function UpgradeDialog() {
                     ? 'Secure checkout via Stripe. Cancel anytime.'
                     : 'Test mode — payments activate once Stripe keys are configured. Everything else works.'}
                 </p>
-
-                {/* Free tier reassurance */}
-                <div className="mt-3 rounded-lg border border-dashed p-3 text-center text-[11px] text-muted-foreground">
-                  Free NeutralWire stays full: every story, the bias bar, all sources and the PWA.
-                </div>
               </>
             )}
 
@@ -494,55 +522,174 @@ export function UpgradeDialog() {
   )
 }
 
-function TierCard({
+/** The 3-level tier card — Free / Premium / Ultra share one component.
+ *
+ * Mobile: a full-width row (name + price on one line, features in a
+ * 2-column mini-grid underneath) so nothing ever crams. sm+: one of
+ * three columns. `current` marks the visitor's plan; `highlight` is the
+ * “most popular” ribbon on Premium. */
+function TierCard3({
+  id,
   selected,
+  current,
   onSelect,
   name,
   price,
+  tag,
   features,
+  highlight = false,
   ultra = false,
 }: {
+  id: TierId
   selected: boolean
+  current: boolean
   onSelect: () => void
   name: string
   price: string
+  tag?: string
   features: string[]
+  highlight?: boolean
   ultra?: boolean
 }) {
+  const isFree = id === 'free'
   return (
     <motion.button
       type="button"
-      onClick={onSelect}
-      whileTap={{ scale: 0.98 }}
-      aria-pressed={selected}
+      onClick={isFree ? undefined : onSelect}
+      whileTap={isFree ? undefined : { scale: 0.98 }}
+      aria-pressed={isFree ? undefined : selected}
+      disabled={isFree && current}
       className={cn(
-        'flex flex-col rounded-xl border p-3 text-left transition-all',
-        selected
-          ? ultra
-            ? 'border-amber-500/60 bg-amber-500/10 ring-1 ring-amber-500/40'
-            : 'border-amber-500/60 bg-amber-500/5 ring-1 ring-amber-500/30'
-          : 'border-border hover:bg-muted/40',
+        'relative flex w-full flex-col rounded-xl border p-3 text-left transition-all',
+        isFree
+          ? 'border-dashed border-border bg-muted/20'
+          : selected
+            ? ultra
+              ? 'border-amber-500/70 bg-amber-500/10 ring-1 ring-amber-500/40'
+              : 'border-amber-500/70 bg-amber-500/5 ring-1 ring-amber-500/35'
+            : 'border-border hover:bg-muted/40',
       )}
     >
+      {/* Header line — mark, name, badge; the check marks selection */}
       <div className="flex items-center gap-1.5">
         {ultra ? (
-          <PremiumDiamond className="h-4 w-4" />
+          <PremiumDiamond className="h-4 w-4 shrink-0" />
+        ) : isFree ? (
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         ) : (
-          <Gem className="h-3.5 w-3.5 text-amber-500" />
+          <Gem className="h-3.5 w-3.5 shrink-0 text-amber-500" />
         )}
         <span className="text-sm font-bold">{name}</span>
-        {selected ? <Check className="ml-auto h-4 w-4 text-amber-500" /> : null}
+        {highlight ? (
+          <span className="ml-auto inline-flex shrink-0 items-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white shadow-sm">
+            Popular
+          </span>
+        ) : null}
+        {!highlight && tag ? (
+          <span className="ml-auto shrink-0 text-[10px] font-medium text-muted-foreground">{tag}</span>
+        ) : null}
+        {selected && !highlight ? (
+          <Check className="ml-auto h-4 w-4 shrink-0 text-amber-500" />
+        ) : null}
+        {current ? (
+          <span
+            className={cn(
+              'inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide',
+              highlight ? 'ml-1.5' : 'ml-auto',
+              isFree
+                ? 'bg-muted text-muted-foreground'
+                : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+            )}
+          >
+            Current
+          </span>
+        ) : null}
       </div>
-      <div className="mt-1 text-lg font-bold">{price}</div>
-      <ul className="mt-2 space-y-1">
-        {features.slice(0, 5).map((f) => (
-          <li key={f} className="flex items-start gap-1 text-[11px] leading-snug text-muted-foreground">
-            <Check className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
-            {f}
+
+      {/* Price line */}
+      <div className="mt-0.5 flex items-baseline gap-1">
+        <span className="text-lg font-extrabold tabular-nums">{price}</span>
+      </div>
+
+      {/* Features — 2-column mini-grid on mobile keeps each row short;
+         single column once the cards sit side-by-side (sm+). */}
+      <ul className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 sm:grid-cols-1">
+        {features.map((f) => (
+          <li
+            key={f}
+            className="flex items-start gap-1 text-[11px] leading-snug text-muted-foreground"
+          >
+            <Check
+              className={cn(
+                'mt-0.5 h-3 w-3 shrink-0',
+                isFree ? 'text-muted-foreground/70' : 'text-amber-500',
+              )}
+            />
+            <span className="min-w-0">{f}</span>
           </li>
         ))}
       </ul>
     </motion.button>
+  )
+}
+
+// ── The Account-page tier comparison (Free / Premium / Ultra) ───────────
+// A read-only version of the dialog grid: each level gets its card, the
+// visitor's CURRENT plan is marked, and the paid cards open the upgrade
+// dialog with that tier pre-selected. Stacked rows on mobile, 3 columns
+// on sm+ — same geometry as the dialog, one visual language.
+
+export function TierComparisonGrid() {
+  const sub = useSubscription()
+  const current = sub.tier
+
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-2.5">
+      <TierCard3
+        id="free"
+        selected={false}
+        current={current === 'free'}
+        onSelect={() => {}}
+        name="Free"
+        price={`${sub.pricing.premium.symbol}0`}
+        tag="forever"
+        features={FREE_FEATURES}
+      />
+      <TierCard3
+        id="premium"
+        selected={false}
+        current={current === 'premium'}
+        onSelect={() =>
+          window.dispatchEvent(
+            new CustomEvent(UPGRADE_OPEN_EVENT, {
+              detail: { feature: 'premium', tier: 'premium' },
+            }),
+          )
+        }
+        name="Premium"
+        price={`${sub.pricing.premium.display}/mo`}
+        tag="most popular"
+        features={PREMIUM_FEATURES}
+        highlight
+      />
+      <TierCard3
+        id="ultra"
+        selected={false}
+        current={current === 'ultra'}
+        onSelect={() =>
+          window.dispatchEvent(
+            new CustomEvent(UPGRADE_OPEN_EVENT, {
+              detail: { feature: 'apiAccess', tier: 'ultra' },
+            }),
+          )
+        }
+        name="Ultra"
+        price={`${sub.pricing.ultra.display}/mo`}
+        tag="for builders"
+        features={ULTRA_FEATURES}
+        ultra
+      />
+    </div>
   )
 }
 

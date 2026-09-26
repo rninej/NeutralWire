@@ -189,10 +189,10 @@ export function SubtopicPicker({ onClose }: { onClose: () => void }) {
         exit={{ y: 40, opacity: 0 }}
         transition={{ type: 'spring', stiffness: 300, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[92vh] w-full max-w-xl flex-col rounded-t-2xl border bg-background shadow-2xl sm:rounded-2xl"
+        className="flex max-h-[92dvh] w-full max-w-xl flex-col rounded-t-2xl border bg-background shadow-2xl sm:rounded-2xl"
       >
         {/* Header */}
-        <div className="flex items-center gap-3 border-b p-4">
+        <div className="flex items-center gap-3 border-b p-4 pb-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/15">
             <PremiumDiamond className="h-5 w-5" />
           </div>
@@ -208,13 +208,14 @@ export function SubtopicPicker({ onClose }: { onClose: () => void }) {
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted"
           >
-            <X className="h-4 w-4" />
+            <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Search */}
+        {/* Search — sticky ABOVE the scroll area; 44px-tall input on
+            mobile so it stays comfortable under a thumb. */}
         <div className="border-b p-3">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -223,7 +224,7 @@ export function SubtopicPicker({ onClose }: { onClose: () => void }) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search 550+ subtopics — chess, AI, Mars…"
-              className="pl-9"
+              className="h-11 pl-9 text-base sm:h-9 sm:text-sm"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && hits && hits.length === 0) void createWithAI()
               }}
@@ -258,8 +259,11 @@ export function SubtopicPicker({ onClose }: { onClose: () => void }) {
           ) : null}
         </div>
 
-        {/* Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {/* Body — scrolls internally; the sheet never locks the page
+            scroll (only the body itself is locked, which is fine because
+            the sheet is portalled to <body> now). Bottom padding keeps
+            the last row clear of the iOS home indicator. */}
+        <div className="nw-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           {/* Create-with-AI row */}
           {query.trim().length >= 2 && hits && hits.length === 0 ? (
             <div className="mb-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
@@ -287,7 +291,8 @@ export function SubtopicPicker({ onClose }: { onClose: () => void }) {
             </div>
           ) : null}
 
-          {/* Search results */}
+          {/* Search results — 2 cols on phones, 3 on sm+: every chip is
+              a 44px-tall tap target on mobile. */}
           {hits ? (
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
               {hits.map((t) => (
@@ -382,7 +387,7 @@ function TopicChip({
       onClick={onToggle}
       aria-pressed={added}
       className={cn(
-        'flex items-center justify-between gap-1.5 rounded-lg border px-2.5 py-2 text-left text-[13px] font-medium transition-all',
+        'flex min-h-11 items-center justify-between gap-1.5 rounded-lg border px-2.5 py-2 text-left text-[13px] font-medium transition-all sm:min-h-0',
         added
           ? 'border-amber-500/50 bg-amber-500/10 ring-1 ring-amber-500/30'
           : 'border-border hover:bg-muted/40',

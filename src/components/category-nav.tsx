@@ -25,7 +25,7 @@ import {
   type FeedCategory,
 } from '@/lib/news-sources'
 import type { CountryInfo } from '@/lib/country-detect'
-import { AddTopicChip, CustomTopicChips } from '@/components/add-topic-button'
+import { AddTopicChip, CustomTopicChips, ADD_CHIP_CARDS } from '@/components/add-topic-button'
 
 /**
  * CategoryNav — the "cards" subtopic header system.
@@ -261,10 +261,12 @@ export function CategoryNav({
         <CustomTopicChips
           activeCategory={category}
           onSelect={(c) => onSelect(c as FeedCategory)}
+          chipClassName={ADD_CHIP_CARDS}
+          iconClassName="h-[15px] w-[15px]"
         />
 
         {/* ── The + button with the golden diamond corner (Premium) ── */}
-        <AddTopicChip />
+        <AddTopicChip chipClassName={ADD_CHIP_CARDS} />
       </div>
 
       {/* Left edge fade — only when scrolled away from the start */}

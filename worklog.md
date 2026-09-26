@@ -337,3 +337,26 @@ Stage Summary:
 - Subscription tier model is now pushed to GitHub main; Vercel deployment in progress.
 - Not stored in any file per policy (token only used inline in push commands).
 - Standing reminder for owner: the PAT was pasted in chat again — rotate it at github.com/settings/tokens when convenient.
+
+---
+Task ID: session33
+Agent: main (Super Z)
+Task: 8-part polish pass on the subscription model — fix the + button shrinking the subtopics (maxipills), fix the mobile subtopic picker, swap the heart for a Premium button in subscription mode, 3-tier (Free/Premium/Ultra) pricing UI, premium-gate the header-style customisation ("feature flags" = big chips / bold tabs / maxi pills), create-account option from the Account button, and a full mobile/responsive audit.
+
+Work Log:
+- Diagnosed the size regression: production runs subtopicNav=maxipills; the + chip (fixed h-8/13px) + custom-topic chips (fixed 13px, natural width) sat INSIDE the two adaptive-font rows → stepper floored to 8px and, with 2-3 pinned topics, row 2 overflowed off-screen (clipped + button = "picker bugged").
+- add-topic-button.tsx refactor: AddTopicChip now takes explicit chipClassName/diamondClassName/iconClassName/label/labelClassName — every variant passes its OWN chip geometry (tabs h-11, sheet h-14 tile, headerdock 52px dock tile, maxipills h-6/h-7, classic 10px pill, cards default ADD_CHIP_CARDS). CustomTopicChips: all sizing via chipClassName (no hardcoded fonts), new rowClassName wrapper + truncate.
+- Maxipills narrow: + chip is now h-6 icon-only (~26px, inherits adaptive font); pinned custom topics moved to their OWN horizontally-scrollable strip below the two rows (h-7 chips, 12px, only renders while topics exist) — built-ins regain their former size, nothing clips. Wide layout keeps everything inline.
+- Mobile picker fix: SubtopicPicker now renders via createPortal(document.body) — the sticky glass header's backdrop-filter containing block previously trapped the fixed sheet inside a ~100px strip on mobile (the CategorySheet lesson). Plus 92dvh height, safe-area bottom padding, 44px search input + chips, overscroll-contain.
+- MonetizationButton (page-client): donation model → the original Ko-fi heart (byte-for-byte); subscription model → golden-diamond Premium button (icon-only on mobile + amber dot, "Premium"/"Ultra" label ≥sm) — free users get the upgrade dialog, subscribers jump to Account.
+- 3-tier UI: TierCard3 component — Free (£/$/€ 0, dashed "forever" card) / Premium (Popular ribbon) / Ultra; stacked full-width rows on mobile, 3 columns ≥sm; "Current" badge marks the visitor's plan. Used in the UpgradeDialog (removed the redundant free-reassurance footer; dialog 92dvh + safe-area) AND as the exported TierComparisonGrid in the Account > Profile (all logged-in states) + logged-out preview. openUpgradeDialog events now accept a tier hint to pre-select.
+- "Feature flags" clarified as HEADER STYLE: feature-flags.tsx (Account → Feed tab) picker is now Premium-gated in subscription mode (lock banner "Pick your header style — Premium" + greyed inert grid; openUpgradeDialog('personalFlags')); donation model stays open. NavOverrideEntitlementGuard (new, inside the provider) clears a stored nw_nav pick when entitlement is lost and re-announces the site default. Premium copy lists "Your header style — 10 designs".
+- Create-account option: guest banner card at the top of Account > Profile (subscription model, logged out) — "You're browsing as a guest" + Create account / Sign in buttons → OPEN_AUTH_EVENT flips SubscriptionAccountSection straight into the wanted auth mode.
+- Classic header variant got CustomTopicChips + AddTopicChip (previously missing entirely — custom topics were unselectable in classic mode).
+- VERIFIED (dev server, iPhone 14 viewport + 1440px): maxipills rows measure 8px floor with + chip in-viewport (26×24) and 3 pinned topics in a clean scrollable strip (no overflow); picker portalled (parent=body), full-screen bottom sheet, 169 catalog chips, search "chess" → Chess hit; 3-tier dialog stacks 356px-wide cards (Free/Current → Premium → Ultra) with CTA; full flow register→test-mode checkout→premium→+ opens picker; header Premium button replaces heart; Account banner opens auth form; style picker locked (free) / unlocked (premium), pick "Big chips" → live switch (40px chips), sign out → guard cleared nw_nav + header reverted to maxipills; desktop wide layout shows Add chip 71×28 + labeled Premium button. VLM review: 5/6 PASS (6th blocked by the install prompt in the shot, picker itself verified programmatically). tsc 0 errors, eslint clean, next build green.
+- CLEANUP: test account mobile-test@neutralwire.test removed from production Firebase (account, subscription, digest, customSubscriptions, accountIndex entry, 2 device mirrors reset).
+
+Stage Summary:
+- All 8 requested items live and verified. Production Firebase flag is maxipills — the fix targets exactly what the user sees.
+- Files touched: add-topic-button.tsx, subtopic-picker.tsx, subtopic-navs.tsx, category-nav.tsx, page-client.tsx, premium-ui.tsx, subscription-account.tsx, user-page.tsx, feature-flags.tsx (+ scripts/session33-cleanup.ts).
+- Heart button: still one click away in donation mode (the /debug switch fully restores the OG site).

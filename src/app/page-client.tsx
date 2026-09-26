@@ -26,8 +26,8 @@ import {
   type FeedCategory,
   isCustomCategory,
 } from '@/lib/news-sources'
-import { SubscriptionProvider, useSubscription } from '@/lib/subscription-client'
-import { UpgradeDialog } from '@/components/premium-ui'
+import { SubscriptionProvider, useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
+import { UpgradeDialog, PremiumDiamond } from '@/components/premium-ui'
 import { getCustomTopics, CUSTOM_TOPICS_EVENT } from '@/lib/custom-topics-client'
 import { getMyFlags, MY_FLAGS_EVENT } from '@/components/subscription-account'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -37,6 +37,7 @@ import { CookieConsent } from '@/components/cookie-consent'
 import { DEFAULT_POPUP_MODE, type PopupMode } from '@/lib/popup-mode'
 import { CountryPicker } from '@/components/country-picker'
 import { CategoryNav } from '@/components/category-nav'
+import { AddTopicChip, CustomTopicChips } from '@/components/add-topic-button'
 import {
   SubtopicTabs,
   SubtopicTiles,
@@ -64,7 +65,7 @@ import {
 } from '@/lib/mesh/mesh-relay'
 import { meshRoomFor } from '@/lib/mesh/mesh-protocol'
 import { startUserCron, stopUserCron } from '@/lib/mesh/user-cron'
-import { NAV_STYLE_EVENT, readNavOverride, type NavMode } from '@/lib/nav-override'
+import { NAV_STYLE_EVENT, readNavOverride, writeNavOverride, announceNavStyle, type NavMode } from '@/lib/nav-override'
 import { restoreGradient } from '@/lib/use-theme-reveal'
 import { archiveTopicsInBackground } from '@/lib/background-archiver'
 import {
@@ -2397,20 +2398,13 @@ export default function Home({
               actionable to say. */}
 
           <div className="ml-auto flex items-center gap-1.5">
-            {/* Donate button — opens Ko-fi in a new tab.
-                Always red (rose-500) so it stands out. The heart icon gets a
-                gentle "heartbeat" pulse on hover (see .nw-heart in
-                globals.css) — a subtle emotional nudge without being pushy. */}
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => window.open('https://ko-fi.com/neutralwire', '_blank')}
-              className="nw-heart-btn transition-transform duration-150 active:scale-95 text-rose-500 hover:text-rose-600"
-              aria-label="Support NeutralWire on Ko-fi"
-              title="Support NeutralWire"
-            >
-              <Heart className="nw-heart-icon h-5 w-5" fill="currentColor" />
-            </Button>
+            {/* Monetization button — model-aware. In DONATION mode it's
+                the original Ko-fi heart (opens ko-fi.com in a new tab,
+                gentle heartbeat pulse on hover). In SUBSCRIPTION mode the
+                heart is swapped for the Premium button: the golden
+                diamond — free visitors get the upgrade dialog, premium
+                members go straight to Account. */}
+            <MonetizationButton onAccount={() => setUserPageOpen(true)} />
 
             {/* Combined Account + Country button group — looks like one
                 pill-shaped button with 2 sub-buttons separated by a divider.
@@ -2484,6 +2478,23 @@ export default function Home({
                   country={country}
                 />
               ))}
+
+              {/* Premium custom subtopics + the golden-diamond add
+                  button — classic-pill geometry (10px/12px text, same
+                  py padding) so they wrap like any other pill. */}
+              <CustomTopicChips
+                activeCategory={category}
+                onSelect={(c) => setCategory(c as typeof category)}
+                chipClassName="rounded-md px-1.5 py-1 text-[10px] sm:px-3 sm:py-1.5 sm:text-xs"
+                iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
+                activeChipClassName="bg-foreground text-background shadow-sm"
+              />
+              <AddTopicChip
+                chipClassName="rounded-md px-1.5 py-1 text-[10px] sm:px-3 sm:py-1.5 sm:text-xs"
+                diamondClassName="h-[10px] w-[10px] sm:h-3 sm:w-3"
+                iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
+                label=""
+              />
 
               {/* Search button — hidden on mobile (moved to section headers).
                   Visible on desktop (lg+) next to Sports. */}
@@ -3037,6 +3048,9 @@ export default function Home({
     {/* The upgrade dialog (paywall + account + checkout) — mounted once,
         opened from anywhere via the neutralwire:upgrade-open event. */}
     <UpgradeDialog />
+    {/* Clears a stored header-style pick if the visitor lacks the
+        Premium entitlement (expired subscription) — see the component. */}
+    <NavOverrideEntitlementGuard />
     </SubscriptionProvider>
   )
 }
@@ -3066,6 +3080,92 @@ function MonetizationPopups({
   // Subscription model: donation asks stand down; milestones still
   // celebrate (pure celebration, donate body off).
   return popupSystem === 'original' ? null : <MilestoneCelebration donateMode={false} />
+}
+
+/** Monetization button (header, model-aware).
+ *
+ * DONATION model → the original Ko-fi heart button (unchanged).
+ * SUBSCRIPTION model → the heart is swapped for the Premium button: the
+ * golden diamond. Mobile stays icon-only (44px target); ≥sm shows the
+ * label ("Premium" / "Ultra" once subscribed). Free visitors get the
+ * upgrade dialog; subscribers jump straight to Account. */
+function MonetizationButton({ onAccount }: { onAccount: () => void }) {
+  const sub = useSubscription()
+
+  // Donation model → the original Ko-fi heart, byte-for-byte.
+  if (sub.model === 'donation') {
+    return (
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => window.open('https://ko-fi.com/neutralwire', '_blank')}
+        className="nw-heart-btn transition-transform duration-150 active:scale-95 text-rose-500 hover:text-rose-600"
+        aria-label="Support NeutralWire on Ko-fi"
+        title="Support NeutralWire"
+      >
+        <Heart className="nw-heart-icon h-5 w-5" fill="currentColor" />
+      </Button>
+    )
+  }
+
+  // Subscription model → the Premium button.
+  const premium = sub.tier === 'premium' || sub.tier === 'ultra'
+  return (
+    <Button
+      variant="ghost"
+      onClick={() => (premium ? onAccount() : openUpgradeDialog('premium'))}
+      className="relative h-9 gap-1.5 rounded-full px-2.5 text-xs font-semibold text-amber-600 transition-colors hover:bg-amber-500/10 hover:text-amber-600 active:scale-95 dark:text-amber-400 dark:hover:text-amber-400"
+      aria-label={premium ? 'Your subscription' : 'Get NeutralWire Premium'}
+      title={
+        premium
+          ? 'Your subscription'
+          : `NeutralWire Premium — ${sub.pricing.premium.display}/month`
+      }
+    >
+      <PremiumDiamond className="h-5 w-5 shrink-0" />
+      <span className="hidden sm:inline">
+        {premium ? (sub.tier === 'ultra' ? 'Ultra' : 'Premium') : 'Premium'}
+      </span>
+      {/* A small amber dot on the free state — the mobile icon-only
+          button reads "something new to unlock" at a glance. */}
+      {!premium && !sub.loading ? (
+        <span
+          aria-hidden="true"
+          className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-500"
+        />
+      ) : null}
+    </Button>
+  )
+}
+
+/** Header-style entitlement guard (renders inside the provider).
+ *
+ * "Your header style" is the Premium "custom feature flags" perk. If a
+ * visitor WITHOUT the entitlement has a stored pick (nw_nav cookie —
+ * e.g. their Premium expired), it is cleared and the site default is
+ * re-announced live, so the personalisation never outlives the
+ * subscription. In the donation model every gate is open — no-op. */
+function NavOverrideEntitlementGuard() {
+  const sub = useSubscription()
+  React.useEffect(() => {
+    if (sub.loading) return
+    if (sub.model !== 'subscription' || sub.entitlements.personalFlags) return
+    if (!readNavOverride()) return
+    // Not entitled but a pick exists → clear it + revert to site default.
+    writeNavOverride(null)
+    fetch('/api/flags')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const v = d?.subtopicNav
+        if (
+          ['classic', 'cards', 'tabs', 'tiles', 'sheet', 'dock', 'maxipills', 'headerdock', 'tabsarrow', 'cardsarrow'].includes(v)
+        ) {
+          announceNavStyle(v as NavMode)
+        }
+      })
+      .catch(() => {})
+  }, [sub.loading, sub.model, sub.entitlements.personalFlags])
+  return null
 }
 
 function CategoryTab({

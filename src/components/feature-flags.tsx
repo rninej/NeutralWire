@@ -3,14 +3,18 @@
 /**
  * feature-flags.tsx — the "Feature Flags" card in the Account page.
  *
- * "Your header style" — available to EVERY visitor, no password. Pick the
- * subtopic-header design you personally see: any of the 10 designs, or
- * "Follow site default". Stored in the `nw_nav` cookie (see
- * src/lib/nav-override.ts), which the server reads during SSR — so the
- * visitor's own pick renders in the FIRST paint on every refresh, with
- * the same zero-flash guarantee as the site-wide flag. Picking here also
- * dispatches NAV_STYLE_EVENT, switching the homepage (open behind the
- * Account overlay) IMMEDIATELY — no refresh needed.
+ * "Your header style" — a PREMIUM perk in the subscription model (it IS
+ * the "custom feature flags" from the tier list: pick any of the 10
+ * header designs — big chips, bold tabs, maxi pills… — for yourself).
+ * Free visitors see the picker with a lock and get the upgrade dialog;
+ * in the donation model it stays free for everyone (all gates open).
+ *
+ * Stored in the `nw_nav` cookie (see src/lib/nav-override.ts), which the
+ * server reads during SSR — so the visitor's own pick renders in the
+ * FIRST paint on every refresh, with the same zero-flash guarantee as
+ * the site-wide flag. Picking here also dispatches NAV_STYLE_EVENT,
+ * switching the homepage (open behind the Account overlay) IMMEDIATELY
+ * — no refresh needed.
  *
  * The site-wide DEFAULT (what visitors without a personal pick see) is
  * managed from the /debug page — the admin section was removed here so
@@ -36,6 +40,8 @@ import {
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { PremiumDiamond } from '@/components/premium-ui'
+import { useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
 import {
   readNavOverride,
   writeNavOverride,
@@ -192,7 +198,16 @@ function OptionRow({
 }
 
 export function FeatureFlagsCard() {
-  // ── Personal override state (every visitor) ──
+  const sub = useSubscription()
+
+  // ── Premium gate (subscription model only) ──
+  // The header-style customisation IS the "custom feature flags" premium
+  // perk. While loading, keep the picker interactive (SSR already knows
+  // the model; the entitlement refines a beat later).
+  const gated =
+    sub.model === 'subscription' && !sub.loading && !sub.entitlements.personalFlags
+
+  // ── Personal override state ──
   // null = "Follow site default"
   const [myNav, setMyNav] = React.useState<NavMode | null>(null)
   const [personalResult, setPersonalResult] = React.useState<string | null>(null)
@@ -218,7 +233,12 @@ export function FeatureFlagsCard() {
   // ── Pick the visitor's OWN design (or return to the site default) ──
   // Instant: writes the nw_nav cookie (server-rendered on every future
   // load) and announces the change so the homepage switches right now.
+  // Free users in the subscription model get the upgrade dialog instead.
   const pickPersonal = (mode: NavMode | null) => {
+    if (gated) {
+      openUpgradeDialog('personalFlags')
+      return
+    }
     writeNavOverride(mode)
     setMyNav(mode)
     const effective = mode ?? navMode ?? 'cards'
@@ -239,13 +259,41 @@ export function FeatureFlagsCard() {
       <div className="mb-2 flex items-center gap-2">
         <Flag className="h-4 w-4 text-amber-500" />
         <h2 className="text-sm font-bold">Feature Flags</h2>
-        <span className="ml-auto rounded-full bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold text-violet-600 dark:text-violet-400">
-          Header style
-        </span>
+        {gated ? (
+          <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
+            <PremiumDiamond className="h-2.5 w-2.5" />
+            Premium
+          </span>
+        ) : (
+          <span className="ml-auto rounded-full bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold text-violet-600 dark:text-violet-400">
+            Header style
+          </span>
+        )}
       </div>
 
-      {/* ═══════════ Personal picker — every visitor ═══════════ */}
-      <div className="mb-2">
+      {/* ── Locked state (free tier, subscription model) ── The picker
+          below greys out; this banner explains the perk and upsells. */}
+      {gated ? (
+        <button
+          type="button"
+          onClick={() => openUpgradeDialog('personalFlags')}
+          className="mb-3 flex w-full items-center gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-left transition-colors hover:bg-amber-500/15"
+        >
+          <PremiumDiamond className="h-5 w-5 shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold">
+              Pick your header style — Premium
+            </span>
+            <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
+              Big chips, bold tabs, maxi pills and 7 more designs — saved
+              for you, applied instantly.
+            </span>
+          </span>
+        </button>
+      ) : null}
+
+      {/* ═══════════ Personal picker ═══════════ */}
+      <div className={cn('mb-2', gated && 'pointer-events-none select-none opacity-50')}>
         <div className="mb-1 text-xs font-semibold">Your header style</div>
         <p className="text-xs text-muted-foreground">
           The subtopic-header design <b>you</b> see — saved on this device,
@@ -270,8 +318,9 @@ export function FeatureFlagsCard() {
 
       {/* The 10 designs — compact 2-column grid (icon + name; the full
           description of each design is available as a hover tooltip).
-          Keeps the whole Feed tab at roughly one screen. */}
-      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+          Keeps the whole Feed tab at roughly one screen. Greyed + inert
+          for free visitors (the banner above carries the upsell). */}
+      <div className={cn('mt-1.5 grid grid-cols-2 gap-1.5', gated && 'pointer-events-none select-none opacity-50')}>
         {NAV_OPTIONS.map((opt, i) => {
           const selected = myNav === opt.id
           return (

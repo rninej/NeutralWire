@@ -22,7 +22,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
-import { PremiumDiamond, PremiumBadge } from '@/components/premium-ui'
+import { PremiumDiamond, PremiumBadge, TierComparisonGrid } from '@/components/premium-ui'
 import {
   useSubscription,
   openUpgradeDialog,
@@ -31,6 +31,10 @@ import {
 } from '@/lib/subscription-client'
 
 const EASE_OUT = [0.16, 1, 0.3, 1] as const
+
+/** Fired by the Account-page guest banner ("Create an account") to open
+ *  the auth form in this card with the wanted mode. */
+export const OPEN_AUTH_EVENT = 'neutralwire:open-auth'
 
 // ── Profile tab: the tier card ──────────────────────────────────────────
 
@@ -47,6 +51,16 @@ export function SubscriptionAccountSection() {
   const [cancelBusy, setCancelBusy] = React.useState(false)
 
   const deviceId = getClientDeviceId()
+
+  // The guest banner (top of Profile) opens the auth form here.
+  React.useEffect(() => {
+    const onOpenAuth = (e: Event) => {
+      const mode = (e as CustomEvent<{ mode?: 'signin' | 'register' }>).detail?.mode
+      setMode(mode === 'signin' ? 'signin' : 'register')
+    }
+    window.addEventListener(OPEN_AUTH_EVENT, onOpenAuth)
+    return () => window.removeEventListener(OPEN_AUTH_EVENT, onOpenAuth)
+  }, [])
 
   const submitAuth = async (m: 'signin' | 'register') => {
     setBusy(true)
@@ -168,6 +182,12 @@ export function SubscriptionAccountSection() {
             ) : null}
           </div>
 
+          {/* ── The 3-tier comparison (Free / Premium / Ultra) — always
+              visible in the subscription model so the whole system reads
+              at a glance; each card's own "Current" badge marks the
+              visitor's plan. */}
+          {sub.model === 'subscription' ? <TierComparisonGrid /> : null}
+
           {sub.tier === 'free' && sub.model === 'subscription' ? (
             <Button className="w-full" onClick={() => openUpgradeDialog('premium')}>
               <Sparkles className="h-4 w-4" />
@@ -245,12 +265,13 @@ export function SubscriptionAccountSection() {
           </Button>
         </div>
       ) : (
-        /* ── Logged out: sign in / create account ── */
-        <div className="space-y-2">
+        /* ── Logged out: the 3-tier preview + sign in / create account ── */
+        <div className="space-y-3">
           <p className="text-xs text-muted-foreground">
             Create an account to subscribe, keep Premium on every device and unlock the
             email digest.
           </p>
+          {sub.model === 'subscription' ? <TierComparisonGrid /> : null}
           {mode === 'none' ? (
             <div className="grid grid-cols-2 gap-2">
               <Button variant="outline" onClick={() => setMode('register')}>
