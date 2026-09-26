@@ -279,7 +279,7 @@ export function SubtopicPicker({ onClose }: { onClose: () => void }) {
                 size="sm"
                 className="mt-2"
                 onClick={createWithAI}
-                disabled={creating || !unlocked}
+                disabled={creating}
               >
                 {creating ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

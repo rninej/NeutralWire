@@ -27,9 +27,13 @@
  *   - Refresh happens ONLY inside the refresh-all cron's after() tail,
  *     rotating a few topics per tick (hour-bucketed) — never on user
  *     requests (the /api/news custom: path is pure cache read + a
- *     fire-and-forget one-time first fill).
+ *     time-boxed synchronous first fill).
  *   - GDELT queries are free; the AI filter costs one callAI per topic
  *     per refresh (only when heuristic scores are ambiguous).
+ *   - AI KEYWORD FALLBACK: when a GDELT query comes back EMPTY (too
+ *     narrow keywords, or a 429 that survived its retry), one callAI
+ *     widens the keyword set and the query re-runs — the "AI fallback
+ *     system" that keeps new subtopic feeds from landing dead.
  */
 
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
@@ -88,7 +92,22 @@ interface GdeltArticle {
 
 const NON_NEWS = /(newsletter|subscribe|sign up|login|horoscope|daily crossword|sudoku|weather forecast|stock quotes|classifieds)/i
 
-function fetchGdelt(keywords: string[], maxRecords = 200): Promise<GdeltArticle[]> {
+/** Per-attempt fetch timing. The SYNC path (a visitor is waiting on the
+ * chip they just tapped) uses tight timeouts so the whole first fill
+ * stays inside /api/news's sub-10s response budget; the BACKGROUND path
+ * (subscribe-time warm fill, cron) can afford the patient 12s ones. */
+interface GdeltTiming {
+  perAttemptMs: number
+  backoffMs: number
+}
+const GDELT_TIMING_SYNC: GdeltTiming = { perAttemptMs: 7000, backoffMs: 2500 }
+const GDELT_TIMING_BACKGROUND: GdeltTiming = { perAttemptMs: 12000, backoffMs: 5500 }
+
+function fetchGdelt(
+  keywords: string[],
+  maxRecords = 200,
+  timing: GdeltTiming = GDELT_TIMING_BACKGROUND,
+): Promise<GdeltArticle[]> {
   const kw = keywords.slice(0, 8).map((k) => `"${k.replace(/"/g, '')}"`)
   const query = `(${kw.join(' OR ')}) sourcelang:english`
   const url = `${GDELT_API_URL}?query=${encodeURIComponent(query)}&mode=ArtList&maxrecords=${maxRecords}&format=json&sort=DateDesc&timewindow=1d`
@@ -116,16 +135,15 @@ function fetchGdelt(keywords: string[], maxRecords = 200): Promise<GdeltArticle[
     // GDELT asks for "one request every 5 seconds" and answers 429 (or a
     // slow non-JSON body) when an egress IP overshoots — serverless IPs
     // are shared, so this happens in production too. One polite retry
-    // after a 5.5s backoff recovers most of those; the caller's UX no
+    // after a short backoff recovers most of those; the caller's UX no
     // longer depends on it because subscribe-time fills run in the
-    // background (after()) while /api/news keeps a synchronous fallback.
-    // 12s per attempt keeps the worst case (429 → 5.5s backoff → retry)
-    // inside /api/news's 30s maxDuration for the synchronous fallback fill.
-    const first = await attempt(12000)
+    // background (after()) while /api/news keeps a synchronous fallback
+    // that is hard-bounded by its own sub-10s response budget.
+    const first = await attempt(timing.perAttemptMs)
     if (first.ok) return first.articles
     if (first.status !== 429 && first.status !== 503) return []
-    await new Promise((r) => setTimeout(r, 5500))
-    const second = await attempt(12000)
+    await new Promise((r) => setTimeout(r, timing.backoffMs))
+    const second = await attempt(timing.perAttemptMs)
     return second.ok ? second.articles : []
   })()
 }
@@ -198,6 +216,32 @@ async function aiFilterArticles(
   }
 }
 
+// ── AI keyword fallback ──────────────────────────────────────────────────
+
+/** The AI FALLBACK: when a topic's GDELT query lands empty (keywords too
+ * narrow — "Chess openings" matches nothing in a general news index — or
+ * a 429 that survived its retry), ask the AI for a WIDER keyword set and
+ * re-run the query with it. Returns [] when the AI is unavailable (no
+ * keys) so the caller simply keeps the original result. */
+async function aiBroadenKeywords(
+  label: string,
+  keywords: string[],
+): Promise<string[]> {
+  const raw = await callAI({
+    systemPrompt:
+      'You widen news-search keyword sets. Given a topic and its current GDELT search keywords that returned ZERO results, reply with ONLY a comma-separated list of 6-8 BROADER English search keywords a general news index would actually match (umbrella terms, common spellings, related public names). No numbering, no prose.',
+    userPrompt: `Topic: "${label}"\nCurrent keywords (found nothing): ${keywords.join(', ')}\n\nReply with only the comma-separated keywords.`,
+    maxTokens: 90,
+  })
+  if (!raw) return []
+  const widened = raw
+    .split(/[,\n]/)
+    .map((k) => k.trim().toLowerCase().replace(/^["']|["']$/g, ''))
+    .filter((k) => k.length >= 3 && k.length <= 40 && !keywords.includes(k))
+    .slice(0, 8)
+  return widened
+}
+
 // ── Cluster + build topics ──────────────────────────────────────────────
 
 interface ClusteredTopic {
@@ -250,17 +294,50 @@ function toTopicArticle(cluster: ClusteredTopic): TopicArticle {
 
 /**
  * Fetch + filter + cluster + cache one custom topic.
- * `opts.aiFilter` controls whether the AI pass runs (cron low-load = yes,
- * first-serve fill = no).
+ *
+ * `opts.aiFilter` controls whether the AI relevance pass runs (cron
+ * low-load = yes, first-serve fill = no).
+ *
+ * `opts.mode`:
+ *   - 'sync'      — a visitor is waiting on this fill RIGHT NOW (they
+ *                   tapped a brand-new chip). GDELT attempts use tight
+ *                   timeouts (7s + 2.5s backoff) so the fill usually
+ *                   lands inside /api/news's sub-10s response budget;
+ *                   the route ALSO hard-races the fill against a wall
+ *                   clock, so this mode is a best-effort fast path.
+ *   - 'background' (default) — nobody is waiting (subscribe-time warm
+ *                   fill, cron rotation): patient 12s attempts + retries.
+ *
+ * AI KEYWORD FALLBACK (both modes): a query that returns zero articles
+ * gets ONE callAI widening pass + a re-query — a "too narrow" topic
+ * still gets a feed instead of a dead end.
  */
 export async function refreshCustomTopic(
   topicId: string,
-  opts: { aiFilter?: boolean } = {},
+  opts: { aiFilter?: boolean; mode?: 'sync' | 'background' } = {},
 ): Promise<CustomFeedPayload | null> {
   const def = await getCustomTopicDef(topicId)
   if (!def) return null
 
-  const raw = await fetchGdelt(def.keywords)
+  const timing = opts.mode === 'sync' ? GDELT_TIMING_SYNC : GDELT_TIMING_BACKGROUND
+
+  let keywords = def.keywords
+  let raw = await fetchGdelt(keywords, 200, timing)
+
+  // ── AI fallback: empty first query → wider keywords → one re-query ──
+  if (raw.length === 0 && keywords.length > 0) {
+    const broader = await aiBroadenKeywords(def.label, keywords)
+    if (broader.length > 0) {
+      keywords = [...keywords.slice(0, 2), ...broader].slice(0, 8)
+      raw = await fetchGdelt(keywords, 200, timing)
+      // A runtime (AI-created) topic's widened keywords are persisted so
+      // the cron's future refreshes keep the working net. Static catalog
+      // topics are shared — leave their definition alone.
+      if (raw.length > 0 && !CATALOG_BY_ID[topicId]) {
+        firebaseWrite(`customSubtopics/${topicId}/keywords`, keywords).catch(() => {})
+      }
+    }
+  }
   if (raw.length === 0) return null
 
   // ── Pass 1: cheap heuristics ──
@@ -284,7 +361,7 @@ export async function refreshCustomTopic(
     domainCounts[domain] = (domainCounts[domain] || 0) + 1
     if (domainCounts[domain] > 6) continue // cap one outlet per topic
 
-    const score = titleScore(title, def.keywords)
+    const score = titleScore(title, keywords)
     if (score <= 0) continue
 
     const seendate = a.seendate || ''

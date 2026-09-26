@@ -13,7 +13,6 @@ import {
   FlaskConical,
   HeartPulse,
   Trophy,
-  Gem,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ScrollHint } from './scroll-arrow'
@@ -26,6 +25,7 @@ import {
 } from '@/lib/news-sources'
 import type { CountryInfo } from '@/lib/country-detect'
 import { AddTopicChip, CustomTopicChips, ADD_CHIP_CARDS } from '@/components/add-topic-button'
+import { PremiumDiamond } from '@/components/premium-ui'
 
 /**
  * CategoryNav — the "cards" subtopic header system.
@@ -62,10 +62,10 @@ import { AddTopicChip, CustomTopicChips, ADD_CHIP_CARDS } from '@/components/add
  */
 export function CategoryIcon({ cat, className }: { cat: Category | string; className?: string }) {
   const cls = cn('h-[18px] w-[18px] shrink-0', className)
-  // Premium custom subtopics carry the golden-diamond Gem mark — the
-  // same brand symbol as the + button and the picker.
+  // Premium custom subtopics carry the golden-diamond mark — the same
+  // brand symbol as the + button, the picker and the header button.
   if (typeof cat === 'string' && cat.startsWith('custom:')) {
-    return <Gem className={cn(cls, 'text-amber-500')} />
+    return <PremiumDiamond className={cn(cls, 'shrink-0')} />
   }
   switch (cat) {
     case 'relevant':

@@ -17,7 +17,7 @@
 
 import * as React from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Gem, Check, Loader2, Mail, Lock, LogOut, Sparkles } from 'lucide-react'
+import { X, Check, Loader2, Mail, Lock, LogOut, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -35,6 +35,10 @@ import {
 
 // ── The golden diamond ──────────────────────────────────────────────────
 
+/** The global premium mark: a brilliant-cut golden DIAMOND — flat crown
+ *  top, wide girdle, pointed pavilion — faceted via layered opacities so
+ *  it reads as cut stone even at 10px. One symbol everywhere a premium
+ *  feature appears (header button, + chip badge, badges, tier cards). */
 export function PremiumDiamond({ className }: { className?: string }) {
   return (
     <span
@@ -45,10 +49,14 @@ export function PremiumDiamond({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <svg viewBox="0 0 24 24" fill="currentColor" className="h-full w-full drop-shadow-[0_0_1px_rgba(245,158,11,0.6)]">
-        <path d="M12 2L15 6.5H9L12 2Z" />
-        <path d="M9 6.5L4.5 12L9 17.5L12 13L9 6.5Z" opacity="0.85" />
-        <path d="M15 6.5L19.5 12L15 17.5L12 13L15 6.5Z" opacity="0.85" />
-        <path d="M9 17.5L12 22L15 17.5L12 15.5L9 17.5Z" opacity="0.9" />
+        {/* Crown — flat table edge widening out to the girdle */}
+        <path d="M7.2 3.5h9.6L14.7 9H9.3L7.2 3.5Z" opacity="0.95" />
+        <path d="M7.2 3.5L3 9h6.3L7.2 3.5Z" opacity="0.8" />
+        <path d="M16.8 3.5L21 9h-6.3l2.1-5.5Z" opacity="0.8" />
+        {/* Pavilion — facets converging to the culet point */}
+        <path d="M3 9h6.3L12 20.5 3 9Z" opacity="0.85" />
+        <path d="M9.3 9h5.4L12 20.5 9.3 9Z" />
+        <path d="M14.7 9H21L12 20.5 14.7 9Z" opacity="0.85" />
       </svg>
     </span>
   )
@@ -583,7 +591,7 @@ function TierCard3({
         ) : isFree ? (
           <Sparkles className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         ) : (
-          <Gem className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <PremiumDiamond className="h-3.5 w-3.5 shrink-0" />
         )}
         <span className="text-sm font-bold">{name}</span>
         {highlight ? (

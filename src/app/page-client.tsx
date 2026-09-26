@@ -1646,16 +1646,22 @@ export default function Home({
   const filteredTopics = React.useMemo(() => {
     let list = topics
     if (debouncedSearch) {
+      // CRASH GUARD: GDELT/AI-filled topics can miss summary, and slim
+      // feeds carry no articles array — a bare .toLowerCase() on any of
+      // those threw "Cannot read properties of undefined" and killed the
+      // whole feed while typing in the search box. Every field is guarded.
       const q = debouncedSearch.toLowerCase()
+      const text = (s: unknown) => (typeof s === 'string' ? s : '')
       list = list.filter(
         (t) =>
-          t.title.toLowerCase().includes(q) ||
-          t.summary.toLowerCase().includes(q) ||
-          t.articles.some(
-            (a) =>
-              a.title.toLowerCase().includes(q) ||
-              a.sourceName.toLowerCase().includes(q),
-          ),
+          text(t.title).toLowerCase().includes(q) ||
+          text(t.summary).toLowerCase().includes(q) ||
+          (Array.isArray(t.articles) &&
+            t.articles.some(
+              (a) =>
+                text(a.title).toLowerCase().includes(q) ||
+                text(a.sourceName).toLowerCase().includes(q),
+            )),
       )
     }
 
@@ -1697,8 +1703,9 @@ export default function Home({
     // the same source count, remove one at random.
     if (!debouncedSearch && list.length > 1) {
       // Normalize title: lowercase, strip ALL punctuation, collapse whitespace
-      const normTitle = (t: string) =>
-        t.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+      // (null-safe: runtime-filled topics can carry a missing title)
+      const normTitle = (t: string | null | undefined) =>
+        (t || '').toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
       const titleGroups = new Map<string, TopicArticle[]>()
       const imageGroups = new Map<string, TopicArticle[]>()
       for (const t of list) {
@@ -1895,8 +1902,8 @@ export default function Home({
     if (result.length > 1) {
       const seenTitles = new Set<string>()
       const seenImages = new Set<string>()
-      const norm = (t: string) =>
-        t.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+      const norm = (t: string | null | undefined) =>
+        (t || '').toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
       result = result.filter((t) => {
         const nt = norm(t.title)
         const imgUrl = safeImageUrl(t.imageUrl)?.split('?')[0]?.trim()
@@ -2492,19 +2499,26 @@ export default function Home({
 
               {/* Premium custom subtopics + the golden-diamond add
                   button — classic-pill geometry (10px/12px text, same
-                  py padding) so they wrap like any other pill. */}
+                  py padding) so they wrap like any other pill. The + is
+                  GLUED to the last chip (trailing) so it can never wrap
+                  onto a row of its own — a lone + on a third row was the
+                  Pixel 8 Pro layout bug; a third row now only appears
+                  when the visitor actually pins premium topics, and it
+                  carries a real chip alongside the +. */}
               <CustomTopicChips
                 activeCategory={category}
                 onSelect={(c) => setCategory(c as typeof category)}
                 chipClassName="rounded-md px-1.5 py-1 text-[10px] sm:px-3 sm:py-1.5 sm:text-xs"
                 iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
                 activeChipClassName="bg-foreground text-background shadow-sm"
-              />
-              <AddTopicChip
-                chipClassName="rounded-md px-1.5 py-1 text-[10px] sm:px-3 sm:py-1.5 sm:text-xs"
-                diamondClassName="h-[10px] w-[10px] sm:h-3 sm:w-3"
-                iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
-                label=""
+                trailing={
+                  <AddTopicChip
+                    chipClassName="rounded-md px-1.5 py-1 text-[10px] sm:px-3 sm:py-1.5 sm:text-xs"
+                    diamondClassName="h-[10px] w-[10px] sm:h-3 sm:w-3"
+                    iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
+                    label=""
+                  />
+                }
               />
 
               {/* Search button — hidden on mobile (moved to section headers).
@@ -3683,7 +3697,8 @@ function SectionedFeed({
   function headlineScore(topic: TopicArticle): number {
     let score = personalizationBoost(topic, interests, engagement || {})
 
-    const titleLower = topic.title.toLowerCase()
+    // Null-safe: runtime-filled topics can carry a missing title
+    const titleLower = (topic.title || '').toLowerCase()
 
     // ── For NON-US users: heavily demote US domestic news ──
     // US news gets -80 (pushes it way down) so country/world/other news
@@ -3807,8 +3822,8 @@ function SectionedFeed({
   // Normalize title for comparison: lowercase, collapse whitespace, strip
   // ALL punctuation (so smart quotes, apostrophes, etc. don't prevent
   // matching). e.g. "Spain's" → "spains" matches "Spains".
-  const normTitle = (t: string) =>
-    t.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+  const normTitle = (t: string | null | undefined) =>
+    (t || '').toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
   const isDuplicate = (t: TopicArticle): boolean => {
     if (shownTopicIds.has(t.topicId)) return true
     const nt = normTitle(t.title)

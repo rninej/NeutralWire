@@ -44,12 +44,7 @@ import {
 } from '@/components/subscription-account'
 import { PremiumBadge, PremiumDiamond } from '@/components/premium-ui'
 import { useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
-import { GRADIENT_PRESETS } from '@/lib/use-theme-reveal'
-import {
-  setThemeFamilyStored,
-  setThemeModeStored,
-} from '@/lib/theme-families'
-import { useTheme } from 'next-themes'
+import { GRADIENT_PRESETS, clearGradientOverlay } from '@/lib/use-theme-reveal'
 
 interface UserPageProps {
   onClose: () => void
@@ -856,10 +851,14 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
 export const UserPageAnimatePresence = AnimatePresence
 
 /**
- * GradientSectionGated — the gradient presets + custom gradient maker,
+ * GradientSectionGated — the gradient presets + custom gradient maker.
  * PREMIUM in the subscription model, open to everyone in the donation
- * model (the original behaviour). The header carries the Premium badge;
- * a free visitor tapping a preset gets the upgrade dialog.
+ * model. TEASER pattern: every swatch (and the custom maker) RENDERS for
+ * free visitors — tapping a locked one opens the upgrade dialog instead
+ * of applying, so free users can see exactly what Premium unlocks.
+ * Gradients ride the CURRENT theme family + mode: the CSS veil in
+ * globals.css adapts them to light surfaces, so they work in BOTH light
+ * and dark mode (no forced switch to dark).
  */
 function GradientSectionGated({
   showMaker,
@@ -879,57 +878,65 @@ function GradientSectionGated({
         </h3>
         {sub.model === 'subscription' ? <PremiumBadge className="ml-auto" /> : null}
       </div>
-      {unlocked ? (
-        <>
-          <div className="grid grid-cols-3 gap-2">
-            {GRADIENT_PRESETS.map((g) => (
-              <GradientPreset key={g.id} id={g.id} label={g.label} gradient={g.gradient} />
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={onToggleMaker}
-            aria-expanded={showMaker}
-            className="mt-3 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+      {/* The full set renders for EVERY visitor — locked swatches carry
+          the golden-diamond mark and open the upgrade dialog on tap. */}
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+        {GRADIENT_PRESETS.map((g) => (
+          <GradientPreset
+            key={g.id}
+            id={g.id}
+            label={g.label}
+            gradient={g.gradient}
+            locked={!unlocked}
+          />
+        ))}
+        {unlocked ? <GradientNonePreset /> : null}
+      </div>
+      <button
+        type="button"
+        onClick={onToggleMaker}
+        aria-expanded={showMaker}
+        className="mt-3 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        Custom gradient maker
+        <ChevronDown
+          className={cn(
+            'ml-auto h-4 w-4 transition-transform',
+            showMaker && 'rotate-180',
+          )}
+        />
+      </button>
+      <AnimatePresence initial={false}>
+        {showMaker && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: EASE_OUT }}
+            className="overflow-hidden"
           >
-            <Sparkles className="h-3.5 w-3.5" />
-            Custom gradient maker
-            <ChevronDown
-              className={cn(
-                'ml-auto h-4 w-4 transition-transform',
-                showMaker && 'rotate-180',
-              )}
-            />
-          </button>
-          <AnimatePresence initial={false}>
-            {showMaker && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.25, ease: EASE_OUT }}
-                className="overflow-hidden"
-              >
-                <CustomGradientMaker />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </>
-      ) : (
+            <CustomGradientMaker locked={!unlocked} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {!unlocked ? (
         <button
           type="button"
           onClick={() => openUpgradeDialog('gradientThemes')}
-          className="flex w-full flex-col items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-4 text-center"
+          className="mt-3 flex w-full items-center gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-left transition-colors hover:bg-amber-500/15"
         >
-          <div className="flex items-center gap-1.5 text-sm font-semibold">
-            <Sparkles className="h-4 w-4 text-amber-500" />
-            10 gradient looks + custom maker
-          </div>
-          <span className="text-xs text-muted-foreground">
-            Aurora, Sunset, Deep Ocean… — Premium at {sub.pricing.premium.display}/month
+          <PremiumDiamond className="h-5 w-5 shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold">
+              Unlock all 10 gradients + the custom maker
+            </span>
+            <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
+              Aurora, Sunset, Deep Ocean… — Premium at {sub.pricing.premium.display}/month.
+            </span>
           </span>
         </button>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -968,13 +975,15 @@ function SupportCardGated() {
 
 // ── Gradient preset button ──
 // Shows the gradient as a swatch; clicking it applies the gradient as a
-// background overlay on top of the dark theme.
-function GradientPreset({ id, label, gradient }: {
+// background overlay ON TOP OF THE CURRENT THEME — light or dark (the
+// light veil in globals.css keeps dark text legible on light surfaces).
+// Locked swatches render fully but open the upgrade dialog on tap.
+function GradientPreset({ id, label, gradient, locked }: {
   id: string
   label: string
   gradient: string
+  locked?: boolean
 }) {
-  const { setTheme } = useTheme()
   const [active, setActive] = React.useState(false)
 
   // Check if this gradient is the active one on mount + when any gradient changes
@@ -994,14 +1003,13 @@ function GradientPreset({ id, label, gradient }: {
   }, [checkActive])
 
   const handleClick = () => {
+    if (locked) {
+      openUpgradeDialog('gradientThemes')
+      return
+    }
     try {
-      // Gradients sit on a dark base: record neutral-family + dark mode
-      // so the mode toggle / auto system flips behave correctly.
-      setThemeFamilyStored('neutral')
-      setThemeModeStored('dark')
-      // Set dark theme as the base (clears any solid theme via next-themes)
-      setTheme('dark')
-      // Apply the gradient
+      // Gradients ride the CURRENT family + mode (light veil adapts them
+      // for light surfaces) — no forced switch to the dark theme.
       document.documentElement.classList.add('gradient-theme')
       document.documentElement.style.setProperty('--gradient-bg', gradient)
       localStorage.setItem('neutralwire:gradient', gradient)
@@ -1014,11 +1022,14 @@ function GradientPreset({ id, label, gradient }: {
     <button
       type="button"
       onClick={handleClick}
+      aria-label={locked ? `${label} gradient (Premium)` : `${label} gradient`}
       className={cn(
         'group relative flex flex-col items-center gap-1 rounded-lg border p-1.5 transition-all active:scale-95',
         active
           ? 'border-foreground ring-2 ring-foreground/20'
-          : 'border-border hover:border-foreground/30',
+          : locked
+            ? 'border-amber-500/30 hover:border-amber-500/60'
+            : 'border-border hover:border-foreground/30',
       )}
     >
       <span
@@ -1027,6 +1038,63 @@ function GradientPreset({ id, label, gradient }: {
         aria-hidden
       />
       <span className="text-[10px] font-medium leading-tight text-center">{label}</span>
+      {/* The golden diamond — the global premium mark — signals the
+          locked state on free visitors' swatches. */}
+      {locked ? (
+        <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-background/85">
+          <PremiumDiamond className="h-2.5 w-2.5" />
+        </span>
+      ) : null}
+      {active && (
+        <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-background text-[8px] font-bold">
+          ✓
+        </span>
+      )}
+    </button>
+  )
+}
+
+// ── "None" preset — back to the solid family theme ──
+// Only rendered for UNLOCKED visitors (a free visitor has no gradient to
+// remove — their swatches all open the upgrade dialog).
+function GradientNonePreset() {
+  const [active, setActive] = React.useState(false)
+
+  const checkActive = React.useCallback(() => {
+    try {
+      setActive(!localStorage.getItem('neutralwire:gradient'))
+    } catch {}
+  }, [])
+
+  React.useEffect(() => {
+    checkActive()
+    window.addEventListener('neutralwire:gradient-changed', checkActive)
+    return () => window.removeEventListener('neutralwire:gradient-changed', checkActive)
+  }, [checkActive])
+
+  return (
+    <button
+      type="button"
+      onClick={() => clearGradientOverlay()}
+      aria-label="No gradient (solid theme)"
+      className={cn(
+        'group relative flex flex-col items-center gap-1 rounded-lg border p-1.5 transition-all active:scale-95',
+        active
+          ? 'border-foreground ring-2 ring-foreground/20'
+          : 'border-border hover:border-foreground/30',
+      )}
+    >
+      <span
+        aria-hidden
+        className="h-8 w-full rounded-md border border-border bg-background"
+        style={{
+          backgroundImage:
+            'linear-gradient(45deg, hsl(var(--muted)) 25%, transparent 25%, transparent 75%, hsl(var(--muted)) 75%), linear-gradient(45deg, hsl(var(--muted)) 25%, transparent 25%, transparent 75%, hsl(var(--muted)) 75%)',
+          backgroundSize: '8px 8px',
+          backgroundPosition: '0 0, 4px 4px',
+        }}
+      />
+      <span className="text-[10px] font-medium leading-tight text-center">None</span>
       {active && (
         <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-background text-[8px] font-bold">
           ✓
@@ -1038,8 +1106,11 @@ function GradientPreset({ id, label, gradient }: {
 
 // ── Custom gradient maker ──
 // Lets the user pick 2-3 colors + angle and creates a custom gradient.
-function CustomGradientMaker() {
-  const { setTheme } = useTheme()
+// The maker renders for FREE visitors too (teaser): controls work, the
+// preview builds live — the Apply button opens the upgrade dialog until
+// the visitor subscribes. Gradients apply on top of the CURRENT theme
+// family + mode (light veil handles light surfaces).
+function CustomGradientMaker({ locked }: { locked?: boolean }) {
   const [color1, setColor1] = React.useState('#1a1a2e')
   const [color2, setColor2] = React.useState('#16213e')
   const [color3, setColor3] = React.useState('#0f3460')
@@ -1051,11 +1122,12 @@ function CustomGradientMaker() {
     : `linear-gradient(${angle}deg, ${color1} 0%, ${color2} 100%)`
 
   const handleApply = () => {
+    if (locked) {
+      openUpgradeDialog('gradientThemes')
+      return
+    }
     try {
-      // Gradients sit on a dark base: record neutral-family + dark mode.
-      setThemeFamilyStored('neutral')
-      setThemeModeStored('dark')
-      setTheme('dark')
+      // Ride the current family + mode — no forced dark switch.
       document.documentElement.classList.add('gradient-theme')
       document.documentElement.style.setProperty('--gradient-bg', gradient)
       localStorage.setItem('neutralwire:gradient', gradient)
@@ -1132,8 +1204,14 @@ function CustomGradientMaker() {
         </label>
       </div>
 
-      <Button onClick={handleApply} size="sm" className="w-full">
-        Apply Custom Gradient
+      <Button onClick={handleApply} size="sm" className="w-full gap-1.5">
+        {locked ? (
+          <>
+            <PremiumDiamond className="h-3.5 w-3.5" />
+            Unlock the custom maker — {` `}
+          </>
+        ) : null}
+        {locked ? 'Premium' : 'Apply Custom Gradient'}
       </Button>
     </div>
   )

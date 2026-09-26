@@ -904,6 +904,35 @@
   pointer-events: none;
 }
 
+/* ── Gradients in LIGHT mode ──
+   Gradients ride BOTH theme modes now. The presets are cut for dark
+   surfaces, so on any LIGHT theme variant the gradient is washed with a
+   translucent white veil (layered ABOVE it): the result reads as a soft
+   pastel backdrop while dark foreground text stays fully legible.
+   The selector lists every light variant class of the theme families
+   (see lib/theme-families.ts) — exactly one of them (or a dark variant)
+   is on <html> at any time, so this matches only in light mode. */
+.gradient-theme:is(
+  .light,
+  .midnight-light,
+  .sepia,
+  .high-contrast,
+  .ocean-light,
+  .forest-light,
+  .sunset-light,
+  .lavender-light,
+  .rose-light,
+  .mono-light,
+  .cyber-light
+) body::before {
+  background:
+    linear-gradient(
+      rgba(255, 255, 255, 0.82),
+      rgba(255, 255, 255, 0.87)
+    ),
+    var(--gradient-bg, none);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

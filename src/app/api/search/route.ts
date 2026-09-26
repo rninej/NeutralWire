@@ -128,13 +128,15 @@ export async function GET(req: NextRequest) {
 
   function collectLiveHit(topic: TopicArticle, catKey: string) {
     if (seenTopicIds.has(topic.topicId)) return
-    const titleMatch = topic.title.toLowerCase().includes(q)
+    // Null-safe: GDELT/AI-filled topics can carry missing titles — a bare
+    // .toLowerCase() on those 500'd the whole search endpoint.
+    const titleMatch = (topic.title || '').toLowerCase().includes(q)
     const summaryMatch = (topic.summary || '').toLowerCase().includes(q)
     if (!titleMatch && !summaryMatch) {
       // Search articles within the topic
       if (topic.articles) {
         for (const article of topic.articles) {
-          const artTitleMatch = article.title.toLowerCase().includes(q)
+          const artTitleMatch = (article.title || '').toLowerCase().includes(q)
           const artDescMatch = (article.description || '').toLowerCase().includes(q)
           const sourceMatch = (article.sourceName || '').toLowerCase().includes(q)
           if (artTitleMatch || artDescMatch || sourceMatch) {

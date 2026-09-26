@@ -22,7 +22,6 @@
 
 import * as React from 'react'
 import { useTheme } from 'next-themes'
-import { clearGradientOverlay } from '@/lib/use-theme-reveal'
 
 // ── localStorage keys ──
 export const FAMILY_KEY = 'neutralwire:theme-family'
@@ -290,12 +289,11 @@ export function useThemeController() {
   const apply = React.useCallback(
     (f: string, m: ThemeMode) => {
       const eff = effectiveMode(m)
-      // Gradients are designed for dark surfaces — strip the overlay when
-      // a light variant becomes active (covers toggles, family picks AND
-      // auto mode flipping to day).
-      if (eff === 'light') clearGradientOverlay()
-      // For the neutral family in auto mode we use next-themes' native
-      // 'system' value so its colorScheme + systemTheme machinery works.
+      // Gradients now ride BOTH modes: on light surfaces the CSS veil in
+      // globals.css (a translucent white overlay layered over
+      // --gradient-bg) keeps dark text legible, so the overlay is left
+      // intact when a light variant becomes active — covers toggles,
+      // family picks AND auto mode flipping to day.
       const value =
         f === 'neutral' && m === 'auto' ? 'system' : themeValueFor(f, eff)
       setTheme(value)

@@ -293,7 +293,10 @@ export function FeatureFlagsCard() {
       ) : null}
 
       {/* ═══════════ Personal picker ═══════════ */}
-      <div className={cn('mb-2', gated && 'pointer-events-none select-none opacity-50')}>
+      {/* TEASER: the full picker stays VISIBLE + CLICKABLE for free
+          visitors — every option (and "Follow site default") opens the
+          upgrade dialog via pickPersonal()'s gate, so locked ≠ inert. */}
+      <div className="mb-2">
         <div className="mb-1 text-xs font-semibold">Your header style</div>
         <p className="text-xs text-muted-foreground">
           The subtopic-header design <b>you</b> see — saved on this device,
@@ -318,9 +321,10 @@ export function FeatureFlagsCard() {
 
       {/* The 10 designs — compact 2-column grid (icon + name; the full
           description of each design is available as a hover tooltip).
-          Keeps the whole Feed tab at roughly one screen. Greyed + inert
-          for free visitors (the banner above carries the upsell). */}
-      <div className={cn('mt-1.5 grid grid-cols-2 gap-1.5', gated && 'pointer-events-none select-none opacity-50')}>
+          Keeps the whole Feed tab at roughly one screen. Free visitors
+          see the FULL set and any tap opens the upgrade dialog — the
+          golden diamond badge marks the locked rows. */}
+      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
         {NAV_OPTIONS.map((opt, i) => {
           const selected = myNav === opt.id
           return (
@@ -329,7 +333,7 @@ export function FeatureFlagsCard() {
               type="button"
               onClick={() => pickPersonal(opt.id)}
               aria-pressed={selected}
-              title={opt.desc}
+              title={gated ? `${opt.desc} — Premium` : opt.desc}
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.22, delay: 0.12 + i * 0.02, ease: EASE_OUT }}
@@ -337,7 +341,9 @@ export function FeatureFlagsCard() {
                 'flex items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-all active:scale-[.98]',
                 selected
                   ? 'border-violet-500/40 bg-violet-500/5 ring-1 ring-violet-500/30'
-                  : 'border-border hover:bg-muted/40',
+                  : gated
+                    ? 'border-amber-500/25 hover:border-amber-500/50 hover:bg-amber-500/5'
+                    : 'border-border hover:bg-muted/40',
               )}
             >
               <span
@@ -353,7 +359,9 @@ export function FeatureFlagsCard() {
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                 {opt.name}
               </span>
-              {selected ? (
+              {gated ? (
+                <PremiumDiamond className="h-3 w-3 shrink-0 opacity-70" />
+              ) : selected ? (
                 <Check className="h-3.5 w-3.5 shrink-0 text-violet-600 dark:text-violet-400" />
               ) : null}
             </motion.button>

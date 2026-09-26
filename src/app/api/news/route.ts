@@ -13,7 +13,7 @@ import {
   CACHE_CONSTANTS,
 } from '@/lib/news-cache'
 import { firebaseRead } from '@/lib/firebase-server'
-import { readCustomFeed, refreshCustomTopic } from '@/lib/custom-topics'
+import { readCustomFeed, refreshCustomTopic, type CustomFeedPayload } from '@/lib/custom-topics'
 import {
   detectCountryServer,
   sourcesForCountry,
@@ -328,15 +328,31 @@ function offsetFor(sp: URLSearchParams): number {
 }
 
 /**
- * Custom subtopic feed handler — cache-first, one synchronous fill on miss.
- * Same response shape as the main categories so the client feed code,
- * skeletons and infinite scroll all work unchanged.
+ * Custom subtopic feed handler — cache-first, one time-boxed synchronous
+ * fill on miss. Same response shape as the main categories so the client
+ * feed code, skeletons and infinite scroll all work unchanged.
  *
- * A fill that yields ZERO topics (GDELT 429 / cold failure) is returned
- * with `pending: true` and Cache-Control no-store — the empty result is
- * never CDN-cached, so a retry a minute later genuinely re-runs the fill
- * instead of serving a cached dead end for 5 minutes.
+ * LATENCY KPI (user spec): the initial feed load for a newly added
+ * subtopic must stay UNDER 10 SECONDS end-to-end. Three layers make that
+ * a structural guarantee rather than a hope:
+ *   1. Subscribe-time warm fill — the feed is usually cached BEFORE the
+ *      chip is ever tapped (this path then answers in <300ms).
+ *   2. Tight sync timings — a cold fill runs GDELT with 7s attempts and a
+ *      2.5s backoff (see custom-topics.ts), so the common paths (healthy
+ *      GDELT 1-3s; instant 429 + 2.5s backoff + retry) finish in-budget.
+ *   3. Hard deadline race — whatever the fill is doing, the RESPONSE
+ *      leaves at ~9.4s; the fill itself keeps running post-response via
+ *      after() (Fluid Compute holds the invocation, bounded by
+ *      maxDuration) and writes the cache, so the client's retry ("Try
+ *      now") or the auto-refresh lands the warm feed.
+ *
+ * A fill that yields ZERO topics is returned with `pending: true` and
+ * Cache-Control no-store — the empty result is never CDN-cached, so a
+ * retry a minute later genuinely re-runs the fill instead of serving a
+ * cached dead end for 5 minutes.
  */
+const CUSTOM_FILL_BUDGET_MS = 9400
+
 async function handleCustomTopic(
   topicId: string,
   limit: number,
@@ -347,17 +363,43 @@ async function handleCustomTopic(
 ) {
   let feed = await readCustomFeed(topicId)
   let filledNow = false
+  let fillStillRunning: Promise<CustomFeedPayload | null> | null = null
 
   if (!feed || !Array.isArray(feed.topics) || feed.topics.length === 0) {
-    // One synchronous first fill (GDELT-only; the cron's AI pass refines
+    // One time-boxed first fill (GDELT-only; the cron's AI pass refines
     // it). Also re-fills a cached-but-empty feed (an earlier failed fill
     // writes nothing, so this is usually a plain cache miss).
     try {
-      feed = (await refreshCustomTopic(topicId, { aiFilter: false })) || null
+      const fill = refreshCustomTopic(topicId, { aiFilter: false, mode: 'sync' })
+      // Hard deadline: the response ALWAYS leaves under the 10s KPI; a
+      // slow fill keeps going post-response and lands in the cache.
+      let deadline: ReturnType<typeof setTimeout> | undefined
+      const timedOut = new Promise<null>((resolve) => {
+        deadline = setTimeout(() => resolve(null), CUSTOM_FILL_BUDGET_MS)
+      })
+      const raced = await Promise.race([fill, timedOut])
+      if (deadline) clearTimeout(deadline)
       filledNow = true
+      if (raced) {
+        feed = raced
+      } else {
+        // Budget exhausted mid-fill: answer now with pending:true and
+        // let the fill finish in the background (it writes the cache
+        // itself on success — the client's retry then serves it warm).
+        fillStillRunning = fill
+        feed = null
+      }
     } catch {
       feed = null
     }
+  }
+
+  if (fillStillRunning) {
+    after(async () => {
+      try {
+        await fillStillRunning
+      } catch {}
+    })
   }
 
   const topics = (feed?.topics || [])
@@ -365,7 +407,9 @@ async function handleCustomTopic(
     .slice(offset, offset + limit)
     .map((t) => (slim ? { ...t, articles: [] } : t))
 
-  // The fill ran but produced nothing → the topic is still "gathering".
+  // The fill ran but produced nothing (yet) → the topic is still
+  // "gathering" — either GDELT genuinely found nothing or the deadline
+  // race cut the fill off; both retry cleanly thanks to no-store.
   const pending = filledNow && topics.length === 0
 
   const res = NextResponse.json({
@@ -385,7 +429,7 @@ async function handleCustomTopic(
   res.headers.set(
     'Cache-Control',
     pending
-      ? 'no-store' // never CDN-cache a failed fill — retries must re-run it
+      ? 'no-store' // never CDN-cache a failed/unfinished fill — retries must re-run it
       : 'public, s-maxage=300, stale-while-revalidate=600',
   )
   return res

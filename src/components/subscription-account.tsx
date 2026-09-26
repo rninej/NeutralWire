@@ -397,33 +397,86 @@ export function DigestPrefsCard() {
 
   const gated = sub.model === 'subscription' && !sub.entitlements.emailDigest
 
+  // ── FLAGSHIP premium card ──
+  // The AI email newsletter is a headline Premium feature, so the entry
+  // itself is designed like one: an amber gradient slab with the golden
+  // diamond, a one-line pitch, and — for free visitors — the FULL
+  // frequency control set rendered as a teaser where every tap opens the
+  // upgrade dialog (visible-but-locked, like every other premium surface).
   return (
-    <Card className="p-4">
-      <div className="mb-2 flex items-center gap-2">
-        <Mail className="h-4 w-4 text-amber-500" />
-        <h2 className="text-sm font-bold">Email digest</h2>
-        <PremiumBadge className="ml-auto" />
+    <Card
+      className={cn(
+        'relative overflow-hidden p-0',
+        'border border-amber-500/40',
+        'bg-gradient-to-br from-amber-500/15 via-amber-500/5 to-transparent',
+      )}
+    >
+      {/* Soft radial glow behind the header mark */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full bg-amber-500/10 blur-2xl"
+      />
+
+      {/* Header — the flagship treatment */}
+      <div className="relative flex items-start gap-3 p-4 pb-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-md shadow-amber-500/25">
+          <Mail className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h2 className="text-base font-bold leading-tight">The AI Email Newsletter</h2>
+            {sub.model === 'subscription' ? (
+              <PremiumBadge ultra={sub.tier === 'ultra'} />
+            ) : null}
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            An AI-written briefing built from <b>your</b> subtopics — how every side
+            covered the day, in one email. From once a week to 3× a day.
+          </p>
+        </div>
       </div>
-      <p className="text-xs text-muted-foreground">
-        An AI-written newsletter built from your subtopics — how every side covered the
-        day, in one fabulous email.
-      </p>
 
       {loading ? (
-        <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+        <div className="flex items-center justify-center gap-2 pb-4 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
         </div>
       ) : gated ? (
-        <button
-          type="button"
-          onClick={() => openUpgradeDialog('emailDigest')}
-          className="mt-3 flex w-full items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-left text-xs"
-        >
-          <PremiumDiamond className="h-3.5 w-3.5 shrink-0" />
-          <span className="flex-1">The digest is Premium — {sub.pricing.premium.display}/month.</span>
-        </button>
+        <div className="relative px-4 pb-4">
+          {/* Teaser: the real frequency options, visible-but-locked —
+              tapping any of them (or the CTA) opens the upgrade dialog. */}
+          <div className="mb-2 text-xs font-semibold text-muted-foreground">
+            Choose your cadence — {sub.pricing.premium.display}/month:
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {FREQ_OPTIONS.map((o) => (
+              <motion.button
+                key={o.id}
+                type="button"
+                whileTap={{ scale: 0.97 }}
+                onClick={() => openUpgradeDialog('emailDigest')}
+                aria-label={`${o.label} — Premium`}
+                className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-background/60 px-2.5 py-2 text-left transition-all hover:border-amber-500/50 hover:bg-amber-500/10"
+              >
+                <PremiumDiamond className="h-3 w-3 shrink-0 opacity-70" />
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-semibold leading-tight">{o.label}</span>
+                  <span className="mt-0.5 block text-[11px] leading-tight text-muted-foreground">
+                    {o.desc}
+                  </span>
+                </span>
+              </motion.button>
+            ))}
+          </div>
+          <Button
+            className="mt-3 w-full gap-1.5 bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-sm hover:from-amber-600 hover:to-amber-700"
+            onClick={() => openUpgradeDialog('emailDigest')}
+          >
+            <PremiumDiamond className="h-3.5 w-3.5" />
+            Unlock the newsletter — {sub.pricing.premium.display}/month
+          </Button>
+        </div>
       ) : (
-        <div className="mt-3 space-y-3">
+        <div className="relative space-y-3 px-4 pb-4">
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-medium">Enabled</span>
             <Switch checked={digest.enabled} onCheckedChange={(v) => save({ enabled: v })} />

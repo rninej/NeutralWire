@@ -8,8 +8,10 @@
  * Golden diamond sits on the TOP-RIGHT corner of the + chip (per the user
  * spec) so the affordance reads "premium add".
  *
- * • Everyone SEES it (discovery is free); tapping it as a free user opens
- *   the upgrade dialog; premium users get the SubtopicPicker sheet.
+ * • FREE-DISCOVERY (teaser) model: EVERYONE gets the picker — all 550+
+ *   subtopics render for free visitors, so discovery costs nothing;
+ *   tapping any topic (or the AI creator) as a free user opens the
+ *   upgrade dialog instead of adding it (see subtopic-picker.tsx).
  *
  * SIZING: every header variant sizes its chips differently (40px cards,
  * 44px tabs, 24px maxi pills, 56px sheet tiles…). The chip takes an
@@ -31,7 +33,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PremiumDiamond } from '@/components/premium-ui'
-import { useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
 import {
   getCustomTopics,
   CUSTOM_TOPICS_EVENT,
@@ -60,7 +61,6 @@ export function AddTopicChip({
   label = 'Topics',
   labelClassName = 'hidden sm:inline',
 }: AddTopicChipProps) {
-  const sub = useSubscription()
   const [pickerOpen, setPickerOpen] = React.useState(false)
   // Portal target: resolved on first open (client-only by then).
   const [mounted, setMounted] = React.useState(false)
@@ -73,10 +73,10 @@ export function AddTopicChip({
   )
 
   const onClick = () => {
-    if (sub.model === 'subscription' && !sub.entitlements.customSubtopics && !sub.loading) {
-      openUpgradeDialog('customSubtopics')
-      return
-    }
+    // FREE-DISCOVERY: everyone opens the picker — the catalog renders in
+    // full for free visitors and each topic tap itself opens the upgrade
+    // dialog (subtopic-picker gates the actual adding). Browsing is the
+    // teaser; subscribing is the gate.
     setPickerOpen(true)
   }
 
@@ -140,6 +140,7 @@ export function CustomTopicChips({
   iconClassName = 'h-[15px] w-[15px]',
   truncate = false,
   rowClassName,
+  trailing,
 }: {
   activeCategory: string
   onSelect: (category: string) => void
@@ -152,6 +153,12 @@ export function CustomTopicChips({
      a horizontally-scrolling strip, so pinned topics never squeeze the
      two adaptive rows). Rendered only while topics exist. */
   rowClassName?: string
+  /** A node (typically the AddTopicChip) GLUED to the LAST chip — they
+   * wrap together in wrapping layouts, so the + button can never end up
+   * alone on a trailing row (the Pixel 8 Pro "3rd row with just +"
+   * layout bug). With no pinned topics the trailing node renders alone,
+   * exactly where the + used to sit. */
+  trailing?: React.ReactNode
 }) {
   const [topics, setTopics] = React.useState<CustomTopicRef[]>([])
 
@@ -162,34 +169,52 @@ export function CustomTopicChips({
     return () => window.removeEventListener(CUSTOM_TOPICS_EVENT, onChanged)
   }, [])
 
-  if (topics.length === 0) return null
+  // No pinned topics: no chips — but a trailing + still renders alone so
+  // the add affordance stays exactly where each variant expects it.
+  if (topics.length === 0) return trailing ?? null
+
+  const renderChip = (t: CustomTopicRef) => {
+    const catId = `custom:${t.id}`
+    const active = activeCategory === catId
+    return (
+      <motion.button
+        key={t.id}
+        type="button"
+        role="tab"
+        aria-selected={active}
+        whileTap={{ scale: 0.94 }}
+        transition={{ duration: 0.15, ease: 'easeOut' }}
+        onClick={() => onSelect(catId)}
+        className={cn(
+          'relative inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full font-semibold transition-colors',
+          chipClassName,
+          truncate && 'min-w-0 max-w-[104px] px-1.5',
+          active ? activeChipClassName : 'text-foreground/75 hover:bg-muted hover:text-foreground',
+        )}
+      >
+        <PremiumDiamond className={cn('shrink-0 opacity-80', iconClassName)} />
+        <span className={truncate ? 'min-w-0 truncate' : 'max-w-full truncate'}>{t.label}</span>
+      </motion.button>
+    )
+  }
+
+  // Glue group: the LAST chip + the trailing node travel together through
+  // flex-wrap — a lone "+" on its own row is impossible.
+  const lastTopic = topics[topics.length - 1]
+  const glued = trailing ? (
+    <span
+      key={`glued-${lastTopic.id}`}
+      className="inline-flex shrink-0 items-center gap-1"
+    >
+      {renderChip(lastTopic)}
+      {trailing}
+    </span>
+  ) : null
 
   const chips = (
     <>
-      {topics.map((t) => {
-        const catId = `custom:${t.id}`
-        const active = activeCategory === catId
-        return (
-          <motion.button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            whileTap={{ scale: 0.94 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            onClick={() => onSelect(catId)}
-            className={cn(
-              'relative inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full font-semibold transition-colors',
-              chipClassName,
-              truncate && 'min-w-0 max-w-[104px] px-1.5',
-              active ? activeChipClassName : 'text-foreground/75 hover:bg-muted hover:text-foreground',
-            )}
-          >
-            <PremiumDiamond className={cn('shrink-0 opacity-80', iconClassName)} />
-            <span className={truncate ? 'min-w-0 truncate' : 'max-w-full truncate'}>{t.label}</span>
-          </motion.button>
-        )
-      })}
+      {topics.slice(0, trailing ? -1 : undefined).map(renderChip)}
+      {trailing ? glued : null}
     </>
   )
 

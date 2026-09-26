@@ -67,7 +67,10 @@ export async function POST(req: NextRequest) {
             existing.topics.length === 0 ||
             Date.now() - (existing.updatedAt || 0) > 3 * 3600 * 1000
           if (stale) {
-            await refreshCustomTopic(topicId, { aiFilter: false })
+            // Background mode: patient GDELT timings + the AI keyword
+            // fallback — nobody is waiting on this fill, it just needs to
+            // be warm before the chip gets tapped.
+            await refreshCustomTopic(topicId, { aiFilter: false, mode: 'background' })
           }
         } catch {}
       })
