@@ -319,3 +319,21 @@ Stage Summary:
 - The subscription tier model is LIVE and verified end-to-end: free/premium/ultra with country-localised pricing, accounts, test-mode payments (Stripe-ready via env), custom subtopics (555-catalog + AI factory + GDELT feeds + cron AI filter), archive-search gating, AI email digest, gradient themes, personal feature flags, ultra API + article export, the /debug monetization switch (one click back to the OG donation site) and the /debug subscription manager with guest-code grants.
 - To take REAL payments: set STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (+ webhook endpoint /api/subscription/webhook). For real emails: RESEND_API_KEY + DIGEST_FROM_EMAIL. For Google/Apple sign-in: GOOGLE_CLIENT_ID/SECRET, APPLE_* — until then those buttons explain themselves, and checkout runs in clearly-labelled TEST MODE.
 - Owner follow-ups: watch one real subscription after Stripe setup; the archive gate arms itself when stories cross 91 days; add the digest cron (every 30 min: /api/cron/digest?secret=… — same secret as refresh-all); rotate the GitHub PAT if not done yet (this session could not push — token not stored by design).
+
+---
+Task ID: session32
+Agent: main (Super Z)
+Task: Push the committed subscription tier model (add3f72) to GitHub for Vercel deployment (user supplied the GitHub PAT).
+
+Work Log:
+- Verified local state: subscription feature commit add3f72 (57 files, 6800 insertions) sitting on top of 4e1dff5 (session30), already fully implemented + e2e-verified in session31.
+- Found a NEW phantom auto-snapshot commit da9d884 on top of add3f72 (UUID message): test screenshots, download/ artifacts, .zscripts, regenerated apple-launch PNGs, and 61 src/ files with mode-only changes (0 insertions/deletions — verified). No content changes.
+- Confirmed apple-launch assets are already tracked in add3f72 (53 files) — nothing in the phantom commit was needed for production.
+- Dropped the phantom: git reset --mixed add3f72 (mode noise + artifacts left untracked locally).
+- Pushed add3f72 -> origin/main with the user-supplied PAT (fast-forward 4e1dff5..add3f72).
+- VERIFIED via git ls-remote: remote refs/heads/main = add3f72021abecf6c1856ea3f66fd1945cff57db = local HEAD. Vercel auto-deploy triggered.
+
+Stage Summary:
+- Subscription tier model is now pushed to GitHub main; Vercel deployment in progress.
+- Not stored in any file per policy (token only used inline in push commands).
+- Standing reminder for owner: the PAT was pasted in chat again — rotate it at github.com/settings/tokens when convenient.
