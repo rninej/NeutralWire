@@ -284,14 +284,27 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
   // ── Adaptive font: step down until neither row overflows ──
   // Each step re-renders pre-paint (layout effect), so an overflowing
   // layout is never actually shown to the user.
+  //
+  // MEASUREMENT: compare each row's FLOW children (pills, divider, the
+  // + chip) against the row's right edge via getBoundingClientRect —
+  // NOT row.scrollWidth. scrollWidth also counts the + chip's
+  // absolutely-positioned golden-diamond corner badge, which pokes ~4px
+  // past the row's right edge BY DESIGN at every font size — the old
+  // scrollWidth check read that overhang as permanent overflow and
+  // floored the stepper at 8px ("the subtopics went mini"). Flow-rect
+  // measurement is immune to any badge/hint overhang and measures only
+  // real pill content.
   const adapt = React.useCallback(
     (step: number) => {
       if (wide) return
       if (step >= MAXIPILL_FONT_STEPS.length - 1) return // floor reached — accept it
-      const rows = [row1Ref.current, row2Ref.current]
-      const overflows = rows.some(
-        (r) => r !== null && r.scrollWidth > r.clientWidth + 2,
-      )
+      const overflows = [row1Ref.current, row2Ref.current].some((r) => {
+        if (!r) return false
+        const rowRight = r.getBoundingClientRect().right
+        return Array.from(r.children).some(
+          (c) => c.getBoundingClientRect().right - rowRight > 2,
+        )
+      })
       if (!overflows) return // both rows fit — keep this size
       setFontStep(step + 1)
     },

@@ -331,6 +331,11 @@ function offsetFor(sp: URLSearchParams): number {
  * Custom subtopic feed handler — cache-first, one synchronous fill on miss.
  * Same response shape as the main categories so the client feed code,
  * skeletons and infinite scroll all work unchanged.
+ *
+ * A fill that yields ZERO topics (GDELT 429 / cold failure) is returned
+ * with `pending: true` and Cache-Control no-store — the empty result is
+ * never CDN-cached, so a retry a minute later genuinely re-runs the fill
+ * instead of serving a cached dead end for 5 minutes.
  */
 async function handleCustomTopic(
   topicId: string,
@@ -343,8 +348,10 @@ async function handleCustomTopic(
   let feed = await readCustomFeed(topicId)
   let filledNow = false
 
-  if (!feed || !Array.isArray(feed.topics)) {
-    // One synchronous first fill (GDELT-only; the cron's AI pass refines it).
+  if (!feed || !Array.isArray(feed.topics) || feed.topics.length === 0) {
+    // One synchronous first fill (GDELT-only; the cron's AI pass refines
+    // it). Also re-fills a cached-but-empty feed (an earlier failed fill
+    // writes nothing, so this is usually a plain cache miss).
     try {
       feed = (await refreshCustomTopic(topicId, { aiFilter: false })) || null
       filledNow = true
@@ -358,12 +365,16 @@ async function handleCustomTopic(
     .slice(offset, offset + limit)
     .map((t) => (slim ? { ...t, articles: [] } : t))
 
+  // The fill ran but produced nothing → the topic is still "gathering".
+  const pending = filledNow && topics.length === 0
+
   const res = NextResponse.json({
     category: `custom:${topicId}`,
     country: '',
     countryName: '',
     topics,
     cached: !filledNow,
+    pending,
     fresh: true,
     refreshing: false,
     sourceCount: feed?.sourceCount ?? 0,
@@ -371,7 +382,12 @@ async function handleCustomTopic(
     fetchedAt: feed?.updatedAt ? new Date(feed.updatedAt).toISOString() : new Date().toISOString(),
     ms: Date.now() - t0,
   })
-  res.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600')
+  res.headers.set(
+    'Cache-Control',
+    pending
+      ? 'no-store' // never CDN-cache a failed fill — retries must re-run it
+      : 'public, s-maxage=300, stale-while-revalidate=600',
+  )
   return res
 }
 

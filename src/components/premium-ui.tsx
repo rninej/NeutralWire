@@ -28,6 +28,7 @@ import {
   UPGRADE_OPEN_EVENT,
   UPGRADE_CLOSE_EVENT,
   SUBSCRIPTION_CHANGED_EVENT,
+  dispatchPremiumWelcome,
   getClientDeviceId,
   type UpgradeFeature,
 } from '@/lib/subscription-client'
@@ -246,10 +247,15 @@ export function UpgradeDialog() {
         return
       }
       if (data.mode === 'test') {
-        // Test mode: tier granted instantly — refresh state + celebrate.
+        // Test mode: tier granted instantly — refresh state, close this
+        // dialog and hand the stage to the PremiumWelcome guided tour
+        // (add subtopics, pick a header style, themes…). The provider's
+        // tier-increase detection fires the welcome event too — the
+        // welcome sheet guards against double-open itself.
         await sub.refresh()
         window.dispatchEvent(new CustomEvent(SUBSCRIPTION_CHANGED_EVENT))
-        setSuccess(`You're ${tier === 'ultra' ? 'Ultra' : 'Premium'}! (test mode)`)
+        setOpen(false)
+        dispatchPremiumWelcome(tier)
       } else if (data.url) {
         window.location.href = data.url
       }

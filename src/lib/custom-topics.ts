@@ -92,23 +92,42 @@ function fetchGdelt(keywords: string[], maxRecords = 200): Promise<GdeltArticle[
   const kw = keywords.slice(0, 8).map((k) => `"${k.replace(/"/g, '')}"`)
   const query = `(${kw.join(' OR ')}) sourcelang:english`
   const url = `${GDELT_API_URL}?query=${encodeURIComponent(query)}&mode=ArtList&maxrecords=${maxRecords}&format=json&sort=DateDesc&timewindow=1d`
-  return fetch(url, {
-    signal: AbortSignal.timeout(20000),
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; NeutralWireBot/1.0; +https://neutralwire.org)',
-      Referer: 'https://neutralwire.org',
-      Accept: 'application/json',
-    },
-    cache: 'no-store',
-  })
-    .then(async (res) => {
-      if (!res.ok) return []
-      const ct = res.headers.get('content-type') || ''
-      if (!ct.includes('json')) return []
-      const data = (await res.json()) as { articles?: GdeltArticle[] }
-      return data.articles || []
+
+  const attempt = (timeoutMs: number) =>
+    fetch(url, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; NeutralWireBot/1.0; +https://neutralwire.org)',
+        Referer: 'https://neutralwire.org',
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
     })
-    .catch(() => [])
+      .then(async (res) => {
+        if (!res.ok) return { ok: false as const, status: res.status }
+        const ct = res.headers.get('content-type') || ''
+        if (!ct.includes('json')) return { ok: false as const, status: res.status }
+        const data = (await res.json()) as { articles?: GdeltArticle[] }
+        return { ok: true as const, articles: data.articles || [] }
+      })
+      .catch(() => ({ ok: false as const, status: 0 }))
+
+  return (async () => {
+    // GDELT asks for "one request every 5 seconds" and answers 429 (or a
+    // slow non-JSON body) when an egress IP overshoots — serverless IPs
+    // are shared, so this happens in production too. One polite retry
+    // after a 5.5s backoff recovers most of those; the caller's UX no
+    // longer depends on it because subscribe-time fills run in the
+    // background (after()) while /api/news keeps a synchronous fallback.
+    // 12s per attempt keeps the worst case (429 → 5.5s backoff → retry)
+    // inside /api/news's 30s maxDuration for the synchronous fallback fill.
+    const first = await attempt(12000)
+    if (first.ok) return first.articles
+    if (first.status !== 429 && first.status !== 503) return []
+    await new Promise((r) => setTimeout(r, 5500))
+    const second = await attempt(12000)
+    return second.ok ? second.articles : []
+  })()
 }
 
 // ── Conversion + scoring (mirrors gdelt-aggregator patterns) ────────────

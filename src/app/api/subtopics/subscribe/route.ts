@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { after } from 'next/server'
 import { firebasePatch } from '@/lib/firebase-server'
 import { getRequesterTier, readSession, getAccountById } from '@/lib/subscriptions'
-import { subscribeCustomTopic, unsubscribeCustomTopic } from '@/lib/custom-topics'
+import {
+  subscribeCustomTopic,
+  unsubscribeCustomTopic,
+  readCustomFeed,
+  refreshCustomTopic,
+} from '@/lib/custom-topics'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -17,6 +23,11 @@ export const maxDuration = 30
  * • 'add' bumps customSubscriptions/<topicId>.count — this is what makes
  *   the refresh cron keep the topic's feed warm (topics with 0 followers
  *   cost nothing).
+ * • 'add' ALSO warms the feed right now, in the background (after()):
+ *   catalog topics previously had NO first fill — the user tapped their
+ *   new chip and waited 12s only to get an empty feed (GDELT cold start
+ *   or a 429). Filling post-response means the feed is usually warm by
+ *   the time the picker closes and the chip is tapped.
  * • Logged-in accounts ALSO persist their topic list on the account
  *   (prefs.customSubtopics) so it follows them across devices.
  */
@@ -43,6 +54,23 @@ export async function POST(req: NextRequest) {
 
     if (action === 'add') {
       await subscribeCustomTopic(topicId)
+      // Background first fill (post-response). Only when the cached feed
+      // is missing or stale — a healthy feed costs nothing. Failures are
+      // silent: the cron's rotation + /api/news's synchronous fallback
+      // remain the safety net.
+      after(async () => {
+        try {
+          const existing = await readCustomFeed(topicId)
+          const stale =
+            !existing ||
+            !Array.isArray(existing.topics) ||
+            existing.topics.length === 0 ||
+            Date.now() - (existing.updatedAt || 0) > 3 * 3600 * 1000
+          if (stale) {
+            await refreshCustomTopic(topicId, { aiFilter: false })
+          }
+        } catch {}
+      })
     } else {
       await unsubscribeCustomTopic(topicId)
     }

@@ -13,6 +13,7 @@ import {
   Heart,
   WifiOff,
   ChevronRight,
+  Sparkles,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +29,7 @@ import {
 } from '@/lib/news-sources'
 import { SubscriptionProvider, useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
 import { UpgradeDialog, PremiumDiamond } from '@/components/premium-ui'
+import { PremiumWelcome } from '@/components/premium-welcome'
 import { getCustomTopics, CUSTOM_TOPICS_EVENT } from '@/lib/custom-topics-client'
 import { getMyFlags, MY_FLAGS_EVENT } from '@/components/subscription-account'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -258,6 +260,10 @@ interface NewsResponse {
   cached: boolean
   fresh?: boolean
   staleMs?: number
+  /** Custom-subtopic feeds: true when the first fill produced nothing
+   *  (GDELT cold/429) — the client shows a "gathering stories" state
+   *  instead of a dead empty feed. */
+  pending?: boolean
   fetchedAt: string
   sourceCount: number
   articleCount?: number
@@ -641,6 +647,9 @@ export default function Home({
   const [isCached, setIsCached] = useState(false)
   const [isFresh, setIsFresh] = useState(true)
   const [articleCount, setArticleCount] = useState(0)
+  /** Custom-subtopic feed just tried its first fill and got nothing —
+   *  show "gathering stories" (with auto-retry) instead of an empty feed. */
+  const [topicPending, setTopicPending] = useState(false)
   const [minCoverage, setMinCoverage] = useState(1)
 
   // --- Infinite scroll state ---
@@ -1979,6 +1988,7 @@ export default function Home({
       lastFetchCatRef.current = cat
       if (!silent) setLoading(true)
       setError(null)
+      setTopicPending(false)
       try {
         const params = new URLSearchParams({
           category: cat,
@@ -2043,6 +2053,7 @@ export default function Home({
         setIsCached(!!json.cached)
         setIsFresh(json.fresh !== false)
         setArticleCount(json.articleCount ?? 0)
+        setTopicPending(Boolean(json.pending))
         // NOTE: json.ms / json.refreshing are intentionally ignored here —
         // the cache-freshness badge was removed from the header (users
         // found it noisy); the server refreshes stale caches in the
@@ -2739,6 +2750,41 @@ export default function Home({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
               >
+              {topicPending && isCustomCategory(category) ? (
+                /* Custom subtopic whose first GDELT fill produced nothing
+                   (cold start / rate limit). The subscribe-time background
+                   fill + the cron rotation keep warming it — tell the user
+                   that instead of a dead "no topics" end. */
+                <Card className="flex flex-col items-center gap-3 p-10 text-center">
+                  <motion.div
+                    animate={{ rotate: [0, 12, -8, 0] }}
+                    transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
+                  >
+                    <Sparkles className="h-7 w-7 text-amber-500" />
+                  </motion.div>
+                  <div>
+                    <div className="font-semibold text-foreground">
+                      Gathering stories for{' '}
+                      {customTopics.find((t) => `custom:${t.id}` === category)?.label ||
+                        'your topic'}
+                    </div>
+                    <div className="mt-1 max-w-sm text-sm text-muted-foreground">
+                      We scan thousands of outlets for this subtopic — the first fetch
+                      can take a minute. Check back shortly, or tap below to try now.
+                    </div>
+                  </div>
+                  <Button
+                    onClick={() => {
+                      setTopicPending(false)
+                      fetchData(category, minCoverage, country)
+                    }}
+                    variant="outline"
+                    size="sm"
+                  >
+                    <RefreshCw className="h-4 w-4" /> Try now
+                  </Button>
+                </Card>
+              ) : (
               <Card className="flex flex-col items-center gap-2 p-12 text-center text-muted-foreground">
                 <motion.div
                   initial={{ scale: 0.7, opacity: 0 }}
@@ -2753,6 +2799,7 @@ export default function Home({
                     : 'No topics found. Try a different category or lower the minimum coverage filter.'}
                 </div>
               </Card>
+              )}
               </motion.div>
             ) : view === 'columns' ? (
               <BiasColumns topics={filteredTopics} />
@@ -2991,6 +3038,22 @@ export default function Home({
       <AnimatePresence>
         {userPageOpen && <UserPage onClose={() => setUserPageOpen(false)} />}
       </AnimatePresence>
+
+      {/* Post-upgrade guided tour — opens the moment a visitor's tier
+          increases (checkout grant, /debug grant, Stripe return param).
+          Every step's button does the thing: opens the subtopic picker
+          right here, or jumps the Account sheet to the matching tab. */}
+      <PremiumWelcome
+        onOpenAccount={(tab) => {
+          // UserPage reads its initial tab from this session key on
+          // mount — set it BEFORE opening so the sheet lands on the
+          // step's section.
+          try {
+            sessionStorage.setItem('neutralwire:account-tab', tab)
+          } catch {}
+          setUserPageOpen(true)
+        }}
+      />
 
       {/* Detail overlay — wrapped in AnimatePresence so the TopicDetail
           can run its exit animation (slide-down + fade-out) when closing. */}

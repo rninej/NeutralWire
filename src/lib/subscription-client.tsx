@@ -90,6 +90,18 @@ export const UPGRADE_CLOSE_EVENT = 'neutralwire:upgrade-close'
 /** Fired after login/checkout/logout so every consumer re-reads state. */
 export const SUBSCRIPTION_CHANGED_EVENT = 'neutralwire:subscription-changed'
 
+/** Fired when the visitor's tier just INCREASED (checkout grant, /debug
+ * grant, Stripe return) — PremiumWelcome listens and opens the guided
+ * tour (add subtopics, pick a header style, themes…). */
+export const PREMIUM_WELCOME_EVENT = 'neutralwire:premium-welcome'
+
+export function dispatchPremiumWelcome(tier: Tier): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(PREMIUM_WELCOME_EVENT, { detail: { tier } }))
+}
+
+const TIER_RANK: Record<Tier, number> = { free: 0, premium: 1, ultra: 2 }
+
 export type UpgradeFeature =
   | 'customSubtopics'
   | 'archiveSearchOld'
@@ -131,6 +143,16 @@ export function SubscriptionProvider({
     model: initialModel || 'subscription',
   })
 
+  // Tier-increase detection for the PremiumWelcome guided tour. The FIRST
+  // completed fetch establishes the baseline (a visitor who is ALREADY
+  // premium on load must not get a welcome popup); every later refresh
+  // that lands a HIGHER tier dispatches PREMIUM_WELCOME_EVENT. Covers
+  // in-dialog checkout grants, /debug grants and sign-ins to a
+  // higher-tier account. The Stripe redirect return is handled separately
+  // by PremiumWelcome via the ?subscribed=1&tier= URL param (page reload →
+  // the upgrade IS the baseline fetch).
+  const seenTierRef = React.useRef<Tier | null>(null)
+
   const refresh = React.useCallback(async () => {
     try {
       const deviceId = getClientDeviceId()
@@ -139,6 +161,17 @@ export function SubscriptionProvider({
       if (!res.ok) throw new Error('failed')
       const data = (await res.json()) as Partial<SubscriptionState>
       setState((prev) => ({ ...prev, ...data, loading: false }))
+      const newTier = data.tier || 'free'
+      const prevTier = seenTierRef.current
+      seenTierRef.current = newTier
+      if (
+        prevTier !== null &&
+        newTier !== prevTier &&
+        TIER_RANK[newTier] > TIER_RANK[prevTier] &&
+        (data.model || 'subscription') === 'subscription'
+      ) {
+        dispatchPremiumWelcome(newTier)
+      }
     } catch {
       setState((prev) => ({ ...prev, loading: false }))
     }
