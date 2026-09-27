@@ -462,3 +462,24 @@ Stage Summary:
 - Subscribing is one decision: pick the tier on Ko-fi, pay with your NeutralWire email, done — the code is a fallback for different-email payers, and the panel confirms the unlock the moment the webhook lands.
 - Newsletters actually send now: Resend key baked in, from-address ladder with automatic upgrade once the domain verifies, and the digest cron runs off the visitors' user-cron (no external service needed). OWNER ACTIONS: (1) verify neutralwire.org at resend.com/domains (add the DNS records Resend shows — until then only the owner's own address can receive); (2) keep the Ko-fi webhook pointed at https://neutralwire.org/api/kofi/webhook; (3) rotate the Resend key + GitHub PAT when convenient (both have appeared in chat).
 - Known backlog: Google index SSR, sitemap polish, /story OG images; notification icon intermittent, subtopic scroll prefetch, synonym dedup.
+---
+Task ID: session39
+Agent: main (Super Z)
+Task: Owner follow-up on session38 — (1) the premium mark must be OUTLINES only (no gold plates, not a kite); (2) collapse pay-panel options 2 and 3 by default on the Ko-fi redirect; (3) point the Ko-fi subscription link at https://ko-fi.com/neutralwire/tiers.
+
+Work Log:
+- State check: session38 pushed (remote d650c01 = local); dropped a local-only ghost snapshot (verify PNGs) with git reset --mixed.
+- OUTLINE GEM: PremiumDiamond redrawn as pure STROKES — the outer silhouette (flat table, crown flaring to the wide girdle, pavilion to one point) plus the inner facet LINES (girdle band, crown edges, pavilion edges), strokeWidth 2, round joins, fill none. No opacity-stepped planes, no filled plates, not a kite. One component still feeds every premium surface (12 consumer files).
+- PAY PANEL SIMPLIFIED: KofiCheckoutPanel options 2 (different-email claim code) and 3 (waiting/check) now start COLLAPSED as compact chevron toggle rows — the panel leads with the single zero-effort path (option 1 · account email + the pink Continue button). Expanding reveals the code / finder + "I've paid — check now"; the 12s background poll runs either way and the granted card still takes over on success. Same component serves the UpgradeDialog and /subscribe.
+- KOFI URL: KOFI_PAGE_URL (server subscriptions.ts + client mirror subscription-client.tsx) → https://ko-fi.com/neutralwire/tiers, so "Continue to Ko-fi" lands supporters directly on the membership tier picker; checkout route + comments updated in step.
+- BUILD UNBLOCK: next build failed locally on /api/push/schedule (module-scope webpush.setVapidDetails with empty VAPID_PRIVATE_KEY — the key is env-only now). Applied the same if (VAPID_PRIVATE_KEY) guard pushify.ts already uses; sending routes set details lazily, Vercel always has the key.
+- VERIFIED: tsc 0 errors; next build green. Browser E2E on :3000 after hot reload: /subscribe → sign-up → Get Premium → pay panel shows option 1 only, options 2/3 collapsed with chevrons, claim code hidden until expanded (then NW-3D3CU8 visible + finder + check-now), pink button href exactly https://ko-fi.com/neutralwire/tiers. VLM checks: standalone diamond (10px→64px, dark+light) = pure line art, cut-gem silhouette, inner facets visible, NOT a kite, legible at 10px; live tier cards = golden outlines, cut-gem shape, no defects; collapsed panel = one main path, compact chevron rows, no code, no glitches. E2E scratch swept (scripts/session39-cleanup.ts: 1 account + 1 claim code).
+- Committed 7 files (+~200/−~80) after dropping the ghost snapshot; pushed with the PAT; ls-remote verified (d454b7b).
+
+Stage Summary:
+- The premium mark everywhere is a golden OUTLINE gem — outer edges + inner facet lines as strokes, zero filled plates.
+- The Ko-fi redirect shows ONE clear path (email + Continue to Ko-fi); the claim-code and waiting tools fold away behind chevrons but stay one tap away.
+- Continue to Ko-fi now opens https://ko-fi.com/neutralwire/tiers directly (both the dialog and /subscribe flows).
+- Local builds no longer require VAPID_PRIVATE_KEY (guarded like pushify.ts; production unchanged).
+- Reminders carried forward: rotate the GitHub PAT + Resend key when convenient (both appeared in chat); Ko-fi webhook stays pointed at https://neutralwire.org/api/kofi/webhook.
+- Known backlog: Google index SSR, sitemap polish, /story OG images; notification icon intermittent, subtopic scroll prefetch, synonym dedup.
