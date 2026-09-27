@@ -40,6 +40,7 @@ import {
   SubscriptionAccountSection,
   DigestPrefsCard,
   PersonalFlagsCard,
+  NewsletterEmailCard,
   OPEN_AUTH_EVENT,
 } from '@/components/subscription-account'
 import { PremiumBadge, PremiumDiamond } from '@/components/premium-ui'
@@ -511,30 +512,47 @@ export function UserPage({ onClose }: UserPageProps) {
                   </Card>
                 ) : null}
 
-                {/* Identity — compact single row */}
+                {/* Identity — compact single row. Shows the REAL account
+                    (email + Account badge) when signed in; the guest name
+                    only when actually browsing guest — the card used to
+                    hardcode "Guest — no login" even AFTER login, which
+                    read as "my login didn't work". */}
                 <Card className="p-4">
                   <div className="flex items-center gap-3">
                     <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
-                      <UserCircle className="h-5 w-5" />
+                      {sub.loggedIn && sub.account?.email ? (
+                        <Mail className="h-5 w-5" />
+                      ) : (
+                        <UserCircle className="h-5 w-5" />
+                      )}
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wider">
-                        Signed in as
+                        {sub.loggedIn ? 'Signed in as' : 'Browsing as'}
                       </div>
-                      <div className="truncate text-lg font-bold leading-tight">{guestName}</div>
+                      <div className="truncate text-lg font-bold leading-tight">
+                        {sub.loggedIn && sub.account?.email ? sub.account.email : guestName}
+                      </div>
                     </div>
                     <div className="hidden sm:block">
-                      <Badge variant="secondary" className="text-[10px]">Guest — no login</Badge>
+                      <Badge variant="secondary" className="text-[10px]">
+                        {sub.loggedIn ? 'Account' : 'Guest — no login'}
+                      </Badge>
                     </div>
                   </div>
                   <p className="mt-2.5 text-xs leading-relaxed text-muted-foreground">
-                    Your guest ID keeps your feed, streaks, and referrals on this
-                    device — no account, no email, nothing personal.
+                    {sub.loggedIn
+                      ? 'Your account keeps your subscription, subtopics and newsletter on every device you sign in on.'
+                      : 'Your guest ID keeps your feed, streaks, and referrals on this device — no account, no email, nothing personal.'}
                   </p>
                 </Card>
 
                 {/* Subscription — tier card / sign in & out (the tier model) */}
                 <SubscriptionAccountSection />
+
+                {/* Newsletter delivery address — the custom email for the
+                    AI email newsletter (defaults to the account email). */}
+                <NewsletterEmailCard />
 
                 {/* Refer others — compact */}
                 <Card className="p-4">

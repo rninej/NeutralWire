@@ -17,7 +17,7 @@
 
 import * as React from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Check, Loader2, Mail, Lock, LogOut, Sparkles } from 'lucide-react'
+import { X, Check, Loader2, Mail, Lock, LogOut, Sparkles, ExternalLink, Copy } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -30,15 +30,17 @@ import {
   SUBSCRIPTION_CHANGED_EVENT,
   dispatchPremiumWelcome,
   getClientDeviceId,
+  KOFI_PAGE_URL,
   type UpgradeFeature,
 } from '@/lib/subscription-client'
 
 // ── The golden diamond ──────────────────────────────────────────────────
 
-/** The global premium mark: a brilliant-cut golden DIAMOND — flat crown
- *  top, wide girdle, pointed pavilion — faceted via layered opacities so
- *  it reads as cut stone even at 10px. One symbol everywhere a premium
- *  feature appears (header button, + chip badge, badges, tier cards). */
+/** The global premium mark — the CLASSIC cut kite with visible facet
+ *  LINES through it (the owner-preferred original): four golden planes
+ *  whose opacity steps draw the internal edges, so it reads as a drawn,
+ *  lined gem rather than a filled stone — even at 10px. One symbol
+ *  everywhere a premium feature appears. */
 export function PremiumDiamond({ className }: { className?: string }) {
   return (
     <span
@@ -49,14 +51,36 @@ export function PremiumDiamond({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <svg viewBox="0 0 24 24" fill="currentColor" className="h-full w-full drop-shadow-[0_0_1px_rgba(245,158,11,0.6)]">
-        {/* Crown — flat table edge widening out to the girdle */}
-        <path d="M7.2 3.5h9.6L14.7 9H9.3L7.2 3.5Z" opacity="0.95" />
-        <path d="M7.2 3.5L3 9h6.3L7.2 3.5Z" opacity="0.8" />
-        <path d="M16.8 3.5L21 9h-6.3l2.1-5.5Z" opacity="0.8" />
-        {/* Pavilion — facets converging to the culet point */}
-        <path d="M3 9h6.3L12 20.5 3 9Z" opacity="0.85" />
-        <path d="M9.3 9h5.4L12 20.5 9.3 9Z" />
-        <path d="M14.7 9H21L12 20.5 14.7 9Z" opacity="0.85" />
+        <path d="M12 2L15 6.5H9L12 2Z" />
+        <path d="M9 6.5L4.5 12L9 17.5L12 13L9 6.5Z" opacity="0.85" />
+        <path d="M15 6.5L19.5 12L15 17.5L12 13L15 6.5Z" opacity="0.85" />
+        <path d="M9 17.5L12 22L15 17.5L12 15.5L9 17.5Z" opacity="0.9" />
+      </svg>
+    </span>
+  )
+}
+
+/** The ULTRA mark — a meteor shower: three golden streaks raining at
+ *  staggered angles, each with a bright head and a fading tail, plus a
+ *  couple of far sparkles and a landing shimmer. Used on the Ultra tier
+ *  card wherever plans are shown (upgrade dialog, /subscribe, Account). */
+export function MeteorShower({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn('inline-flex items-center justify-center text-amber-500', className)}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 24 24" fill="none" className="h-full w-full">
+        <path d="M4.2 4.8l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5.5-1.2Z" fill="currentColor" opacity="0.7" />
+        <path d="M19.8 3.4l.35.85.85.35-.85.35-.35.85-.35-.85-.85-.35.85-.35.35-.85Z" fill="currentColor" opacity="0.55" />
+        <path d="M12.8 2.6l1.9 1.9-7.2 7.2-1.9-1.9 7.2-7.2Z" fill="currentColor" opacity="0.45" />
+        <circle cx="14.4" cy="4.2" r="1.7" fill="currentColor" />
+        <path d="M18.6 7.1l1.55 1.55-4.9 4.9-1.55-1.55 4.9-4.9Z" fill="currentColor" opacity="0.35" />
+        <circle cx="19.8" cy="8.3" r="1.3" fill="currentColor" opacity="0.95" />
+        <path d="M9.9 10.9l1.3 1.3-5.1 5.1-1.3-1.3 5.1-5.1Z" fill="currentColor" opacity="0.3" />
+        <circle cx="10.9" cy="11.9" r="1.05" fill="currentColor" opacity="0.85" />
+        <path d="M5.2 18.6h6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" opacity="0.5" />
+        <path d="M8 20.6h7.4" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" opacity="0.35" />
       </svg>
     </span>
   )
@@ -134,6 +158,8 @@ const ULTRA_FEATURES = [
   'Export & download articles',
 ]
 
+export { FREE_FEATURES, PREMIUM_FEATURES, ULTRA_FEATURES }
+
 // ── The dialog ──────────────────────────────────────────────────────────
 
 type AuthMode = 'choose' | 'signin' | 'register'
@@ -152,6 +178,10 @@ export function UpgradeDialog() {
   const [error, setError] = React.useState<string | null>(null)
   const [success, setSuccess] = React.useState<string | null>(null)
   const [selectedTier, setSelectedTier] = React.useState<TierId>('premium')
+  // ── Ko-fi checkout state (mode 'kofi' replaces the old test/stripe
+  //    modes — the claim-code panel below renders while a payment is
+  //    outstanding) ──
+  const [kofi, setKofi] = React.useState<{ tier: 'premium' | 'ultra'; code: string; url: string } | null>(null)
 
   React.useEffect(() => {
     const onOpen = (e: Event) => {
@@ -165,6 +195,7 @@ export function UpgradeDialog() {
       setOpen(true)
       setSuccess(null)
       setError(null)
+      setKofi(null)
       // Signed-in users skip straight to checkout; logged-out see the
       // account step first (the spec: an account is required to subscribe).
       setAuthMode(sub.loggedIn ? 'choose' : 'choose')
@@ -240,6 +271,7 @@ export function UpgradeDialog() {
         body: JSON.stringify({ tier, deviceId: deviceId || undefined }),
       })
       const data = (await res.json()) as {
+        code?: string
         url?: string
         mode?: string
         error?: string
@@ -254,18 +286,12 @@ export function UpgradeDialog() {
         setError(data.error || 'Checkout failed.')
         return
       }
-      if (data.mode === 'test') {
-        // Test mode: tier granted instantly — refresh state, close this
-        // dialog and hand the stage to the PremiumWelcome guided tour
-        // (add subtopics, pick a header style, themes…). The provider's
-        // tier-increase detection fires the welcome event too — the
-        // welcome sheet guards against double-open itself.
-        await sub.refresh()
-        window.dispatchEvent(new CustomEvent(SUBSCRIPTION_CHANGED_EVENT))
-        setOpen(false)
-        dispatchPremiumWelcome(tier)
-      } else if (data.url) {
-        window.location.href = data.url
+      // Ko-fi flow: show the claim-code panel — the supporter pays on
+      // Ko-fi and the webhook grants the tier (code or email match). The
+      // panel polls + listens for the grant and hands the stage to the
+      // PremiumWelcome guided tour the moment it lands.
+      if (data.mode === 'kofi' && data.code) {
+        setKofi({ tier, code: data.code, url: data.url || KOFI_PAGE_URL })
       }
     } catch {
       setError('Network error — try again.')
@@ -369,6 +395,20 @@ export function UpgradeDialog() {
               </div>
             ) : (
               <>
+                {/* ── Ko-fi pay panel: claim code + waiting state ── */}
+                {kofi ? (
+                  <KofiCheckoutPanel
+                    tier={kofi.tier}
+                    code={kofi.code}
+                    url={kofi.url}
+                    onDone={() => {
+                      setKofi(null)
+                      setOpen(false)
+                    }}
+                    compact
+                  />
+                ) : (
+                  <>
                 {/* ── Tier cards: all three levels, side by side on sm+,
                     stacked full-width rows on mobile (no squeezed 3-column
                     cramming on a 390px screen). Free shows what stays
@@ -427,9 +467,22 @@ export function UpgradeDialog() {
                         <div className="grid grid-cols-2 gap-2">
                           <Button
                             variant="outline"
-                            onClick={() => {
-                              const url = `/api/auth/google?tier=${selectedTier}${deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ''}`
-                              window.location.href = url
+                            onClick={async () => {
+                              // Pre-check the OAuth route FIRST (the old
+                              // flow navigated blindly to a raw JSON 503
+                              // when Google env keys are missing — the
+                              // "popup button doesn't work" report).
+                              const res = await fetch(
+                                `/api/auth/google?tier=${selectedTier}`,
+                                { redirect: 'manual' },
+                              ).catch(() => null)
+                              // 503 = not configured; an opaque redirect
+                              // (status 0) means the OAuth flow IS live.
+                              if (!res || res.status === 503) {
+                                setError('Google Sign-In is not configured yet — use email for now.')
+                                return
+                              }
+                              window.location.href = `/api/auth/google?tier=${selectedTier}${deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ''}`
                             }}
                           >
                             <GoogleG className="h-4 w-4" /> Google
@@ -439,8 +492,9 @@ export function UpgradeDialog() {
                             onClick={async () => {
                               const res = await fetch(
                                 `/api/auth/apple?tier=${selectedTier}`,
+                                { redirect: 'manual' },
                               ).catch(() => null)
-                              if (res && res.status === 503) {
+                              if (!res || res.status === 503) {
                                 setError('Sign in with Apple is coming soon — use email for now.')
                               } else {
                                 window.location.href = `/api/auth/apple?tier=${selectedTier}`
@@ -511,10 +565,16 @@ export function UpgradeDialog() {
                 </Button>
 
                 <p className="mt-2 text-center text-[11px] text-muted-foreground">
-                  {sub.payments.provider === 'stripe'
-                    ? 'Secure checkout via Stripe. Cancel anytime.'
-                    : 'Test mode — payments activate once Stripe keys are configured. Everything else works.'}
+                  Payments via Ko-fi — cancel anytime.
                 </p>
+                <a
+                  href="/subscribe"
+                  className="mt-1 flex items-center justify-center gap-1 text-[11px] font-medium text-amber-600 hover:underline dark:text-amber-400"
+                >
+                  See the full plans page <ExternalLink className="h-3 w-3" />
+                </a>
+                  </>
+                )}
               </>
             )}
 
@@ -536,13 +596,228 @@ export function UpgradeDialog() {
   )
 }
 
+/** The Ko-fi pay panel — the middle step of the live checkout.
+ *
+ * Shown by the UpgradeDialog AND the /subscribe page after
+ * /api/subscription/checkout hands out a claim code. Three things at
+ * once: the code (copyable, to paste into the Ko-fi message box), the
+ * continue button, and a WAITING state that polls /api/kofi/claim so
+ * email-matched payments land automatically — the tier grant fires
+ * SUBSCRIPTION_CHANGED + PremiumWelcome from the provider the moment it
+ * lands. A “different email” field lets supporters claim payments made
+ * with an address that isn't their account email. */
+export function KofiCheckoutPanel({
+  tier,
+  code,
+  url,
+  onDone,
+  compact = false,
+}: {
+  tier: 'premium' | 'ultra'
+  code: string
+  url: string
+  /** Called once the grant is confirmed (panel shows a beat of success
+   *  first, then the caller closes/refreshes). */
+  onDone?: () => void
+  /** Dialog variant (tighter paddings). */
+  compact?: boolean
+}) {
+  const sub = useSubscription()
+  const [copied, setCopied] = React.useState(false)
+  const [checking, setChecking] = React.useState(false)
+  const [granted, setGranted] = React.useState<'premium' | 'ultra' | null>(null)
+  const [note, setNote] = React.useState<string | null>(null)
+  const [altEmail, setAltEmail] = React.useState('')
+  // The tier when the pay panel opened — the poll succeeds when the live
+  // tier RISES past it (or /api/kofi/claim lands an unclaimed payment).
+  const startTierRef = React.useRef<'free' | 'premium' | 'ultra'>(sub.tier)
+
+  const check = React.useCallback(
+    async (email?: string) => {
+      if (granted) return
+      setChecking(true)
+      try {
+        let grantTier: 'premium' | 'ultra' | null = null
+        let claimMsg: string | undefined
+        // 1) The claim sweep — catches payments matched by EMAIL only
+        //    (the webhook leaves those unclaimed for exactly this call).
+        try {
+          const res = await fetch('/api/kofi/claim', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(email ? { email } : {}),
+          })
+          const data = (await res.json()) as {
+            granted?: 'premium' | 'ultra' | null
+            message?: string
+            error?: string
+          }
+          if (data.granted) grantTier = data.granted
+          else if (email) claimMsg = data.message || data.error
+        } catch {}
+        // 2) The live tier — a CODE-matched payment is claimed by the
+        //    webhook itself (invisible to the sweep), so also re-read
+        //    /me and compare against the panel's starting tier.
+        let rose = false
+        try {
+          const me = (await fetch('/api/subscription/me', { cache: 'no-store' })) as Response
+          const meJson = (await me.json()) as { tier?: string }
+          const now = meJson.tier || 'free'
+          const start = startTierRef.current
+          rose =
+            (now === 'premium' && start === 'free') ||
+            (now === 'ultra' && (start === 'free' || start === 'premium'))
+          if (rose && !grantTier) grantTier = now === 'ultra' ? 'ultra' : 'premium'
+        } catch {}
+        if (grantTier) {
+          setGranted(grantTier)
+          await sub.refresh()
+          window.dispatchEvent(new CustomEvent(SUBSCRIPTION_CHANGED_EVENT))
+          dispatchPremiumWelcome(grantTier)
+          setTimeout(() => onDone?.(), 1400)
+        } else if (email && claimMsg) {
+          setNote(claimMsg)
+        }
+      } finally {
+        setChecking(false)
+      }
+    },
+    [granted, onDone, sub],
+  )
+
+  // Poll while the panel is open (the webhook usually lands the grant
+  // before the supporter even returns; the claim sweep catches the
+  // email-matched ones). Stops once granted.
+  React.useEffect(() => {
+    if (granted) return
+    const t = setInterval(() => void check(), 12000)
+    void check()
+    return () => clearInterval(t)
+  }, [check, granted])
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {}
+  }
+
+  if (granted) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className={cn(
+          'flex flex-col items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-center',
+          compact ? 'p-4' : 'p-6',
+        )}
+      >
+        {granted === 'ultra' ? (
+          <MeteorShower className="h-8 w-8" />
+        ) : (
+          <PremiumDiamond className="h-8 w-8" />
+        )}
+        <div className="text-base font-bold">{granted === 'ultra' ? 'Ultra' : 'Premium'} is live</div>
+        <p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
+          Payment received — welcome aboard. Adding your first subtopics, picking a header
+          style and themes is next.
+        </p>
+      </motion.div>
+    )
+  }
+
+  return (
+    <div className={cn('space-y-3', compact && 'space-y-2.5')}>
+      {/* The claim code — the instant-match path */}
+      <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-3">
+        <div className="text-xs font-semibold">1 · Copy your supporter code</div>
+        <button
+          type="button"
+          onClick={copy}
+          className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-amber-500/50 bg-background/70 py-2.5 transition-colors hover:bg-amber-500/10"
+          aria-label="Copy claim code"
+        >
+          <span className="font-mono text-lg font-bold tracking-[0.2em] text-amber-600 dark:text-amber-400">
+            {code}
+          </span>
+          {copied ? (
+            <Check className="h-4 w-4 text-emerald-500" />
+          ) : (
+            <Copy className="h-4 w-4 text-muted-foreground" />
+          )}
+        </button>
+      </div>
+
+      {/* Continue to Ko-fi */}
+      <div className="rounded-xl border p-3">
+        <div className="text-xs font-semibold">2 · Continue to Ko-fi and choose {tier === 'ultra' ? 'Ultra' : 'Premium'}</div>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          Paste the code into the message box when you pay (or simply pay with your account
+          email — either links the payment). {tier === 'ultra' ? 'Ultra' : 'Premium'} unlocks
+          automatically the moment the payment lands.
+        </p>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-pink-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-pink-600 active:scale-[0.98]"
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2Zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.07-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93Zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39Z" />
+          </svg>
+          Continue to Ko-fi
+          <ExternalLink className="h-3.5 w-3.5 opacity-80" />
+        </a>
+      </div>
+
+      {/* Waiting state — polls + manual sweep */}
+      <div className="rounded-xl border bg-muted/30 p-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          {checking ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+          )}
+          {checking ? 'Checking for your payment…' : '3 · Waiting for your payment'}
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <input
+            type="email"
+            value={altEmail}
+            onChange={(e) => setAltEmail(e.target.value)}
+            placeholder="Paid with a different email?"
+            className="min-w-0 flex-1 rounded-md border bg-background px-2.5 py-1.5 text-xs"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => altEmail.trim() && check(altEmail.trim())}
+            disabled={checking || !altEmail.trim()}
+          >
+            Find
+          </Button>
+        </div>
+        <button
+          type="button"
+          onClick={() => void check()}
+          className="mt-1.5 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Check with my account email
+        </button>
+        {note ? <p className="mt-1.5 text-[11px] text-muted-foreground">{note}</p> : null}
+      </div>
+    </div>
+  )
+}
+
 /** The 3-level tier card — Free / Premium / Ultra share one component.
  *
  * Mobile: a full-width row (name + price on one line, features in a
  * 2-column mini-grid underneath) so nothing ever crams. sm+: one of
  * three columns. `current` marks the visitor's plan; `highlight` is the
  * “most popular” ribbon on Premium. */
-function TierCard3({
+export function TierCard3({
   id,
   selected,
   current,
@@ -587,7 +862,7 @@ function TierCard3({
       {/* Header line — mark, name, badge; the check marks selection */}
       <div className="flex items-center gap-1.5">
         {ultra ? (
-          <PremiumDiamond className="h-4 w-4 shrink-0" />
+          <MeteorShower className="h-4 w-4 shrink-0" />
         ) : isFree ? (
           <Sparkles className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         ) : (

@@ -91,6 +91,10 @@ export interface DigestPrefs {
   freq: 'weekly' | 'daily' | '2x' | '3x'
   /** Base send hour (visitor-local, 0-23) for daily/weekly. */
   hour: number
+  /** Custom delivery address for the newsletter. When set, the digest is
+   *  sent HERE instead of the account email (mirrored into
+   *  digestSubscribers/<accountId>.email so the cron needs no changes). */
+  email?: string
 }
 
 export interface Account {
@@ -102,10 +106,14 @@ export interface Account {
   tier?: Tier
   tierSince?: number
   tierRenewsAt?: number
-  tierSource?: 'stripe' | 'manual' | 'test'
+  tierSource?: 'stripe' | 'kofi' | 'manual' | 'test'
   tierCancelAtEnd?: boolean
   stripeCustomerId?: string
   stripeSubscriptionId?: string
+  /** The Ko-fi supporter email this account's membership is linked to
+   *  (set by the Ko-fi webhook when a payment is claimed). Renewals match
+   *  on it. */
+  kofiEmail?: string
   createdAt: number
   timezone?: string
   devices?: Record<string, boolean>
@@ -260,6 +268,11 @@ export async function registerEmailAccount(
   await firebaseWrite(`accountIndex/${emailKey(norm)}`, { accountId })
   if (deviceId) {
     await firebasePatch(`devices/${deviceId}`, { accountId }).catch(() => {})
+    // A device-granted tier (the /debug guest grant) transfers to the
+    // first account created from that device — signing up must never
+    // read as "my Premium vanished".
+    const inherited = await inheritDeviceTier(accountId, deviceId)
+    if (inherited) account.tier = inherited
   }
   return { ok: true, accountId, account }
 }
@@ -284,12 +297,18 @@ export async function loginEmailAccount(
   if (!verifyPassword(password, account.passSalt, account.passHash)) {
     return { ok: false, error: 'Incorrect password.' }
   }
+  const accountId = accountIdForEmail(norm)
   // Opportunistically link the current device to the account.
   if (deviceId) {
-    await firebasePatch(`accounts/${accountIdForEmail(norm)}/devices`, { [deviceId]: true }).catch(() => {})
-    await firebasePatch(`devices/${deviceId}`, { accountId: accountIdForEmail(norm) }).catch(() => {})
+    await firebasePatch(`accounts/${accountId}/devices`, { [deviceId]: true }).catch(() => {})
+    await firebasePatch(`devices/${deviceId}`, { accountId }).catch(() => {})
+    // A device-granted tier transfers to a FREE account on sign-in (never
+    // the other way — a paid account tier is authoritative).
+    if (!account.tier || account.tier === 'free') {
+      const inherited = await inheritDeviceTier(accountId, deviceId)
+      if (inherited) account.tier = inherited
+    }
   }
-  const accountId = accountIdForEmail(norm)
   return { ok: true, accountId, account: { ...account, devices: { ...(account.devices || {}), ...(deviceId ? { [deviceId]: true } : {}) } } }
 }
 
@@ -390,12 +409,44 @@ export async function getRequesterTier(req: NextRequest): Promise<RequesterTier>
   return { tier: 'free', model, allUnlocked, accountId: null, email: null, renewsAt: null, via: 'none' }
 }
 
-// ── Tier mutation (checkout, webhook, /debug grant, cancel) ─────────────
+// ── Tier mutation (checkout, webhook, /debug grant, cancel) ───────────
+
+/** A device-granted tier (the /debug guest-code grant) transfers to the
+ *  first account created or signed-in from that device — registering must
+ *  never read as "my Premium vanished" (session wins over ?deviceId=, so
+ *  without this a fresh account silently downgraded the visitor).
+ *  Returns the inherited tier, or null when the device has none. Never
+ *  overrides an existing paid tier on the account. */
+export async function inheritDeviceTier(
+  accountId: string,
+  deviceId: string,
+): Promise<Tier | null> {
+  try {
+    const dev = await firebaseRead<{ tier?: Tier; tierRenewsAt?: number; tierSource?: string }>(
+      `devices/${deviceId}`,
+    )
+    const t = dev?.tier
+    if (t === 'premium' || t === 'ultra') {
+      const existing = await getAccountById(accountId)
+      if (existing?.tier === 'premium' || existing?.tier === 'ultra') {
+        return existing.tier // account already holds a tier — authoritative
+      }
+      await firebasePatch(`accounts/${accountId}`, {
+        tier: t,
+        tierSince: Date.now(),
+        tierSource: dev?.tierSource || 'manual',
+        tierRenewsAt: dev?.tierRenewsAt ?? null,
+      })
+      return t
+    }
+  } catch {}
+  return null
+}
 
 export interface TierChange {
   tier: Tier
   renewsAt: number | null
-  source: 'stripe' | 'manual' | 'test'
+  source: 'stripe' | 'kofi' | 'manual' | 'test'
   cancelAtEnd?: boolean
   stripeCustomerId?: string
   stripeSubscriptionId?: string
@@ -513,6 +564,120 @@ async function logTierChange(who: string, tier: Tier): Promise<void> {
     const { firebasePush } = await import('@/lib/firebase-server')
     await firebasePush('subscriptionsLog', { at: Date.now(), who, tier })
   } catch {}
+}
+
+// ── Ko-fi payments (the live checkout provider) ──────────────────────────
+
+/** The Ko-fi page supporters pay on (memberships + one-off coffees). */
+export const KOFI_PAGE_URL = 'https://ko-fi.com/neutralwire'
+
+/** The Ko-fi webhook verification token. Env var first (Vercel → Project →
+ *  Settings → Environment Variables); the fallback is the token from the
+ *  project owner's Ko-fi dashboard so fulfilment works out of the box.
+ *  Rotating the token in Ko-fi → update KOFI_VERIFICATION_TOKEN. */
+export function kofiVerificationToken(): string {
+  return process.env.KOFI_VERIFICATION_TOKEN || '70adb04c-199c-4151-8637-f06541ff696f'
+}
+
+/** A human-typeable claim code (NW-XXXXXX, no ambiguous chars) — shown to
+ *  the supporter at checkout; pasting it into the Ko-fi message links the
+ *  incoming payment to their NeutralWire account instantly. */
+const CLAIM_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+export function newKofiClaimCode(): string {
+  const bytes = randomBytes(6)
+  let c = ''
+  for (let i = 0; i < 6; i++) c += CLAIM_ALPHABET[bytes[i] % CLAIM_ALPHABET.length]
+  return `NW-${c}`
+}
+
+/** Normalise a claim code found in a Ko-fi message (case/spacing lax).
+ *  SEARCHES the raw message — supporters wrap the code in prose ("my code
+ *  is NW-ABC123 thanks!") so a whole-string match would never fire. */
+export function normalizeKofiClaimCode(text: string): string | null {
+  const m = String(text || '')
+    .toUpperCase()
+    .match(/\bNW-?([A-HJKMNP-Z2-9]{6})\b/)
+  return m ? `NW-${m[1]}` : null
+}
+
+/** Map a Ko-fi payment payload to a paid tier. Membership tier names win
+ *  (create tiers named "Premium" / "Ultra" on Ko-fi); the amount is the
+ *  fallback net ($/£/€ 3 → premium, ≥15 → ultra). Donations map to null —
+ *  they never change the tier in the subscription model. */
+export function kofiTierForEvent(data: {
+  type?: string
+  tier_name?: string | null
+  amount?: string | number
+  is_subscription_payment?: boolean
+}): 'premium' | 'ultra' | null {
+  const isSub =
+    data.type === 'Subscription' || data.is_subscription_payment === true
+  if (!isSub) return null
+  const t = String(data.tier_name || '').toLowerCase()
+  if (t.includes('ultra')) return 'ultra'
+  if (t.includes('premium')) return 'premium'
+  const amount = parseFloat(String(data.amount ?? '0')) || 0
+  if (amount >= 15) return 'ultra'
+  if (amount >= 3) return 'premium'
+  return null
+}
+
+/** Find the NeutralWire account a Ko-fi payment belongs to:
+ *  1. a claim code pasted into the Ko-fi message (instant, exact),
+ *  2. the supporter's email matching an account email,
+ *  3. the supporter's email matching a PREVIOUSLY linked Ko-fi email
+ *     (renewals). Returns null when nobody matches yet (the event is
+ *  stored unclaimed; the in-app "I already paid" claim picks it up). */
+export async function resolveKofiAccountId(
+  message: string,
+  email: string,
+): Promise<{ accountId: string; via: 'code' | 'email' | 'kofiEmail'; code?: string } | null> {
+  const code = normalizeKofiClaimCode(message)
+  if (code) {
+    const claim = await firebaseRead<{ accountId?: string; usedAt?: number; expiresAt?: number }>(
+      `kofiClaims/${code}`,
+    )
+    if (claim?.accountId && !claim.usedAt && (claim.expiresAt || 0) > Date.now()) {
+      return { accountId: claim.accountId, via: 'code', code }
+    }
+  }
+  const norm = (email || '').trim().toLowerCase()
+  if (!norm) return null
+  const idx = await firebaseRead<{ accountId?: string }>(`accountIndex/${emailKey(norm)}`)
+  if (idx?.accountId) return { accountId: idx.accountId, via: 'email' }
+  const kofi = await firebaseRead<{ accountId?: string }>(`kofiEmailIndex/${emailKey(norm)}`)
+  if (kofi?.accountId) return { accountId: kofi.accountId, via: 'kofiEmail' }
+  return null
+}
+
+/** Apply a claimed Ko-fi payment to an account: first payment sets the
+ *  tier for 31 days; a renewal EXTENDS the horizon from whenever it
+ *  currently runs to. Also links the supporter's Ko-fi email so future
+ *  renewals auto-match without a claim code. */
+export async function applyKofiPayment(
+  accountId: string,
+  tier: 'premium' | 'ultra',
+  opts: { renewal: boolean; kofiEmail?: string; code?: string },
+): Promise<boolean> {
+  const account = await getAccountById(accountId)
+  const current = account?.tierRenewsAt ?? 0
+  const base = opts.renewal && current > Date.now() ? current : Date.now()
+  const renewsAt = base + 31 * 24 * 3600 * 1000
+  const ok = await setAccountTier(accountId, { tier, renewsAt, source: 'kofi' })
+  if (!ok) return false
+  if (opts.kofiEmail) {
+    const norm = opts.kofiEmail.trim().toLowerCase()
+    await firebasePatch(`accounts/${accountId}`, { kofiEmail: norm }).catch(() => {})
+    await firebaseWrite(`kofiEmailIndex/${emailKey(norm)}`, { accountId }).catch(() => {})
+  }
+  if (opts.code) {
+    await firebasePatch(`kofiClaims/${opts.code}`, {
+      usedAt: Date.now(),
+      accountId,
+      tier,
+    }).catch(() => {})
+  }
+  return true
 }
 
 // ── Ultra API keys ──────────────────────────────────────────────────────

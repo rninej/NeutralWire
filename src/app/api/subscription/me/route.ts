@@ -44,7 +44,9 @@ export async function GET(req: NextRequest) {
         country,
       },
       payments: {
-        provider: process.env.STRIPE_SECRET_KEY ? 'stripe' : 'test',
+        // Ko-fi is the live checkout provider (webhook-fulfilled); stripe
+        // stays only as a legacy return-handler.
+        provider: 'kofi',
       },
     },
     { headers: { 'Cache-Control': 'no-store' } },

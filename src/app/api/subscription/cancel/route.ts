@@ -13,12 +13,13 @@ export const maxDuration = 20
 /**
  * POST /api/subscription/cancel — cancel the visitor's own subscription.
  *
- * LIVE Stripe mode: if we have a stored subscription id we call Stripe to
- * cancel at period end (the visitor keeps the tier until then); otherwise
- * we cancel immediately at Stripe using the stored customer. The webhook
- * finalises the tier change.
- * TEST mode: downgrade takes effect immediately (with a 0-day grace —
- * simplest for testing).
+ * KO-FI (the live provider): Ko-fi exposes no cancellation API, so the
+ * tier is revoked HERE immediately and the supporter is reminded to also
+ * cancel the membership on Ko-fi (otherwise it keeps charging and the
+ * next webhook payment re-grants — by design, a payment is always
+ * honoured).
+ * LEGACY Stripe: a stored subscription id is cancelled at period end via
+ * the Stripe REST API; test-source tiers downgrade immediately.
  */
 export async function POST(req: NextRequest) {
   const session = await readSession(req)
@@ -30,10 +31,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No active subscription.' }, { status: 400 })
   }
 
-  const stripeKey = process.env.STRIPE_SECRET_KEY || ''
-
-  // ── TEST MODE: immediate downgrade ──
-  if (!stripeKey || account.tierSource === 'test' || !account.stripeSubscriptionId) {
+  // ── KO-FI or TEST source: immediate downgrade (no provider API to
+  //    call — the reminder to cancel on Ko-fi comes with the response). ──
+  if (account.tierSource !== 'stripe' || !account.stripeSubscriptionId) {
     await setAccountTier(session.accountId, {
       tier: 'free',
       renewsAt: null,
@@ -43,11 +43,16 @@ export async function POST(req: NextRequest) {
       ok: true,
       tier: 'free',
       effective: 'immediately',
-      mode: stripeKey ? 'stripe-test' : 'test',
+      mode: account.tierSource === 'kofi' ? 'kofi' : 'test',
+      reminder:
+        account.tierSource === 'kofi'
+          ? 'Also cancel the membership on Ko-fi so it stops charging — a future payment would re-grant the tier.'
+          : undefined,
     })
   }
 
-  // ── LIVE MODE: cancel at period end via Stripe REST ──
+  // ── LEGACY Stripe source: cancel at period end via Stripe REST ──
+  const stripeKey = process.env.STRIPE_SECRET_KEY || ''
   try {
     const res = await fetch(
       `https://api.stripe.com/v1/subscriptions/${account.stripeSubscriptionId}`,

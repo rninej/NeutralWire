@@ -15,7 +15,7 @@
 import * as React from 'react'
 import { motion } from 'framer-motion'
 import {
-  Loader2, LogOut, Check, Copy, KeyRound, Mail, Lock, Crown, Sparkles,
+  Loader2, LogOut, Check, Copy, KeyRound, Mail, Lock, Crown, Sparkles, Send,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -49,14 +49,24 @@ export function SubscriptionAccountSection() {
   const [keyBusy, setKeyBusy] = React.useState(false)
   const [keyCopied, setKeyCopied] = React.useState(false)
   const [cancelBusy, setCancelBusy] = React.useState(false)
+  // Brief highlight when the guest banner routes here — the form flipping
+  // in BELOW THE FOLD used to look like "the button did nothing".
+  const [spotlit, setSpotlit] = React.useState(false)
+  const cardRef = React.useRef<HTMLDivElement | null>(null)
 
   const deviceId = getClientDeviceId()
 
-  // The guest banner (top of Profile) opens the auth form here.
+  // The guest banner (top of Profile) opens the auth form here — and now
+  // scrolls the card into view with a highlight so the flip is VISIBLE.
   React.useEffect(() => {
     const onOpenAuth = (e: Event) => {
       const mode = (e as CustomEvent<{ mode?: 'signin' | 'register' }>).detail?.mode
       setMode(mode === 'signin' ? 'signin' : 'register')
+      setSpotlit(true)
+      setTimeout(() => setSpotlit(false), 1800)
+      requestAnimationFrame(() => {
+        cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
     }
     window.addEventListener(OPEN_AUTH_EVENT, onOpenAuth)
     return () => window.removeEventListener(OPEN_AUTH_EVENT, onOpenAuth)
@@ -155,7 +165,13 @@ export function SubscriptionAccountSection() {
     sub.tier === 'ultra' ? 'Ultra' : sub.tier === 'premium' ? 'Premium' : 'Free'
 
   return (
-    <Card className="p-4">
+    <Card
+      ref={cardRef}
+      className={cn(
+        'p-4 transition-shadow duration-500',
+        spotlit && 'ring-2 ring-amber-500/70 shadow-[0_0_24px_rgba(245,158,11,0.25)]',
+      )}
+    >
       <div className="mb-2 flex items-center gap-2">
         <PremiumDiamond className="h-4 w-4" />
         <h2 className="text-sm font-bold">Subscription</h2>
@@ -334,7 +350,12 @@ const FREQ_OPTIONS: Array<{ id: 'weekly' | 'daily' | '2x' | '3x'; label: string;
 
 export function DigestPrefsCard() {
   const sub = useSubscription()
-  const [digest, setDigest] = React.useState<{ enabled: boolean; freq: string; hour: number }>({
+  const [digest, setDigest] = React.useState<{
+    enabled: boolean
+    freq: string
+    hour: number
+    email?: string
+  }>({
     enabled: false,
     freq: 'daily',
     hour: 8,
@@ -346,20 +367,27 @@ export function DigestPrefsCard() {
   React.useEffect(() => {
     fetch('/api/subscription/digest')
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { digest?: { enabled?: boolean; freq?: string; hour?: number } } | null) => {
-        if (d?.digest) {
-          setDigest({
-            enabled: d.digest.enabled !== false,
-            freq: d.digest.freq || 'daily',
-            hour: typeof d.digest.hour === 'number' ? d.digest.hour : 8,
-          })
-        }
-      })
+      .then(
+        (
+          d: {
+            digest?: { enabled?: boolean; freq?: string; hour?: number; email?: string }
+          } | null,
+        ) => {
+          if (d?.digest) {
+            setDigest({
+              enabled: d.digest.enabled !== false,
+              freq: d.digest.freq || 'daily',
+              hour: typeof d.digest.hour === 'number' ? d.digest.hour : 8,
+              ...(d.digest.email ? { email: d.digest.email } : {}),
+            })
+          }
+        },
+      )
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
 
-  const save = async (next: { enabled?: boolean; freq?: string; hour?: number }) => {
+  const save = async (next: { enabled?: boolean; freq?: string; hour?: number; email?: string }) => {
     const merged = { ...digest, ...next }
     setDigest(merged)
     setSaving(true)
@@ -477,6 +505,20 @@ export function DigestPrefsCard() {
         </div>
       ) : (
         <div className="relative space-y-3 px-4 pb-4">
+          {/* Delivery address — the custom newsletter email (set/changed in
+              the Profile tab) or the account email by default. */}
+          <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/30 px-2.5 py-2">
+            <div className="flex min-w-0 items-center gap-2 text-[11px]">
+              <Send className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <span className="text-muted-foreground">Delivering to</span>
+              <span className="truncate font-medium">{digest.email || sub.account?.email || 'your account email'}</span>
+            </div>
+            {digest.email ? (
+              <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                custom
+              </span>
+            ) : null}
+          </div>
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-medium">Enabled</span>
             <Switch checked={digest.enabled} onCheckedChange={(v) => save({ enabled: v })} />
@@ -617,6 +659,158 @@ export function PersonalFlagsCard() {
               />
             </div>
           ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── Profile tab: the newsletter delivery address ────────────────────────
+
+/** NewsletterEmailCard — WHERE the AI email newsletter is delivered.
+ *
+ * The user spec: "make it so you can set a custom email to the emailing
+ * newsletter and put that thing in the profile section." Lives in the
+ * Profile tab right under the subscription card. Default = the account
+ * email; any valid address can replace it (saved server-side into
+ * prefs.digest.email + mirrored to digestSubscribers so the cron needs no
+ * changes). Free visitors get the standard teaser; logged-out visitors
+ * are pointed at the sign-in form below. */
+export function NewsletterEmailCard() {
+  const sub = useSubscription()
+  const [addr, setAddr] = React.useState('')
+  const [custom, setCustom] = React.useState<string | null>(null)
+  const [accountEmail, setAccountEmail] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null)
+
+  const load = React.useCallback(() => {
+    fetch('/api/subscription/digest')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { digest?: { email?: string }; email?: string } | null) => {
+        if (!d) return
+        setAccountEmail(d.email || '')
+        setCustom(d.digest?.email || null)
+        setAddr(d.digest?.email || d.email || '')
+      })
+      .catch(() => {})
+  }, [])
+
+  React.useEffect(() => {
+    if (!sub.loading) load()
+  }, [sub.loading, sub.loggedIn, load])
+
+  const gated = sub.model === 'subscription' && !sub.entitlements.emailDigest
+
+  const save = async (nextAddr: string) => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const res = await fetch('/api/subscription/digest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Partial save — the route MERGES with stored prefs (cadence etc.
+        // untouched). Empty string clears the override.
+        body: JSON.stringify({ email: nextAddr }),
+      })
+      const data = (await res.json()) as { error?: string; needUpgrade?: boolean; needAccount?: boolean }
+      if (res.status === 402 || data.needUpgrade) {
+        openUpgradeDialog('emailDigest')
+        return
+      }
+      if (res.status === 401 || data.needAccount) {
+        setMsg({ ok: false, text: 'Sign in first — the sign-in form is just below.' })
+        return
+      }
+      if (!res.ok) {
+        setMsg({ ok: false, text: data.error || 'Could not save.' })
+        return
+      }
+      const trimmed = nextAddr.trim()
+      if (trimmed === '') {
+        setCustom(null)
+        setAddr(accountEmail)
+        setMsg({ ok: true, text: `Delivering to your account email${accountEmail ? ` (${accountEmail})` : ''}.` })
+      } else {
+        setCustom(trimmed.toLowerCase())
+        setMsg({ ok: true, text: `Saved — every newsletter goes to ${trimmed}.` })
+      }
+    } catch {
+      setMsg({ ok: false, text: 'Network error — try again.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <Send className="h-4 w-4 text-amber-500" />
+        <h2 className="text-sm font-bold">Newsletter email</h2>
+        {sub.model === 'subscription' ? <PremiumBadge className="ml-auto" /> : null}
+      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Where the AI email newsletter is delivered — your account address by default, or any
+        inbox you prefer.
+      </p>
+
+      {gated ? (
+        <button
+          type="button"
+          onClick={() => openUpgradeDialog('emailDigest')}
+          className="mt-3 flex w-full items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-left text-xs"
+        >
+          <PremiumDiamond className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">
+            The newsletter is Premium — {sub.pricing.premium.display}/month.
+          </span>
+        </button>
+      ) : !sub.loggedIn ? (
+        <button
+          type="button"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent(OPEN_AUTH_EVENT, { detail: { mode: 'signin' } }))
+          }
+          className="mt-3 flex w-full items-center gap-2 rounded-md border px-3 py-2 text-left text-xs"
+        >
+          <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="flex-1">Sign in below to choose your newsletter address.</span>
+        </button>
+      ) : (
+        <div className="mt-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <Input
+              type="email"
+              value={addr}
+              onChange={(e) => setAddr(e.target.value)}
+              placeholder={accountEmail || 'you@example.com'}
+              aria-label="Newsletter delivery address"
+              className="min-w-0 flex-1"
+            />
+            <Button size="sm" onClick={() => save(addr)} disabled={busy || !addr.trim()}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              Save
+            </Button>
+          </div>
+          {custom ? (
+            <button
+              type="button"
+              onClick={() => save('')}
+              className="text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              Reset to my account email{accountEmail ? ` (${accountEmail})` : ''}
+            </button>
+          ) : null}
+          {msg ? (
+            <div
+              className={cn(
+                'text-[11px]',
+                msg.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground',
+              )}
+            >
+              {msg.text}
+            </div>
+          ) : null}
         </div>
       )}
     </Card>

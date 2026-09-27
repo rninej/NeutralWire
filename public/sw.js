@@ -34,6 +34,16 @@
 //      in the nw-sw-flags-v1 cache) — flipping it OFF in /debug restores
 //      the exact v25 focus-trusting logic. Cache-name bump v26 → v27 so
 //      installed PWAs pick this up on their next launch.
+// v29: PENDING-FEED CACHE POISON FIX — the /api/news handler cached ANY
+//      ok response, including a custom subtopic's first-fill PENDING one
+//      (Cache-Control: no-store, topics: [], pending: true). The SW then
+//      served that empty shell as a "fresh" hit for 5 minutes, so the
+//      client's auto-retry AND the manual "Try now" kept reading the same
+//      cached dead end — "the premium subtopics never give me news".
+//      Now: no-store responses never enter the cache, cached ones are
+//      never served fresh (healing already-poisoned installs), and a
+//      pending entry is deleted the moment a real response arrives.
+//      Cache-name bump v28 → v29 so installed PWAs pick this up.
 // v26: OFFLINE FALSE-POSITIVE FIX — a fresh (uncached) load on a slow
 //      connection could lose the 2.5s navigation race, find no cached
 //      HTML, and show the "Waiting for connection…" offline page while
@@ -110,9 +120,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v28'
-const API_CACHE = 'neutralwire-api-v28'
-const IMG_CACHE = 'neutralwire-img-v28'
+const SHELL_CACHE = 'neutralwire-shell-v29'
+const API_CACHE = 'neutralwire-api-v29'
+const IMG_CACHE = 'neutralwire-img-v29'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
@@ -424,8 +434,17 @@ self.addEventListener('fetch', (event) => {
         const cache = await caches.open(API_CACHE)
         const cached = await cache.match(req)
 
+        // v29: a cached PENDING response (a custom subtopic's first fill
+        // that came back empty — sent with Cache-Control: no-store) is
+        // NEVER a valid fresh hit. Serving it made every retry (the
+        // client's auto-retry AND "Try now") read the same cached dead
+        // end for 5 minutes — "the premium subtopics never give me news".
+        // Old poisoned entries are healed by treating them as stale.
+        const cachedIsPending =
+          cached && (cached.headers.get('cache-control') || '').includes('no-store')
+
         // Fresh cache hit → instant, no network at all.
-        if (cached && cachedAgeMs(cached) <= REVALIDATE_NEWS_MS) {
+        if (cached && !cachedIsPending && cachedAgeMs(cached) <= REVALIDATE_NEWS_MS) {
           return cached
         }
 
@@ -437,17 +456,25 @@ self.addEventListener('fetch', (event) => {
         // already emits `s-maxage=300` — the CDN absorbs repeat traffic.
         try {
           const res = await fetch(req)
-          if (res.ok) {
+          // Cache only REAL feed responses — a no-store response (pending
+          // fill) must never enter the cache at all.
+          const resIsPending = (res.headers.get('cache-control') || '').includes('no-store')
+          if (res.ok && !resIsPending) {
             putWithEviction(API_CACHE, req, res.clone(), MAX_API_ENTRIES)
+          }
+          // Drop any poisoned pending entry so even the offline fallback
+          // can't serve it.
+          if (res.ok && cachedIsPending) {
+            cache.delete(req).catch(function () {})
           }
           return res
         } catch {
           // Offline (or network error) → fall back to the stale cache so
           // the app still works offline; the client's own staleness heal
           // (page-client auto-refresh on old fetchedAt) handles the rest.
-          if (cached) return cached
+          if (cached && !cachedIsPending) return cached
           return new Response(
-            JSON.stringify({ topics: [], sourceCount: 0, articleCount: 0 }),
+            JSON.stringify({ topics: [], sourceCount: 0, articleCount: 0, pending: true }),
             { headers: { 'Content-Type': 'application/json' } },
           )
         }

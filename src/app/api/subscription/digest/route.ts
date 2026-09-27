@@ -10,8 +10,15 @@ export const revalidate = 0
  * GET  /api/subscription/digest — the visitor's email-digest preferences.
  * POST /api/subscription/digest — save them (Premium only).
  *
- * Body: { enabled: boolean, freq: 'weekly'|'daily'|'2x'|'3x', hour: 0-23 }
+ * Body: { enabled, freq: 'weekly'|'daily'|'2x'|'3x', hour: 0-23, email? }
+ *
+ * `email` is the CUSTOM DELIVERY ADDRESS for the newsletter (defaults to
+ * the account email). It is persisted in prefs.digest.email and mirrored
+ * into digestSubscribers/<accountId>.email — the cron reads that node, so
+ * a custom address needs zero cron changes.
  */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
 export async function GET(req: NextRequest) {
   const requester = await getRequesterTier(req)
   const session = await readSession(req)
@@ -36,6 +43,7 @@ export async function POST(req: NextRequest) {
       enabled?: boolean
       freq?: string
       hour?: number
+      email?: string
     }
     const requester = await getRequesterTier(req)
     if (!requester.allUnlocked && requester.tier === 'free') {
@@ -52,15 +60,51 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // MERGE with the stored prefs — a partial save (e.g. just the custom
+    // newsletter address from the Profile card) must never reset the
+    // cadence/hour the visitor already chose.
+    const account = await firebaseRead<{ prefs?: { digest?: Partial<DigestPrefs> } }>(
+      `accounts/${session.accountId}`,
+    )
+    const existing = account?.prefs?.digest || {}
+
     const freq: DigestPrefs['freq'] =
       body.freq === 'weekly' || body.freq === 'daily' || body.freq === '2x' || body.freq === '3x'
         ? body.freq
-        : 'daily'
-    const hour = Math.min(23, Math.max(0, Math.round(Number(body.hour ?? 8))))
+        : (existing.freq as DigestPrefs['freq']) || 'daily'
+    const hour =
+      body.hour !== undefined
+        ? Math.min(23, Math.max(0, Math.round(Number(body.hour))))
+        : typeof existing.hour === 'number'
+          ? existing.hour
+          : 8
+    const enabled =
+      body.enabled !== undefined ? body.enabled !== false : existing.enabled !== false
+
+    // Custom newsletter address: '' clears it (back to the account email);
+    // otherwise it must look like a real address. Undefined = keep stored.
+    let customEmail: string | undefined
+    if (typeof body.email === 'string') {
+      const trimmed = body.email.trim()
+      if (trimmed === '') {
+        customEmail = undefined
+      } else if (EMAIL_RE.test(trimmed)) {
+        customEmail = trimmed.toLowerCase()
+      } else {
+        return NextResponse.json(
+          { error: 'That newsletter address doesn\u2019t look valid.' },
+          { status: 400 },
+        )
+      }
+    } else if (typeof existing.email === 'string' && existing.email) {
+      customEmail = existing.email
+    }
+
     const prefs: DigestPrefs = {
-      enabled: body.enabled !== false,
+      enabled,
       freq,
       hour,
+      ...(customEmail !== undefined ? { email: customEmail } : {}),
     }
     await firebasePatch(`accounts/${session.accountId}/prefs`, { digest: prefs })
 
@@ -69,7 +113,7 @@ export async function POST(req: NextRequest) {
     const requester2 = await getRequesterTier(req)
     if (prefs.enabled) {
       await firebasePatch(`digestSubscribers/${session.accountId}`, {
-        email: requester2.email || '',
+        email: customEmail || requester2.email || '',
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         prefs,
       }).catch(() => {})

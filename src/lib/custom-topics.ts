@@ -144,7 +144,17 @@ function fetchGdelt(
     if (first.status !== 429 && first.status !== 503) return []
     await new Promise((r) => setTimeout(r, timing.backoffMs))
     const second = await attempt(timing.perAttemptMs)
-    return second.ok ? second.articles : []
+    if (second.ok) return second.articles
+    // BACKGROUND fills get one MORE patient retry (double backoff) —
+    // serverless egress IPs share GDELT's rate limit, and a
+    // nobody-is-waiting fill has the time budget to out-wait it. This is
+    // what keeps a throttled first attempt from landing a topic dead.
+    if (timing === GDELT_TIMING_BACKGROUND) {
+      await new Promise((r) => setTimeout(r, timing.backoffMs * 2))
+      const third = await attempt(timing.perAttemptMs)
+      if (third.ok) return third.articles
+    }
+    return []
   })()
 }
 

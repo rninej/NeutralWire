@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { after } from 'next/server'
 import {
   readSession,
   getAccountById,
-  setAccountTier,
-  quoteForCountry,
+  newKofiClaimCode,
+  KOFI_PAGE_URL,
 } from '@/lib/subscriptions'
-import { firebasePatch } from '@/lib/firebase-server'
-import { detectCountryServer } from '@/lib/country-detect'
+import { firebaseWrite } from '@/lib/firebase-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -14,32 +14,30 @@ export const revalidate = 0
 export const maxDuration = 20
 
 /**
- * POST /api/subscription/checkout — start a subscription.
+ * POST /api/subscription/checkout — start a Ko-fi subscription.
  *
- * Body: { tier: 'premium' | 'ultra', deviceId?, email? }
+ * Body: { tier: 'premium' | 'ultra', deviceId? }
  *
- * TWO MODES:
- *   1. LIVE (STRIPE_SECRET_KEY set) — creates a real Stripe Checkout
- *      Session (mode=subscription, monthly, currency localised to the
- *      visitor's country: £3/$3/€3 premium, £20/$20/€20 ultra) and returns
- *      { url } to redirect to. Fulfilment happens in /api/subscription/webhook.
- *   2. TEST (no Stripe key) — grants the tier immediately with
- *      tierSource 'test', renewsAt +30 days. This is the sandbox / owner
- *      test path; the /debug Subscription Manager can revoke at any time.
+ * Ko-fi has no server-side checkout API — the supporter pays on
+ * ko-fi.com/neutralwire (Memberships named "Premium" and "Ultra"), and the
+ * webhook (POST /api/kofi/webhook) fulfils the grant the moment the payment
+ * lands. This endpoint hands the client everything the pay-panel needs:
  *
- * An ACCOUNT is REQUIRED (the user's spec: "to get premium you have to make
- * an account"). Logged-out callers get 401 { needAccount: true } and the UI
- * shows the register/login step inside the upgrade dialog.
+ *   { mode: 'kofi', tier, code: 'NW-XXXXXX', url: 'https://ko-fi.com/…' }
+ *
+ * • `code` — a one-shot claim code bound to the signed-in account (48h
+ *   validity). The pay-panel asks the supporter to paste it into the Ko-fi
+ *   message box; the webhook matches it and grants instantly. Code-less
+ *   payments still work: the webhook also matches by Ko-fi email, and the
+ *   "I already paid" claim (/api/kofi/claim) sweeps the rest.
+ * • An ACCOUNT is required (grants attach to accounts, not devices) —
+ *   logged-out callers get 401 { needAccount: true }.
  */
-const STRIPE_API = 'https://api.stripe.com/v1'
+const CLAIM_TTL_MS = 48 * 60 * 60 * 1000
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as {
-      tier?: string
-      deviceId?: string
-      email?: string
-    }
+    const body = (await req.json()) as { tier?: string; deviceId?: string }
     const tier: 'premium' | 'ultra' | null =
       body.tier === 'ultra' ? 'ultra' : body.tier === 'premium' ? 'premium' : null
     if (!tier) {
@@ -59,88 +57,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Account not found.', needAccount: true }, { status: 401 })
     }
 
-    // ── Localised price ──
-    let country = 'US'
-    try {
-      const detected = await detectCountryServer(req.headers)
-      if (detected?.code) country = detected.code
-    } catch {}
-    const price = quoteForCountry(tier as 'premium' | 'ultra', country)
-
-    const stripeKey = process.env.STRIPE_SECRET_KEY || ''
-
-    // ── TEST MODE: no Stripe key configured ──
-    if (!stripeKey) {
-      const renewsAt = Date.now() + 30 * 24 * 3600 * 1000
-      await setAccountTier(session.accountId, {
-        tier,
-        renewsAt,
-        source: 'test',
-      })
-      if (body.deviceId) {
-        await firebasePatch(`devices/${body.deviceId}`, { tier }).catch(() => {})
-      }
-      console.log(
-        `[subscription/checkout] TEST MODE granted ${tier} to ${account.email} (renews ${new Date(renewsAt).toISOString()})`,
-      )
-      return NextResponse.json({
-        ok: true,
-        mode: 'test',
-        tier,
-        renewsAt,
-        url: `/?subscribed=1&tier=${tier}`,
-        note: 'Test mode — no STRIPE_SECRET_KEY configured. Add Stripe keys to take real payments.',
-      })
-    }
-
-    // ── LIVE MODE: Stripe Checkout Session (subscription) ──
-    const params = new URLSearchParams()
-    params.set('mode', 'subscription')
-    params.set('client_reference_id', session.accountId)
-    params.set('metadata[accountId]', session.accountId)
-    params.set('metadata[tier]', tier)
-    if (body.deviceId) params.set('metadata[deviceId]', body.deviceId)
-    params.set('customer_email', account.email)
-    params.set('success_url', `${req.nextUrl.origin}/api/subscription/checkout?returned=1&session_id={CHECKOUT_SESSION_ID}`)
-    params.set('cancel_url', `${req.nextUrl.origin}/?checkoutCancelled=1`)
-    // Line item: ad-hoc monthly price for the tier in the visitor's currency.
-    params.set('line_items[0][quantity]', '1')
-    params.set('line_items[0][price_data][currency]', price.currency)
-    params.set('line_items[0][price_data][unit_amount]', String(price.amount * 100))
-    params.set('line_items[0][price_data][recurring][interval]', 'month')
-    params.set(
-      'line_items[0][price_data][product_data][name]',
-      tier === 'ultra' ? 'NeutralWire Ultra (monthly)' : 'NeutralWire Premium (monthly)',
-    )
-    params.set(
-      'line_items[0][price_data][product_data][description]',
-      tier === 'ultra'
-        ? 'Custom subtopics, archive search, email digest, gradient themes, API access + article export'
-        : 'Custom subtopics, archive search, email digest, gradient themes + personal flags',
-    )
-    // Subscription data: how we find the account in webhook events.
-    params.set('subscription_data[metadata][accountId]', session.accountId)
-    params.set('subscription_data[metadata][tier]', tier)
-
-    const res = await fetch(`${STRIPE_API}/checkout/sessions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${stripeKey}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString(),
-      cache: 'no-store',
+    // ── Issue the claim code ──
+    const code = newKofiClaimCode()
+    await firebaseWrite(`kofiClaims/${code}`, {
+      accountId: session.accountId,
+      email: account.email,
+      tier,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + CLAIM_TTL_MS,
     })
-    const json = (await res.json()) as { id?: string; url?: string; error?: { message?: string } }
-    if (!res.ok || !json.url) {
-      console.warn('[subscription/checkout] Stripe error:', json.error?.message)
-      return NextResponse.json(
-        { error: 'Stripe checkout failed', detail: json.error?.message || res.status },
-        { status: 502 },
-      )
-    }
 
-    return NextResponse.json({ ok: true, mode: 'stripe', tier, url: json.url })
+    return NextResponse.json({
+      ok: true,
+      mode: 'kofi',
+      tier,
+      code,
+      url: KOFI_PAGE_URL,
+      expiresInMs: CLAIM_TTL_MS,
+      note: 'Pay on Ko-fi with this code in the message (or with your account email) — Premium unlocks the moment the payment lands.',
+    })
   } catch (err) {
     return NextResponse.json(
       { error: 'Checkout failed', detail: String(err) },
@@ -152,18 +87,17 @@ export async function POST(req: NextRequest) {
 /**
  * GET /api/subscription/checkout?returned=1&session_id=cs_live_…
  *
- * The Stripe success_url lands here. We verify the session with Stripe
- * (belt-and-suspenders — the webhook is the source of truth) and redirect
- * home with the celebration param.
+ * LEGACY Stripe success-return handler — kept so any old checkout links
+ * still resolve; new payments go through Ko-fi's webhook instead.
  */
 export async function GET(req: NextRequest) {
   const sessionId = req.nextUrl.searchParams.get('session_id') || ''
   const stripeKey = process.env.STRIPE_SECRET_KEY || ''
   if (!sessionId || !stripeKey) {
-    return NextResponse.redirect(`${req.nextUrl.origin}/?subscribed=0`)
+    return NextResponse.redirect(`${req.nextUrl.origin}/subscribe`)
   }
   try {
-    const res = await fetch(`${STRIPE_API}/checkout/sessions/${sessionId}`, {
+    const res = await fetch(`https://api.stripe.com/v1/checkout/sessions/${sessionId}`, {
       headers: { Authorization: `Bearer ${stripeKey}` },
       cache: 'no-store',
     })
@@ -174,18 +108,20 @@ export async function GET(req: NextRequest) {
     if (res.ok && session.metadata?.accountId && session.metadata?.tier) {
       const tier = session.metadata.tier === 'ultra' ? 'ultra' : 'premium'
       if (session.payment_status === 'paid' || session.payment_status === 'no_payment_required') {
+        const { setAccountTier } = await import('@/lib/subscriptions')
         await setAccountTier(session.metadata.accountId, {
           tier,
           renewsAt: Date.now() + 31 * 24 * 3600 * 1000,
           source: 'stripe',
         })
       }
-      return NextResponse.redirect(
-        `${req.nextUrl.origin}/?subscribed=1&tier=${tier}`,
-      )
+      return NextResponse.redirect(`${req.nextUrl.origin}/?subscribed=1&tier=${tier}`)
     }
   } catch (err) {
     console.warn('[subscription/checkout] return verification failed:', err)
   }
-  return NextResponse.redirect(`${req.nextUrl.origin}/?subscribed=0`)
+  return NextResponse.redirect(`${req.nextUrl.origin}/subscribe`)
 }
+
+// `after` imported for route-segment consistency with the news routes.
+void after

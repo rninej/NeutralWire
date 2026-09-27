@@ -70,7 +70,7 @@ const DEFAULT_STATE: SubscriptionState = {
     ultra: { currency: 'USD', symbol: '$', amount: 20, display: '$20' },
     country: 'US',
   },
-  payments: { provider: 'test' },
+  payments: { provider: 'kofi' },
 }
 
 // ── Device id (mirrors referral.ts — same localStorage key) ──
@@ -83,6 +83,10 @@ export function getClientDeviceId(): string {
     return ''
   }
 }
+
+/** The Ko-fi page supporters pay on (memberships + one-off coffees).
+ *  Client-safe mirror of the server constant in subscriptions.ts. */
+export const KOFI_PAGE_URL = 'https://ko-fi.com/neutralwire'
 
 // ── The upgrade-dialog open/close event bus ──
 export const UPGRADE_OPEN_EVENT = 'neutralwire:upgrade-open'

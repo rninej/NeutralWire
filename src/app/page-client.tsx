@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
+import { useRouter } from 'next/navigation'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   RefreshCw,
@@ -27,7 +28,7 @@ import {
   type FeedCategory,
   isCustomCategory,
 } from '@/lib/news-sources'
-import { SubscriptionProvider, useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
+import { SubscriptionProvider, useSubscription } from '@/lib/subscription-client'
 import { UpgradeDialog, PremiumDiamond } from '@/components/premium-ui'
 import { PremiumWelcome } from '@/components/premium-welcome'
 import { getCustomTopics, CUSTOM_TOPICS_EVENT } from '@/lib/custom-topics-client'
@@ -1976,7 +1977,7 @@ export default function Home({
   // were just cleared / nothing to keep).
   const lastFetchCatRef = React.useRef<FeedCategory | null>(null)
   const fetchData = React.useCallback(
-    async (cat: FeedCategory, mc: number, country?: CountryInfo | null) => {
+    async (cat: FeedCategory, mc: number, country?: CountryInfo | null, opts?: { quiet?: boolean }) => {
       // For virtual categories, include the country param ONLY when we
       // already know it (manual override or cached detection). When country
       // is still null (very first visit), the request goes out WITHOUT the
@@ -1991,7 +1992,8 @@ export default function Home({
       const isCustom = isCustomCategory(cat)
 
       const reqId = ++reqIdRef.current
-      const silent = lastFetchCatRef.current === cat && topicsRef.current.length > 0
+      const silent =
+        opts?.quiet === true || (lastFetchCatRef.current === cat && topicsRef.current.length > 0)
       lastFetchCatRef.current = cat
       if (!silent) setLoading(true)
       setError(null)
@@ -2160,6 +2162,35 @@ export default function Home({
   useEffect(() => {
     fetchData(category, minCoverage, country)
   }, [category, minCoverage, country, fetchData])
+
+  // ── Custom-subtopic "gathering stories" AUTO-RETRY ──
+  // A pending custom feed means the first fill is still running server-side
+  // (the /api/news deadline race keeps it going via after()) or GDELT was
+  // throttled. The old UX made the user babysit the "Try now" button —
+  // "the premium subtopics never give me news". Now the client quietly
+  // re-fetches (8s → 16s → 32s → 64s, max 4 per topic episode) WITHOUT
+  // flashing the skeleton (quiet fetch keeps the gathering card up); the
+  // feed appears the moment the background fill lands in the cache. Each
+  // still-pending retry re-arms the effect (pending flips false→true per
+  // fetch cycle); a landed feed (pending=false) never re-arms. The manual
+  // "Try now" button stays for anything after that.
+  const pendingRetryCountRef = React.useRef(0)
+  const pendingRetryCatRef = React.useRef<string | null>(null)
+  useEffect(() => {
+    if (!topicPending || !isCustomCategory(category)) return
+    if (pendingRetryCatRef.current !== category) {
+      pendingRetryCatRef.current = category
+      pendingRetryCountRef.current = 0
+    }
+    if (pendingRetryCountRef.current >= 4) return
+    const delay = [8000, 16000, 32000, 64000][Math.min(pendingRetryCountRef.current, 3)]
+    const t = setTimeout(() => {
+      if (document.visibilityState === 'hidden') return // re-arms on the next pending flip
+      pendingRetryCountRef.current += 1
+      void fetchData(category, minCoverage, country, { quiet: true })
+    }, delay)
+    return () => clearTimeout(t)
+  }, [topicPending, category, minCoverage, country, fetchData])
 
   // ── Adaptive splash handoff (PWA cold start only) ──
   // The inline controller in layout.tsx holds the launch splash on screen
@@ -2474,66 +2505,12 @@ export default function Home({
             - 'cardsarrow': big chips + the same floating swipe hint. */}
         <div className="mx-auto max-w-[1440px] px-4 pb-2 lg:px-6">
           {subtopicNav === 'dock' ? null : subtopicNav === 'classic' ? (
-            <div className="flex flex-wrap items-center gap-1">
-              {PRIMARY_CATEGORIES.map((c) => (
-                <CategoryTab
-                  key={c}
-                  cat={c}
-                  active={category === c}
-                  onClick={() => setCategory(c)}
-                  country={country}
-                />
-              ))}
-
-              <div className="mx-1 h-5 w-px bg-border" />
-
-              {SECONDARY_CATEGORIES.map((c) => (
-                <CategoryTab
-                  key={c}
-                  cat={c}
-                  active={category === c}
-                  onClick={() => setCategory(c)}
-                  country={country}
-                />
-              ))}
-
-              {/* Premium custom subtopics + the golden-diamond add
-                  button — classic-pill geometry (10px/12px text, same
-                  py padding) so they wrap like any other pill. The + is
-                  GLUED to the last chip (trailing) so it can never wrap
-                  onto a row of its own — a lone + on a third row was the
-                  Pixel 8 Pro layout bug; a third row now only appears
-                  when the visitor actually pins premium topics, and it
-                  carries a real chip alongside the +. */}
-              <CustomTopicChips
-                activeCategory={category}
-                onSelect={(c) => setCategory(c as typeof category)}
-                chipClassName="rounded-md px-1.5 py-1 text-[10px] sm:px-3 sm:py-1.5 sm:text-xs"
-                iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
-                activeChipClassName="bg-foreground text-background shadow-sm"
-                trailing={
-                  <AddTopicChip
-                    chipClassName="rounded-md px-1.5 py-1 text-[10px] sm:px-3 sm:py-1.5 sm:text-xs"
-                    diamondClassName="h-[10px] w-[10px] sm:h-3 sm:w-3"
-                    iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
-                    label=""
-                  />
-                }
-              />
-
-              {/* Search button — hidden on mobile (moved to section headers).
-                  Visible on desktop (lg+) next to Sports. */}
-              <button
-                type="button"
-                onClick={openSearch}
-                className="hidden lg:inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-xs font-medium"
-                aria-label="Search"
-                title="Search news"
-              >
-                <Search className="h-3.5 w-3.5" />
-                <span>Search</span>
-              </button>
-            </div>
+            <ClassicSubtopicBar
+              category={category}
+              onSelect={(c) => setCategory(c)}
+              country={country}
+              onSearch={openSearch}
+            />
           ) : subtopicNav === 'maxipills' ? (
             <div className="flex flex-wrap items-center gap-2">
               <SubtopicMaxiPills
@@ -3164,10 +3141,13 @@ function MonetizationPopups({
  * DONATION model → the original Ko-fi heart button (unchanged).
  * SUBSCRIPTION model → the heart is swapped for the Premium button: the
  * golden diamond. Mobile stays icon-only (44px target); ≥sm shows the
- * label ("Premium" / "Ultra" once subscribed). Free visitors get the
- * upgrade dialog; subscribers jump straight to Account. */
+ * label ("Premium" / "Ultra" once subscribed). BOTH states now route to
+ * the DEDICATED /subscribe page (the user spec — a real plans page, not
+ * the settings sheet). */
 function MonetizationButton({ onAccount }: { onAccount: () => void }) {
   const sub = useSubscription()
+  const router = useRouter()
+  void onAccount // reserved: subscribers may again jump straight to Account
 
   // Donation model → the original Ko-fi heart, byte-for-byte.
   if (sub.model === 'donation') {
@@ -3185,12 +3165,12 @@ function MonetizationButton({ onAccount }: { onAccount: () => void }) {
     )
   }
 
-  // Subscription model → the Premium button.
+  // Subscription model → the Premium button → the /subscribe page.
   const premium = sub.tier === 'premium' || sub.tier === 'ultra'
   return (
     <Button
       variant="ghost"
-      onClick={() => (premium ? onAccount() : openUpgradeDialog('premium'))}
+      onClick={() => router.push('/subscribe')}
       className="relative h-9 gap-1.5 rounded-full px-2.5 text-xs font-semibold text-amber-600 transition-colors hover:bg-amber-500/10 hover:text-amber-600 active:scale-95 dark:text-amber-400 dark:hover:text-amber-400"
       aria-label={premium ? 'Your subscription' : 'Get NeutralWire Premium'}
       title={
@@ -3245,6 +3225,167 @@ function NavOverrideEntitlementGuard() {
   return null
 }
 
+// ── CLASSIC header: adaptive two-row sizing (the Pixel 8 Pro fix) ────────
+// The classic wrapping pills used a FIXED 10px font below sm: — on a
+// 412px Pixel 8 Pro they only filled ~1.7 of the 2 available rows (a
+// third of row two sat empty while the text stayed mini). The bar now
+// walks the font size DOWN from 14px to the largest value that keeps
+// EVERYTHING (11 categories + divider + custom chips + the glued +)
+// within EXACTLY TWO rows — so the pills grow until the rows are properly
+// full, never spilling to a third (320px devices simply land on a smaller
+// step; 10px is the floor that already fit 2 rows on every phone).
+// Measurement: cluster the flex children by offsetTop (10px buckets —
+// immune to the ±2px vertical centring of the shorter divider element,
+// well under the ~22px row pitch) and count clusters. ≥sm the pills
+// switch to their fixed sm:text-xs and the inline style is dropped.
+const CLASSIC_FONT_STEPS = [14, 13.5, 13, 12.5, 12, 11.5, 11, 10.5, 10]
+const CLASSIC_SSR_STEP = CLASSIC_FONT_STEPS.length - 1 // 10px until JS measures
+
+function ClassicSubtopicBar({
+  category,
+  onSelect,
+  country,
+  onSearch,
+}: {
+  category: FeedCategory
+  onSelect: (c: FeedCategory) => void
+  country?: CountryInfo | null
+  onSearch: () => void
+}) {
+  const rowRef = React.useRef<HTMLDivElement | null>(null)
+  const [fontStep, setFontStep] = React.useState(CLASSIC_SSR_STEP)
+  // Restart counter — guarantees a re-render even when the new step equals
+  // the current one (React would bail out and kill the cascade).
+  const [runId, setRunId] = React.useState(0)
+  const [narrow, setNarrow] = React.useState(false)
+
+  const restart = React.useCallback(() => {
+    setRunId((r) => r + 1)
+    setFontStep(0)
+  }, [])
+
+  // Narrow = below sm: (the pills' own sm:text-xs takes over above it).
+  React.useEffect(() => {
+    const mq = window.matchMedia('(max-width: 639px)')
+    const update = () => {
+      setNarrow(mq.matches)
+      restart()
+    }
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [restart])
+
+  // Step down while the pills need more than two rows (pre-paint via
+  // useLayoutEffect semantics of useEffect + immediate commit; an
+  // overflowing 3rd row is never shown in practice because each step
+  // re-measures synchronously after commit).
+  React.useEffect(() => {
+    if (!narrow) return
+    if (fontStep >= CLASSIC_FONT_STEPS.length - 1) return
+    const row = rowRef.current
+    if (!row) return
+    const buckets = new Set<number>()
+    for (const child of Array.from(row.children)) {
+      const el = child as HTMLElement
+      // Hidden children (the desktop-only Search button renders
+      // display:none on mobile with a degenerate 0,0 box) must not count
+      // as a phantom row — they'd floor the stepper at the smallest size.
+      if (el.offsetWidth === 0 && el.offsetHeight === 0) continue
+      buckets.add(Math.round(el.getBoundingClientRect().top / 10))
+    }
+    if (buckets.size > 2) setFontStep((s) => Math.min(s + 1, CLASSIC_FONT_STEPS.length - 1))
+  }, [narrow, fontStep, runId, category, country?.code])
+
+  // Real font loads + resizes + label changes ("My Country" → "UK") can
+  // allow a bigger size again — restart the cascade.
+  React.useEffect(() => {
+    let alive = true
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(() => { if (alive) restart() }).catch(() => {})
+    }
+    let t: ReturnType<typeof setTimeout> | undefined
+    const onResize = () => {
+      clearTimeout(t)
+      t = setTimeout(restart, 150)
+    }
+    window.addEventListener('resize', onResize)
+    return () => {
+      alive = false
+      clearTimeout(t)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [restart])
+  React.useEffect(() => {
+    restart()
+  }, [country?.code, restart])
+
+  return (
+    <div
+      ref={rowRef}
+      className="flex flex-wrap items-center gap-1 text-[10px] sm:text-xs"
+      style={narrow ? { fontSize: `${CLASSIC_FONT_STEPS[fontStep]}px` } : undefined}
+    >
+      {PRIMARY_CATEGORIES.map((c) => (
+        <CategoryTab
+          key={c}
+          cat={c}
+          active={category === c}
+          onClick={() => onSelect(c)}
+          country={country}
+        />
+      ))}
+
+      <div className="mx-1 h-5 w-px shrink-0 grow-0 bg-border" />
+
+      {SECONDARY_CATEGORIES.map((c) => (
+        <CategoryTab
+          key={c}
+          cat={c}
+          active={category === c}
+          onClick={() => onSelect(c)}
+          country={country}
+        />
+      ))}
+
+      {/* Premium custom subtopics + the golden-diamond add button —
+          classic-pill geometry INHERITING the adaptive font (no fixed
+          mobile text size) so they wrap like any other pill. The + is
+          GLUED to the last chip (trailing) so it can never wrap onto a
+          row of its own; a third row only appears when the visitor
+          actually pins premium topics, and it carries a real chip. */}
+      <CustomTopicChips
+        activeCategory={category}
+        onSelect={(c) => onSelect(c as FeedCategory)}
+        chipClassName="rounded-md px-2 py-1.5 sm:px-3 sm:py-1.5 sm:text-xs"
+        iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
+        activeChipClassName="bg-foreground text-background shadow-sm"
+        trailing={
+          <AddTopicChip
+            chipClassName="rounded-md px-2 py-1.5 sm:px-3 sm:py-1.5 sm:text-xs"
+            diamondClassName="h-[10px] w-[10px] sm:h-3 sm:w-3"
+            iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
+            label=""
+          />
+        }
+      />
+
+      {/* Search button — hidden on mobile (moved to section headers).
+          Visible on desktop (lg+) next to Sports. */}
+      <button
+        type="button"
+        onClick={onSearch}
+        className="hidden lg:inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground/80 hover:bg-muted/80 transition-colors text-xs font-medium"
+        aria-label="Search"
+        title="Search news"
+      >
+        <Search className="h-3.5 w-3.5" />
+        <span>Search</span>
+      </button>
+    </div>
+  )
+}
+
 function CategoryTab({
   cat,
   active,
@@ -3277,15 +3418,13 @@ function CategoryTab({
       whileTap={{ scale: 0.94 }}
       transition={{ duration: 0.15, ease: 'easeOut' }}
       className={cn(
-        // Smaller text + tighter padding on mobile so all 11 categories
-        // (Relevant, UK, Top Stories, World, Politics, Business, Tech,
-        // Science, Health, Sports, Blindspots) fit in 2 lines on a 320px
-        // iPhone screen. sm: restores normal size on wider screens.
-        //
-        // The .tab-pill-text class adds a smooth color transition (0.2s
-        // ease-out) so the text color doesn't snap when active changes —
-        // it cross-fades alongside the sliding pill.
-        'relative inline-flex items-center gap-0.5 rounded-md whitespace-nowrap text-[10px] px-1.5 py-1 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors tab-pill-text',
+        // Classic silhouette, INHERITING the container's adaptive font on
+        // mobile (ClassicSubtopicBar sizes it so the pills fill exactly two
+        // rows). Narrow pills also GROW — every row fills edge-to-edge
+        // (the maxipills aesthetic), so the two rows are properly USED
+        // instead of ending 30% short; ≥sm pills return to natural width
+        // with the fixed sm:text-xs.
+        'relative inline-flex grow items-center justify-center gap-0.5 rounded-md whitespace-nowrap px-2 py-1.5 sm:grow-0 sm:gap-1 sm:px-3 sm:py-1.5 sm:text-xs font-medium transition-colors tab-pill-text',
         active
           ? 'text-background'
           : 'hover:bg-muted text-foreground/80',
