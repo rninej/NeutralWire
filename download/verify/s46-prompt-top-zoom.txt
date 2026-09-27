@@ -1,0 +1,10 @@
+This is a 2x-zoomed crop of the TOP of a mobile page (412px original width) from "NeutralWire", a neutral news aggregator. Look carefully at fine details.
+
+Answer factually and precisely:
+1. Read out the header contents verbatim: logo/brand text, any location text, icons, notification badges (color + text).
+2. Read out the horizontal tab/navigation labels verbatim. Which tab appears active/selected?
+3. Read the "My Country" section header text and any nearby UI (search icon, feed label).
+4. Is there a cookie consent banner? Quote its text verbatim and state exactly what it overlaps/covers.
+5. For the first 2-3 story cards: quote the headline, the source-count text EXACTLY as rendered character-for-character (e.g. "2 sources" vs "2src" vs "2 src"), and describe the bias bar: does it have visible segments? What colors (blue/gray/red)? Any percentage label next to it?
+6. Do story cards have thumbnail images, or gray/blank placeholders where images should be?
+7. Any text clipping, overlap, or rendering glitches visible at this zoom level?

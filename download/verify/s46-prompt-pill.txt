@@ -1,0 +1,4 @@
+This is a 6x nearest-neighbor upscaled crop of a small pill-shaped UI element from a mobile header. It contains a short region/country code (2 letters or similar) next to an icon.
+
+1. Read the text inside the pill EXACTLY, character by character. It is critical to distinguish U vs H and K. Is it "UK", "HK", or something else?
+2. Describe the icon inside or next to the pill.

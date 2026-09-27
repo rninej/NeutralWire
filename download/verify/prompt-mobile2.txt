@@ -1,0 +1,11 @@
+This is a full-page screenshot (412px-wide viewport) of an email newsletter called "NeutralWire Daily Digest". A previous version laid out story cards 2-per-row (squeezed ~190px each); a CSS media query (max-width:480px) was added so cards should now STACK 1-per-row, each spanning nearly the full ~380px width. Analyze factually and precisely; do not guess. If something is not visible, say "not visible".
+
+1. STACKING (critical): Are the story cards now arranged ONE per row (single column, each card spanning almost the full content width, roughly 340-390px)? Or are two cards still side-by-side per row (each ~150-200px wide)? State clearly: SINGLE COLUMN or TWO-PER-ROW. Estimate how many story cards are on the page in total.
+
+2. READABILITY: For a few cards, check: do headlines wrap onto multiple lines at a reasonable width (not one long skinny column of words)? Is summary text readable? Are the percentage labels (like "L 48% · C 8% · R 44%") on one line or wrapping awkwardly?
+
+3. BIAS BARS: Each card should have a horizontal bias bar with 3 colored segments (blue / gray / red). Are these visible in every card you can see? Are any segments collapsed to zero width, missing, or rendered as a solid single-color block?
+
+4. DEFECTS / REGRESSIONS: Report any of: overlapping text, text clipped by card edges or screen edge, horizontal overflow (content cut off at the right edge), cards touching with no spacing, missing bias bars, broken layout elsewhere on the page (header, footer, intro text).
+
+5. VERDICT: One sentence — does the mobile newsletter now render as a clean, readable single-column layout?

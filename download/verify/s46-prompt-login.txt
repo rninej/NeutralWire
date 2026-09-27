@@ -1,0 +1,10 @@
+You are verifying a screenshot of "NeutralWire", a neutral news aggregator website. This screenshot is expected to show a dashboard password/login gate page (412x900 mobile viewport).
+
+Expected elements: a password input field, "Dashboard" branding, and NO sensitive data visible yet (it should be a gate, not the dashboard itself).
+
+Answer these questions factually and concisely:
+1. What does the page show? Describe the layout and main elements (header/branding text, any input fields, buttons, instructions).
+2. Are there any rendering defects: blank page, error text, overlapping elements, broken images, unstyled raw HTML?
+3. Is any sensitive dashboard data (feeds, config, tokens, stats, story lists) visible, or is it purely a login gate?
+4. Read out any visible text verbatim (labels, button text, hints).
+5. Verdict: does this screenshot correctly show a login/password gate? (PASS / FAIL / PARTIAL with one-line reason)

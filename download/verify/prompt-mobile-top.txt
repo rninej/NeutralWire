@@ -1,0 +1,15 @@
+This is the TOP portion of a full-page screenshot of an email newsletter at a 412px-wide mobile viewport (412px wide image). Answer these questions factually and precisely:
+
+1. Count the story cards visible in this portion. Are they arranged ONE card per row (each card spanning the full ~412px width), or TWO cards side-by-side per row (each card roughly half the width)?
+
+2. For the first story card, state its approximate width as a fraction of the screen width (e.g., "full width" or "about half width").
+
+3. Is there a dark header band with a wordmark (quote it, note any amber/orange colored part) and a "DAILY DIGEST" label?
+
+4. Quote the greeting line, the date/stories line, and the editor's note if visible.
+
+5. For the first card, list from top to bottom: rank number and its color, "N SOURCES" line, headline text, whether a summary paragraph exists, a horizontal multi-segment bias bar (how many segments, colors), percentage labels (quote exactly), and the "Read the full picture" link and underline color.
+
+6. Any defects: overlapping text, clipped text, text touching or crossing card borders, bias bar collapsed/missing segments, percentage labels wrapping awkwardly, or cards touching each other with no gap?
+
+7. One-sentence verdict on whether this top portion looks like a clean, readable mobile email.

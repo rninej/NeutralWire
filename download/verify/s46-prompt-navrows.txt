@@ -1,0 +1,6 @@
+This is a 4x-zoomed crop of the navigation area (below the header, above the story feed) of a mobile news app page. There may be one or two horizontal strips of tabs/chips/pills.
+
+1. How many distinct horizontal strips/rows of navigation are in this crop? Describe each.
+2. In each strip, read every label verbatim, left to right. Note which pill is black/filled (selected) and read its text exactly (distinguish U vs H).
+3. Note any icons, colored dots, or buttons (e.g. a "+" button) and their positions.
+4. Below the strips, what comes next (section header text? first card?) — quote verbatim.

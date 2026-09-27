@@ -1,0 +1,15 @@
+This is the TOP portion (first screenful, ~978px tall) of a full-page screenshot of an email newsletter at a 900px-wide desktop viewport. Answer factually and precisely:
+
+1. How many story cards are fully visible, and how many are partially visible (cut off at the bottom edge) in this first screenful?
+
+2. Confirm the card arrangement: TWO cards side-by-side per row (two columns), or one card per row? How many complete rows of cards are visible?
+
+3. Do the two cards in the first row have equal widths? Is there a clear vertical gutter/gap between the columns?
+
+4. Describe the first card's structure top-to-bottom: rank number (text and color), "N SOURCES" line (quote), headline (quote), summary (present? roughly how many sentences?), bias bar (number of segments, colors, all visible?), percentage labels (quote exactly), "Read the full picture →" link (underline color?).
+
+5. Header check: dark band, wordmark with two-tone coloring (quote exact text and which part is amber), "DAILY DIGEST" label position.
+
+6. Intro check: quote the greeting, the date line, and the editor's note.
+
+7. Any defects visible: overlap, clipping, uneven cards, missing bars, unstyled text? One-sentence verdict.

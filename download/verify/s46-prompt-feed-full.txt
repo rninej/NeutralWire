@@ -1,0 +1,10 @@
+You are verifying a full-page screenshot of the home page of "NeutralWire", a neutral news aggregator. Expected: the "My Country" (UK) feed with news story cards. Each card should have: a headline, a source count (e.g. "N sources"), and a horizontal bias bar with blue / gray / red segments. Top stories should be UK domestic news (e.g. social care, Heathrow, counter-terror police).
+
+This is a very tall full-page mobile screenshot (412 wide). Answer factually and concisely:
+1. Overall layout: what sections/regions are visible top to bottom (header, tabs, feed sections, cards, footer)?
+2. Are story cards visible with readable headlines? Quote 3-5 example headlines you can read.
+3. Do bias bars render? Describe what they look like (colored segments? empty? misaligned?). Do you see blue/gray/red coloring?
+4. Roughly how many story cards are visible in total?
+5. Are topics UK-domestic (social care, Heathrow, counter-terror police, NHS, etc.) or off-topic?
+6. Rendering defects: blank areas, error text, overlapping elements, broken images, unrendered template placeholders?
+7. Verdict: does this screenshot show a working UK feed with cards + bias bars? (PASS / FAIL / PARTIAL with one-line reason)

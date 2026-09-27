@@ -1,0 +1,9 @@
+This is the bottom third of a full-page screenshot (412px-wide mobile viewport) of an email newsletter. Answer factually and precisely; do not guess. If something is not visible, say "not visible".
+
+1. STORY CARDS: Are cards single-column (one per row, full width)? Do all visible cards have a horizontal 3-segment bias bar (blue/gray/red) with no missing bars?
+
+2. Any text overlap, clipping at card edges or screen edge, or horizontal overflow (content cut at right edge)?
+
+3. FOOTER: Is there a footer? Quote its text (e.g., "Sent by NeutralWire", unsubscribe/manage preferences links). Do footer links fit or wrap/overlap badly?
+
+4. Any other visual defects in this segment?

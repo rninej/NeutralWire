@@ -1,0 +1,6 @@
+This is a 3x-zoomed crop of the very top header + tab bar of a mobile page from "NeutralWire" news aggregator. Read text EXACTLY, character by character.
+
+1. Read the location/region text in the top-right header area verbatim (single letters matter: is it "UK" or "HK" or something else?). Describe the icon next to it.
+2. Read every tab label in the horizontal scrolling tab bar verbatim, left to right. Which one is visually selected (filled/highlighted pill)? Read that selected tab's text EXACTLY.
+3. Describe any icons in the header: colors, shapes, notification dots/badges (color and any number/text on them).
+4. Any other text visible in this crop, verbatim.

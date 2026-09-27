@@ -1,0 +1,1 @@
+This is a 3x-zoomed crop of a horizontal scrolling tab bar from a mobile news app (NeutralWire). One tab is a black filled pill labeled "UK" (selected). Read all tab labels left to right, verbatim, in order. Distinguish carefully between similar words. Also note the "+" style button at the right end if visible, and any colored dots.

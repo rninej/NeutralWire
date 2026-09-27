@@ -1,0 +1,6 @@
+This is a 2x-zoomed crop (region ~y540-960 of a tall mobile page) from "NeutralWire" news aggregator home page. A cookie consent banner or a notification badge ("1 issue") may be present in this region.
+
+1. Is there a cookie consent banner or any overlay banner? If yes: quote ALL its text verbatim, describe its buttons, and state exactly which elements it overlaps.
+2. Is there any red badge or pill with text like "1 issue"? If yes, quote its text verbatim and state where it is attached (header icon? card? banner?).
+3. What story cards are visible? Quote headlines verbatim, the source-count text exactly as rendered, and describe each bias bar (solid or segmented? colors: blue/gray/red? percentage labels?).
+4. Any rendering defects: clipped text, overlaps, blank boxes, broken images?

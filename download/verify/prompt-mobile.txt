@@ -1,0 +1,15 @@
+This is a full-page screenshot of an email newsletter called "NeutralWire Daily Digest", rendered at a 412px-wide mobile viewport. Analyze it factually and answer each question with specifics. Be precise; do not guess. If something is not visible, say "not visible".
+
+1. HEADER: Is there a dark header band at the top? What wordmark text is shown and does one part appear amber/orange? Is there a "DAILY DIGEST" label visible in the header (where)? Does the header fit the narrow width without wrapping oddly or overlapping?
+
+2. STORY CARD LAYOUT (critical): On mobile, are the story cards stacked ONE per row (single column, full width)? Or do two cards still try to sit side-by-side and get squeezed? Roughly how many story cards total are on the page?
+
+3. READABILITY: Are the cards readable at this width? Is any headline, summary text, percentage label, or "Read the full picture" link clipped, overlapping, or overflowing the card edges or screen edge? Is there horizontal overflow (content cut off at the right edge of the 412px viewport)?
+
+4. CARD CONTENT: For the first card, list in order: rank number like "#1" (color?), "N SOURCES" line (quote), bold headline (quote first words), summary paragraph, horizontal bias bar (how many colored segments, which colors - blue/red/gray; are any segments collapsed to zero width or missing?), percentage labels like "L X% · C X% · R X%" (quote them exactly), and the "Read the full picture" link with any underline (what color?).
+
+5. FOOTER: Is there a footer at the bottom? Quote its text including "Sent by NeutralWire" and any "Unsubscribe in one click" / "Manage preferences" links. Do the footer links fit on the narrow screen or wrap/overlap?
+
+6. DEFECTS: Report any of: overlapping text, text clipped by card edges, bias bar missing or showing as a solid single color block, percentage labels wrapping badly onto multiple lines, cards touching with no spacing, visible raw HTML tags rendered as text, broken/missing images, or anything that looks unstyled (default blue underlined links everywhere, Times New Roman look, etc.).
+
+7. VERDICT: Does the mobile version look like a professional, readable single-column mobile newsletter? One-sentence verdict.

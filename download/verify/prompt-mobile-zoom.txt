@@ -1,0 +1,13 @@
+This is a zoomed-in crop (2.5x upscale) of a 412px-wide mobile email screenshot, showing the first row of story cards. At this mobile width the two cards sit side-by-side, each roughly 190px wide. Inspect closely for readability defects and answer:
+
+1. Are both cards in this row fully inside the viewport (no right-edge cut-off)?
+
+2. Is any text overlapping other text or crossing a card border? Check headline wrapping, summary text, and the small "#N · N SOURCES" line.
+
+3. Bias bar check for EACH card: is the horizontal bar present with three distinct colored segments (blue / gray / red)? Is any segment so thin it's nearly invisible (e.g. an 8% segment ~15px wide at this scale)? Quote the percentage label line under each bar exactly as readable (e.g. "L 15% · C 77% · R 8%") and say whether it fits on one line or wraps.
+
+4. Is the "Read the full picture →" link visible in each card, and does its amber/orange underline wrap onto a second line awkwardly or does the arrow land alone on its own line?
+
+5. Do the card borders, rounded corners, and internal padding look intact, or does content touch the border?
+
+6. Overall: at real (unzoomed) size, would a person be able to comfortably read these half-width cards on a phone? List the top 2-3 readability concerns if any.

@@ -1,0 +1,7 @@
+This is a tall full-page mobile screenshot of the NeutralWire news aggregator showing the UK "My Country" feed as story cards. Answer these targeted questions factually:
+
+1. Is there any story card mentioning Heathrow (airport)? If yes, quote its headline verbatim.
+2. Is there any story card about social care (e.g. adult social care, care homes, care system)? If yes, quote its headline verbatim.
+3. Are there story cards about counter-terrorism / counter-terror police? If yes, quote the headlines verbatim.
+4. List every distinct story headline you can read in the whole page, verbatim, in order top to bottom.
+5. Near the top of the feed, is there a lead/highlighted story or section header before the card list? Quote it.

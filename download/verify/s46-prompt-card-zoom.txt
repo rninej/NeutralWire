@@ -1,0 +1,8 @@
+This is a 2.5x-zoomed crop of story cards from the middle of a mobile page (412px original width) from "NeutralWire", a neutral news aggregator. Each story card should show: a headline, a source count, and a horizontal bias bar (blue/gray/red segments).
+
+Answer factually and precisely:
+1. For each card fully or partially visible: quote the headline verbatim.
+2. Quote the source-count text EXACTLY character-for-character as rendered (e.g. "1 source" vs "1src" vs "1 src"). Note any inconsistency between cards.
+3. Describe each bias bar precisely: is it a single solid color or segmented? Which colors exactly (blue / gray / red)? Is there a percentage number or label beside/inside the bar? Quote the numbers.
+4. Do the cards show thumbnails/images, or gray placeholder boxes?
+5. Any layout defects at this zoom: clipped text, overlapping elements, misaligned bars, empty gaps?

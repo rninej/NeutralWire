@@ -1,0 +1,11 @@
+This is a zoomed (2.5x) crop from a 412px-wide mobile rendering of an email newsletter, showing the top of the story-card list. Answer factually and precisely; do not guess. If something is not visible, say "not visible".
+
+1. CARD WIDTH: Does the story card span almost the full crop width (single column), or is it a narrow half-width card?
+
+2. CARD ANATOMY, in order from top to bottom of the visible card(s): rank number like "#1" (what color?), "N SOURCES" line (quote it), bold headline (quote the first words), summary paragraph (quote first words), horizontal bias bar. For the bias bar: how many colored segments, which colors (blue/gray/red left to right), roughly what proportion each? Any segment collapsed to zero width?
+
+3. PERCENTAGE LABELS: Quote exactly any labels like "L X% · C X% · R X%". One line or wrapping badly? Any overlap with the bar or other text?
+
+4. LINK: Is there a "Read the full picture" link? What color / underlined?
+
+5. DEFECTS: Any overlapping text, clipped text at card edges, text overflowing the card, or elements colliding?

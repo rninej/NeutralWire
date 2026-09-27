@@ -1,0 +1,9 @@
+You are verifying a vertical segment (crop) of a full-page mobile screenshot (412px wide) of "NeutralWire", a neutral news aggregator home page showing the UK "My Country" feed. Story cards should each have: a headline, a source count, and a horizontal bias bar with blue/gray/red segments.
+
+Answer factually and concisely:
+1. What is visible in this segment (header/tabs/cards/footers/buttons)? Note if it is a top / middle / bottom portion of the page.
+2. Quote any story card headlines you can read verbatim.
+3. Do you see bias bars? Describe their appearance (blue/gray/red segments, proportions, any broken/empty bars).
+4. Do cards show a source count (e.g. "3 sources", "sources")?
+5. Any rendering defects here: blank areas, error text, overlapping/clipped text, broken images, placeholder text like {undefined} or NaN?
+6. Roughly how many story cards are in this segment?

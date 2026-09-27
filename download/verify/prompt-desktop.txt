@@ -1,0 +1,15 @@
+This is a full-page screenshot of an email newsletter called "NeutralWire Daily Digest", rendered at a 900px-wide desktop viewport. Analyze it factually and answer each question with specifics. Be precise; do not guess. If something is not visible, say "not visible".
+
+1. HEADER: Is there a dark header band at the top? What wordmark text is shown (exact wording and any two-tone coloring, e.g. one word in amber/orange)? Is there a label like "DAILY DIGEST" on the right side of the header? Is the header full-width or boxed?
+
+2. INTRO BLOCK: Is there a greeting line (quote it), a date line (quote it), and an editor's note paragraph? List them in order.
+
+3. STORY CARD LAYOUT (critical): Are the story cards arranged as a GRID with TWO cards side-by-side per row (two columns), or are all cards stacked single-file one below the other? How many story cards total are on the page? In the FIRST screenful (top ~900px of page height), how many story cards are fully or partially visible?
+
+4. CARD CONTENT: Pick the first story card and describe its exact contents top to bottom: is there a rank number like "#1" (what color?), a "N SOURCES" line (quote it), a bold headline (quote the first words), a summary paragraph (how many sentences roughly?), a horizontal bias bar made of colored segments (how many segments? what colors - blue/red/gray? are all segments visible with non-zero width, or is any bar missing/collapsed?), percentage labels like "L X% · C X% · R X%" (quote them), and a "Read the full picture" link (is it underlined in amber/orange?).
+
+5. FOOTER: Is there a footer at the bottom? Quote its text, including any "Sent by NeutralWire" and "Unsubscribe" / "Manage preferences" links.
+
+6. DEFECTS: Report any of these if present: overlapping or clipped text, text running outside its card, bias bars that are invisible/zero-width/missing segments, cards of unequal widths in the same row, missing gaps or no spacing between cards, unstyled raw HTML showing as text (e.g. visible tags like <div>), broken images (empty boxes with alt text), misaligned percentage labels, or any element that looks unstyled/default browser styling.
+
+7. VERDICT: Does this look like a professional, modern newsletter with a proper card grid? Give a one-sentence verdict.
