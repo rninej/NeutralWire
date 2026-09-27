@@ -87,4 +87,10 @@ export const CRON_JOB_INTERVALS = {
     clientIntervalMs: 20 * 60 * 1000,
     serverFloorMs: 14 * 60 * 1000,
   },
+  /** Email digest sends — visitors check every 30 min (isDue windows are
+   *  an hour wide, so this always lands inside them). */
+  digest: {
+    clientIntervalMs: 30 * 60 * 1000,
+    serverFloorMs: 25 * 60 * 1000,
+  },
 } as const

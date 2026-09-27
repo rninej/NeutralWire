@@ -36,11 +36,12 @@ import {
 
 // ── The golden diamond ──────────────────────────────────────────────────
 
-/** The global premium mark — the CLASSIC cut kite with visible facet
- *  LINES through it (the owner-preferred original): four golden planes
- *  whose opacity steps draw the internal edges, so it reads as a drawn,
- *  lined gem rather than a filled stone — even at 10px. One symbol
- *  everywhere a premium feature appears. */
+/** The global premium mark — a real cut GEM: a flat table across the top,
+ *  a crown that flares out to the wide girdle, and a pavilion that tapers
+ *  to a single point. Six golden planes whose opacity steps draw the
+ *  facet LINES through the stone (bright table, deeper wings) so it reads
+ *  as a drawn, lined diamond — not a filled blob, not a kite — even at
+ *  10px. One symbol everywhere a premium feature appears. */
 export function PremiumDiamond({ className }: { className?: string }) {
   return (
     <span
@@ -51,19 +52,29 @@ export function PremiumDiamond({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <svg viewBox="0 0 24 24" fill="currentColor" className="h-full w-full drop-shadow-[0_0_1px_rgba(245,158,11,0.6)]">
-        <path d="M12 2L15 6.5H9L12 2Z" />
-        <path d="M9 6.5L4.5 12L9 17.5L12 13L9 6.5Z" opacity="0.85" />
-        <path d="M15 6.5L19.5 12L15 17.5L12 13L15 6.5Z" opacity="0.85" />
-        <path d="M9 17.5L12 22L15 17.5L12 15.5L9 17.5Z" opacity="0.9" />
+        {/* crown — left corner facet */}
+        <path d="M6 3.5H11L8 9H2L6 3.5Z" opacity="0.78" />
+        {/* crown — the bright table facet (the stone's flat top) */}
+        <path d="M11 3.5H13L16 9H8L11 3.5Z" opacity="1" />
+        {/* crown — right corner facet */}
+        <path d="M13 3.5H18L22 9H16L13 3.5Z" opacity="0.78" />
+        {/* pavilion — left wing */}
+        <path d="M2 9H8L12 21.5L2 9Z" opacity="0.6" />
+        {/* pavilion — the deep centre facet down to the point */}
+        <path d="M8 9H16L12 21.5L8 9Z" opacity="0.92" />
+        {/* pavilion — right wing */}
+        <path d="M16 9H22L12 21.5L16 9Z" opacity="0.6" />
       </svg>
     </span>
   )
 }
 
 /** The ULTRA mark — a meteor shower: three golden streaks raining at
- *  staggered angles, each with a bright head and a fading tail, plus a
- *  couple of far sparkles and a landing shimmer. Used on the Ultra tier
- *  card wherever plans are shown (upgrade dialog, /subscribe, Account). */
+ *  staggered angles down-left, each capped by a bright round head, plus
+ *  a far sparkle and landing shimmers. The streaks are drawn THICK (they
+ *  must survive 16px renders — thin tails vanish and the mark would read
+ *  as random sparkles). Used on the Ultra tier card wherever plans are
+ *  shown (upgrade dialog, /subscribe, Account). */
 export function MeteorShower({ className }: { className?: string }) {
   return (
     <span
@@ -71,16 +82,20 @@ export function MeteorShower({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <svg viewBox="0 0 24 24" fill="none" className="h-full w-full">
-        <path d="M4.2 4.8l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5.5-1.2Z" fill="currentColor" opacity="0.7" />
-        <path d="M19.8 3.4l.35.85.85.35-.85.35-.35.85-.35-.85-.85-.35.85-.35.35-.85Z" fill="currentColor" opacity="0.55" />
-        <path d="M12.8 2.6l1.9 1.9-7.2 7.2-1.9-1.9 7.2-7.2Z" fill="currentColor" opacity="0.45" />
-        <circle cx="14.4" cy="4.2" r="1.7" fill="currentColor" />
-        <path d="M18.6 7.1l1.55 1.55-4.9 4.9-1.55-1.55 4.9-4.9Z" fill="currentColor" opacity="0.35" />
-        <circle cx="19.8" cy="8.3" r="1.3" fill="currentColor" opacity="0.95" />
-        <path d="M9.9 10.9l1.3 1.3-5.1 5.1-1.3-1.3 5.1-5.1Z" fill="currentColor" opacity="0.3" />
-        <circle cx="10.9" cy="11.9" r="1.05" fill="currentColor" opacity="0.85" />
-        <path d="M5.2 18.6h6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" opacity="0.5" />
-        <path d="M8 20.6h7.4" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" opacity="0.35" />
+        {/* far sparkle */}
+        <path d="M4.4 4.4l.5 1.3 1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5.5-1.3Z" fill="currentColor" opacity="0.7" />
+        {/* streak 1 — the long one, top right */}
+        <path d="M14.1 2.2l2.2 2.2-8.3 8.3-2.2-2.2 8.3-8.3Z" fill="currentColor" opacity="0.55" />
+        <circle cx="15.2" cy="3.3" r="2" fill="currentColor" />
+        {/* streak 2 — middle */}
+        <path d="M19.3 8l1.8 1.8-5.6 5.6-1.8-1.8L19.3 8Z" fill="currentColor" opacity="0.45" />
+        <circle cx="20.2" cy="8.9" r="1.6" fill="currentColor" opacity="0.95" />
+        {/* streak 3 — short, lower left */}
+        <path d="M8.6 12.4l1.5 1.5-4.2 4.2-1.5-1.5 4.2-4.2Z" fill="currentColor" opacity="0.4" />
+        <circle cx="9.4" cy="13.2" r="1.3" fill="currentColor" opacity="0.9" />
+        {/* landing shimmer */}
+        <path d="M4.5 19.6h5.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" opacity="0.5" />
+        <path d="M11.5 21.3h4.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" opacity="0.35" />
       </svg>
     </span>
   )
@@ -181,7 +196,12 @@ export function UpgradeDialog() {
   // ── Ko-fi checkout state (mode 'kofi' replaces the old test/stripe
   //    modes — the claim-code panel below renders while a payment is
   //    outstanding) ──
-  const [kofi, setKofi] = React.useState<{ tier: 'premium' | 'ultra'; code: string; url: string } | null>(null)
+  const [kofi, setKofi] = React.useState<{
+    tier: 'premium' | 'ultra'
+    code: string
+    url: string
+    email?: string
+  } | null>(null)
 
   React.useEffect(() => {
     const onOpen = (e: Event) => {
@@ -274,6 +294,7 @@ export function UpgradeDialog() {
         code?: string
         url?: string
         mode?: string
+        email?: string
         error?: string
         needAccount?: boolean
       }
@@ -291,7 +312,7 @@ export function UpgradeDialog() {
       // panel polls + listens for the grant and hands the stage to the
       // PremiumWelcome guided tour the moment it lands.
       if (data.mode === 'kofi' && data.code) {
-        setKofi({ tier, code: data.code, url: data.url || KOFI_PAGE_URL })
+        setKofi({ tier, code: data.code, url: data.url || KOFI_PAGE_URL, email: data.email })
       }
     } catch {
       setError('Network error — try again.')
@@ -401,6 +422,7 @@ export function UpgradeDialog() {
                     tier={kofi.tier}
                     code={kofi.code}
                     url={kofi.url}
+                    email={kofi.email}
                     onDone={() => {
                       setKofi(null)
                       setOpen(false)
@@ -600,22 +622,28 @@ export function UpgradeDialog() {
  *
  * Shown by the UpgradeDialog AND the /subscribe page after
  * /api/subscription/checkout hands out a claim code. Three things at
- * once: the code (copyable, to paste into the Ko-fi message box), the
- * continue button, and a WAITING state that polls /api/kofi/claim so
- * email-matched payments land automatically — the tier grant fires
+ * once — and the EASIEST path needs nothing copied at all: pay on Ko-fi
+ * with your NeutralWire account email (shown, copyable) and the webhook
+ * auto-matches it. A link CODE is offered as the fallback for supporters
+ * paying with a different email. The WAITING state polls /api/kofi/claim
+ * plus the live tier so both paths land automatically — the grant fires
  * SUBSCRIPTION_CHANGED + PremiumWelcome from the provider the moment it
- * lands. A “different email” field lets supporters claim payments made
- * with an address that isn't their account email. */
+ * lands — and a "different email" finder claims payments made with an
+ * address that isn't the account email. */
 export function KofiCheckoutPanel({
   tier,
   code,
   url,
+  email,
   onDone,
   compact = false,
 }: {
   tier: 'premium' | 'ultra'
   code: string
   url: string
+  /** The account email — paying on Ko-fi with THIS address auto-matches,
+  *  so it's presented as the zero-effort primary path. */
+  email?: string
   /** Called once the grant is confirmed (panel shows a beat of success
    *  first, then the caller closes/refreshes). */
   onDone?: () => void
@@ -623,7 +651,7 @@ export function KofiCheckoutPanel({
   compact?: boolean
 }) {
   const sub = useSubscription()
-  const [copied, setCopied] = React.useState(false)
+  const [copied, setCopied] = React.useState<'email' | 'code' | null>(null)
   const [checking, setChecking] = React.useState(false)
   const [granted, setGranted] = React.useState<'premium' | 'ultra' | null>(null)
   const [note, setNote] = React.useState<string | null>(null)
@@ -695,11 +723,11 @@ export function KofiCheckoutPanel({
     return () => clearInterval(t)
   }, [check, granted])
 
-  const copy = async () => {
+  const copy = async (text: string, which: 'email' | 'code') => {
     try {
-      await navigator.clipboard.writeText(code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      await navigator.clipboard.writeText(text)
+      setCopied(which)
+      setTimeout(() => setCopied(null), 2000)
     } catch {}
   }
 
@@ -729,34 +757,30 @@ export function KofiCheckoutPanel({
 
   return (
     <div className={cn('space-y-3', compact && 'space-y-2.5')}>
-      {/* The claim code — the instant-match path */}
+      {/* 1 · THE path — go pay. Email auto-match: nothing to copy. */}
       <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-3">
-        <div className="text-xs font-semibold">1 · Copy your supporter code</div>
-        <button
-          type="button"
-          onClick={copy}
-          className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-amber-500/50 bg-background/70 py-2.5 transition-colors hover:bg-amber-500/10"
-          aria-label="Copy claim code"
-        >
-          <span className="font-mono text-lg font-bold tracking-[0.2em] text-amber-600 dark:text-amber-400">
-            {code}
-          </span>
-          {copied ? (
-            <Check className="h-4 w-4 text-emerald-500" />
-          ) : (
-            <Copy className="h-4 w-4 text-muted-foreground" />
-          )}
-        </button>
-      </div>
-
-      {/* Continue to Ko-fi */}
-      <div className="rounded-xl border p-3">
-        <div className="text-xs font-semibold">2 · Continue to Ko-fi and choose {tier === 'ultra' ? 'Ultra' : 'Premium'}</div>
+        <div className="text-xs font-semibold">
+          1 · Continue to Ko-fi and choose {tier === 'ultra' ? 'Ultra' : 'Premium'}
+        </div>
         <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-          Paste the code into the message box when you pay (or simply pay with your account
-          email — either links the payment). {tier === 'ultra' ? 'Ultra' : 'Premium'} unlocks
-          automatically the moment the payment lands.
+          {tier === 'ultra' ? 'Ultra' : 'Premium'} unlocks here automatically the moment the
+          payment lands{email ? ' — pay with your NeutralWire email and there is nothing to copy or paste' : ''}.
         </p>
+        {email ? (
+          <button
+            type="button"
+            onClick={() => copy(email, 'email')}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-amber-500/50 bg-background/70 px-2 py-2 transition-colors hover:bg-amber-500/10"
+            aria-label="Copy your account email"
+          >
+            <span className="truncate text-xs font-medium">{email}</span>
+            {copied === 'email' ? (
+              <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+            ) : (
+              <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            )}
+          </button>
+        ) : null}
         <a
           href={url}
           target="_blank"
@@ -771,7 +795,30 @@ export function KofiCheckoutPanel({
         </a>
       </div>
 
-      {/* Waiting state — polls + manual sweep */}
+      {/* 2 · Fallback — the link code for different-email payments */}
+      <div className="rounded-xl border p-3">
+        <div className="text-xs font-semibold">2 · Paying with a different email?</div>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          Copy this code into the Ko-fi message box — the payment still links to your account.
+        </p>
+        <button
+          type="button"
+          onClick={() => copy(code, 'code')}
+          className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 py-2 transition-colors hover:bg-muted/60"
+          aria-label="Copy claim code"
+        >
+          <span className="font-mono text-base font-bold tracking-[0.2em] text-amber-600 dark:text-amber-400">
+            {code}
+          </span>
+          {copied === 'code' ? (
+            <Check className="h-4 w-4 text-emerald-500" />
+          ) : (
+            <Copy className="h-4 w-4 text-muted-foreground" />
+          )}
+        </button>
+      </div>
+
+      {/* 3 · Waiting state — polls + manual check */}
       <div className="rounded-xl border bg-muted/30 p-3">
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           {checking ? (
@@ -801,9 +848,10 @@ export function KofiCheckoutPanel({
         <button
           type="button"
           onClick={() => void check()}
-          className="mt-1.5 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          disabled={checking}
+          className="mt-1.5 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
         >
-          Check with my account email
+          {checking ? 'Checking…' : "I've paid — check now"}
         </button>
         {note ? <p className="mt-1.5 text-[11px] text-muted-foreground">{note}</p> : null}
       </div>

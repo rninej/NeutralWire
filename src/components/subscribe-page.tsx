@@ -64,7 +64,12 @@ function SubscribePageInner() {
   const [password, setPassword] = React.useState('')
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
-  const [kofi, setKofi] = React.useState<{ tier: 'premium' | 'ultra'; code: string; url: string } | null>(null)
+  const [kofi, setKofi] = React.useState<{
+    tier: 'premium' | 'ultra'
+    code: string
+    url: string
+    email?: string
+  } | null>(null)
 
   const deviceId = getClientDeviceId()
 
@@ -129,6 +134,7 @@ function SubscribePageInner() {
         code?: string
         url?: string
         mode?: string
+        email?: string
         error?: string
         needAccount?: boolean
       }
@@ -142,7 +148,7 @@ function SubscribePageInner() {
         return
       }
       if (data.mode === 'kofi' && data.code) {
-        setKofi({ tier, code: data.code, url: data.url || KOFI_PAGE_URL })
+        setKofi({ tier, code: data.code, url: data.url || KOFI_PAGE_URL, email: data.email })
         window.scrollTo({ top: 0, behavior: 'smooth' })
       }
     } catch {
@@ -269,6 +275,7 @@ function SubscribePageInner() {
               tier={kofi.tier}
               code={kofi.code}
               url={kofi.url}
+              email={kofi.email}
               onDone={() => router.push(`/?subscribed=1&tier=${kofi.tier}`)}
             />
             <button

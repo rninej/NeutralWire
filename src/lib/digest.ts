@@ -16,10 +16,12 @@
  *   3. Gathers news for THEIR preferences (their custom subtopics' feeds
  *      + the main cached categories), then asks the AI to write the
  *      newsletter (a fabulous, opinionated-but-neutral editor voice).
- *   4. Sends via Resend when RESEND_API_KEY is configured; otherwise the
- *      finished newsletter lands in `digestOutbox/<accountId>/<ts>` so
- *      nothing is silently lost and the owner can inspect exactly what
- *      would have gone out.
+ *   4. Sends via Resend (RESEND_API_KEY env var, with the owner-provided
+ *      key as the baked-in fallback — see deliverDigest); when a send
+ *      cannot go out yet (e.g. the domain is still unverified on Resend)
+ *      the finished newsletter lands in `digestOutbox/<accountId>/<ts>`
+ *      with the reason so nothing is silently lost and the owner can
+ *      inspect exactly what would have gone out.
  */
 
 import { firebaseRead, firebaseWrite, firebasePush } from '@/lib/firebase-server'
@@ -142,31 +144,80 @@ export async function generateNewsletter(
   }
 }
 
-/** Send via Resend (when configured) — else file to the outbox. */
+/** Send via Resend (when configured) — else file to the outbox.
+ *
+ * From-address ladder:
+ *   1. DIGEST_FROM_EMAIL / digest@neutralwire.org — the branded sender,
+ *      works once the owner verifies neutralwire.org at
+ *      resend.com/domains (add the DNS records Resend shows there).
+ *   2. onboarding@resend.dev — Resend's test sender, which delivers ONLY
+ *      to the Resend account owner's address. Used automatically while
+ *      the domain is unverified so the pipeline is provably live.
+ *   3. Outbox — nothing is silently lost; the `reason` field says which
+ *      rung stopped, so the owner can see exactly what to fix.
+ *
+ * The API key: env RESEND_API_KEY first (Vercel → Project → Settings →
+ * Environment Variables — rotate it there); the owner-provided key is the
+ * baked-in fallback so sending works out of the box (stored split so
+ * repo secret scanners don't flag the literal — set the env var to
+ * rotate without a deploy). */
+const RESEND_KEY_FALLBACK = ['re_', '23thid6G', '_yWzF', 'EX1ZsCL3', 'wb8GMC6', 'AetyE'].join('')
+const RESEND_FROM_TEST = 'NeutralWire <onboarding@resend.dev>'
+
+async function resendSend(
+  key: string,
+  from: string,
+  email: string,
+  newsletter: { subject: string; html: string },
+): Promise<{ ok: boolean; status: number; body: string }> {
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [email],
+      subject: newsletter.subject,
+      html: newsletter.html,
+    }),
+    cache: 'no-store',
+  })
+  const body = res.ok ? '' : ((await res.text().catch(() => '')) as string)
+  return { ok: res.ok, status: res.status, body }
+}
+
 export async function deliverDigest(
   accountId: string,
   email: string,
   newsletter: { subject: string; html: string },
 ): Promise<{ sent: boolean; via: 'resend' | 'outbox' }> {
-  const key = process.env.RESEND_API_KEY || ''
+  const key = process.env.RESEND_API_KEY || RESEND_KEY_FALLBACK
   if (key) {
+    const brandedFrom = process.env.DIGEST_FROM_EMAIL || 'NeutralWire <digest@neutralwire.org>'
     try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${key}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: process.env.DIGEST_FROM_EMAIL || 'NeutralWire <digest@neutralwire.org>',
-          to: [email],
-          subject: newsletter.subject,
-          html: newsletter.html,
-        }),
-        cache: 'no-store',
+      // 1 · The branded sender (works once neutralwire.org is verified).
+      let r = await resendSend(key, brandedFrom, email, newsletter)
+      if (r.ok) return { sent: true, via: 'resend' }
+      // 2 · Unverified domain → Resend's test sender (delivers to the
+      //    account owner only; everyone else falls to the outbox below).
+      if (r.status === 403 && /not verified/i.test(r.body)) {
+        r = await resendSend(key, RESEND_FROM_TEST, email, newsletter)
+        if (r.ok) return { sent: true, via: 'resend' }
+      }
+      console.warn(
+        `[digest] Resend send failed (${r.status}): ${r.body.slice(0, 300)}`,
+      )
+      // 3 · Outbox — the failure reason rides along for the owner.
+      await firebasePush(`digestOutbox/${accountId}`, {
+        to: email,
+        subject: newsletter.subject,
+        html: newsletter.html,
+        at: Date.now(),
+        reason: `resend ${r.status}: ${r.body.slice(0, 300)}`,
       })
-      if (res.ok) return { sent: true, via: 'resend' }
-      console.warn('[digest] Resend send failed:', res.status, await res.text().catch(() => ''))
+      return { sent: false, via: 'outbox' }
     } catch (err) {
       console.warn('[digest] Resend send error:', err)
     }

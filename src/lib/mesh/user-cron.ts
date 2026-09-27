@@ -14,6 +14,7 @@
  * Jobs:
  *  - refresh  → /api/cron/refresh-all (RSS/GDELT cache refresh), 30 min
  *  - notify   → /api/push/trigger-tz  (timezone-aware briefings), 20 min
+ *  - digest   → /api/cron/digest     (email newsletters, Resend), 30 min
  *
  * AUTH: the endpoints accept a ONE-TIME LEASE instead of the admin
  * secret: the browser writes meshJobs/leases/<id> = { p, ts: <SERVER
@@ -32,9 +33,10 @@ import { rtdbGet, rtdbPut, serverTimestamp } from '@/lib/mesh/rtdb-rest'
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000
 const NOTIFY_INTERVAL_MS = 20 * 60 * 1000
+const DIGEST_INTERVAL_MS = 30 * 60 * 1000
 const TICK_MS = 60 * 1000
 
-type CronJob = 'refresh' | 'notify'
+type CronJob = 'refresh' | 'notify' | 'digest'
 
 interface CronRuntime {
   started: boolean
@@ -50,7 +52,7 @@ const runtime: CronRuntime = {
   presence: null,
   tickTimer: null,
   iAmLeader: false,
-  lastTriggered: { refresh: 0, notify: 0 },
+  lastTriggered: { refresh: 0, notify: 0, digest: 0 },
   inFlight: new Set(),
 }
 
@@ -90,6 +92,7 @@ async function tick(): Promise<void> {
   const lastRun = await rtdbGet<Record<string, number>>(MESH_PATHS.jobs + '/lastRun')
   const refreshAt = typeof lastRun?.refresh === 'number' ? lastRun.refresh : 0
   const notifyAt = typeof lastRun?.notify === 'number' ? lastRun.notify : 0
+  const digestAt = typeof lastRun?.digest === 'number' ? lastRun.digest : 0
 
   if (
     now - refreshAt > REFRESH_INTERVAL_MS &&
@@ -111,6 +114,17 @@ async function tick(): Promise<void> {
     runtime.lastTriggered.notify = now
     await triggerJob('notify', '/api/push/trigger-tz')
     setTimeout(() => runtime.inFlight.delete('notify'), 60_000)
+  }
+
+  if (
+    now - digestAt > DIGEST_INTERVAL_MS &&
+    now - runtime.lastTriggered.digest > DIGEST_INTERVAL_MS &&
+    !runtime.inFlight.has('digest')
+  ) {
+    runtime.inFlight.add('digest')
+    runtime.lastTriggered.digest = now
+    await triggerJob('digest', '/api/cron/digest')
+    setTimeout(() => runtime.inFlight.delete('digest'), 60_000)
   }
 }
 

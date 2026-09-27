@@ -23,13 +23,17 @@ export const maxDuration = 20
  * webhook (POST /api/kofi/webhook) fulfils the grant the moment the payment
  * lands. This endpoint hands the client everything the pay-panel needs:
  *
- *   { mode: 'kofi', tier, code: 'NW-XXXXXX', url: 'https://ko-fi.com/…' }
+ *   { mode: 'kofi', tier, code: 'NW-XXXXXX', url: 'https://ko-fi.com/…',
+ *     email: 'the account email' }
  *
+ * • `email` — the account email, shown by the pay-panel as the EASIEST
+ *   path: pay on Ko-fi with that email and the webhook auto-matches it —
+ *   nothing to copy or paste.
  * • `code` — a one-shot claim code bound to the signed-in account (48h
- *   validity). The pay-panel asks the supporter to paste it into the Ko-fi
- *   message box; the webhook matches it and grants instantly. Code-less
- *   payments still work: the webhook also matches by Ko-fi email, and the
- *   "I already paid" claim (/api/kofi/claim) sweeps the rest.
+ *   validity), the fallback for supporters paying with a DIFFERENT email
+ *   (paste it into the Ko-fi message; the webhook matches it and grants
+ *   instantly). The "I already paid" claim (/api/kofi/claim) sweeps the
+ *   rest.
  * • An ACCOUNT is required (grants attach to accounts, not devices) —
  *   logged-out callers get 401 { needAccount: true }.
  */
@@ -73,8 +77,9 @@ export async function POST(req: NextRequest) {
       tier,
       code,
       url: KOFI_PAGE_URL,
+      email: account.email,
       expiresInMs: CLAIM_TTL_MS,
-      note: 'Pay on Ko-fi with this code in the message (or with your account email) — Premium unlocks the moment the payment lands.',
+      note: 'Pick the tier on Ko-fi and pay with your account email — it unlocks automatically. Paid with a different email? Paste the code into the Ko-fi message.',
     })
   } catch (err) {
     return NextResponse.json(
