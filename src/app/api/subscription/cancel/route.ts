@@ -11,13 +11,17 @@ export const revalidate = 0
 export const maxDuration = 20
 
 /**
- * POST /api/subscription/cancel — cancel the visitor's own subscription.
+ * POST /api/subscription/cancel — cancel (or resume) the visitor's own
+ * subscription. Body: { undo?: true } to RESUME a cancelled plan.
  *
  * KO-FI (the live provider): Ko-fi exposes no cancellation API, so the
- * tier is revoked HERE immediately and the supporter is reminded to also
- * cancel the membership on Ko-fi (otherwise it keeps charging and the
- * next webhook payment re-grants — by design, a payment is always
- * honoured).
+ * account is marked cancelAtEnd — the tier STAYS until tierRenewsAt
+ * ("cancel anytime, keep the rest of the month", the promise on
+ * /subscribe). getRequesterTier enforces the expiry the moment the
+ * renewal date passes without a renewal webhook. The supporter is
+ * reminded to also cancel the membership on Ko-fi (otherwise it keeps
+ * charging and the next webhook payment re-grants — by design, a payment
+ * is always honoured). `undo` clears the flag while the month still runs.
  * LEGACY Stripe: a stored subscription id is cancelled at period end via
  * the Stripe REST API; test-source tiers downgrade immediately.
  */
@@ -31,18 +35,47 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No active subscription.' }, { status: 400 })
   }
 
-  // ── KO-FI or TEST source: immediate downgrade (no provider API to
-  //    call — the reminder to cancel on Ko-fi comes with the response). ──
-  if (account.tierSource !== 'stripe' || !account.stripeSubscriptionId) {
+  let undo = false
+  try {
+    const body = (await req.json()) as { undo?: boolean }
+    undo = body?.undo === true
+  } catch {}
+
+  // ── RESUME — clear the cancel flag, keep the tier and renewal date ──
+  if (undo) {
+    if (!account.tierCancelAtEnd) {
+      return NextResponse.json({ ok: true, tier: account.tier, resumed: false })
+    }
     await setAccountTier(session.accountId, {
-      tier: 'free',
-      renewsAt: null,
-      source: account.tierSource || 'test',
+      tier: account.tier,
+      renewsAt: account.tierRenewsAt ?? null,
+      source: account.tierSource || 'kofi',
+      cancelAtEnd: false,
     })
     return NextResponse.json({
       ok: true,
-      tier: 'free',
-      effective: 'immediately',
+      tier: account.tier,
+      resumed: true,
+      renewsAt: account.tierRenewsAt ?? null,
+    })
+  }
+
+  // ── KO-FI or TEST source: keep the rest of the month (cancelAtEnd). ──
+  // The tier persists until tierRenewsAt; with no renewal webhook the
+  // expiry check in getRequesterTier downgrades it the day it lapses.
+  if (account.tierSource !== 'stripe' || !account.stripeSubscriptionId) {
+    const renewsAt = account.tierRenewsAt ?? Date.now()
+    await setAccountTier(session.accountId, {
+      tier: account.tier,
+      renewsAt,
+      source: account.tierSource || 'test',
+      cancelAtEnd: true,
+    })
+    return NextResponse.json({
+      ok: true,
+      tier: account.tier,
+      effective: 'period-end',
+      renewsAt,
       mode: account.tierSource === 'kofi' ? 'kofi' : 'test',
       reminder:
         account.tierSource === 'kofi'

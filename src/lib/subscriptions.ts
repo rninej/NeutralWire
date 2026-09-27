@@ -354,6 +354,8 @@ export interface RequesterTier {
   accountId: string | null
   email: string | null
   renewsAt: number | null
+  /** True when the supporter cancelled — the tier stays until renewsAt. */
+  cancelAtEnd: boolean
   via: 'account' | 'device' | 'none'
 }
 
@@ -376,6 +378,11 @@ export function invalidateModelMemo(): void {
  * Resolve the visitor's tier for ANY request:
  *   session cookie → account.tier; else ?deviceId= / body deviceId →
  *   devices/<id>.tier (the /debug guest grant); else free.
+ *
+ * EXPIRY ENFORCEMENT: an account whose tierRenewsAt has passed (Ko-fi
+ * membership cancelled and the renewal webhook never came) reads as
+ * free — previously the tier lived forever. The stale account is also
+ * lazily downgraded in Firebase so the UI, /me and every gate agree.
  */
 export async function getRequesterTier(req: NextRequest): Promise<RequesterTier> {
   const model = await getMonetizationModel()
@@ -385,14 +392,27 @@ export async function getRequesterTier(req: NextRequest): Promise<RequesterTier>
   if (session?.accountId) {
     const account = await getAccountById(session.accountId)
     if (account) {
-      const tier: Tier = account.tier === 'ultra' ? 'ultra' : account.tier === 'premium' ? 'premium' : 'free'
+      let tier: Tier =
+        account.tier === 'ultra' ? 'ultra' : account.tier === 'premium' ? 'premium' : 'free'
+      let renewsAt = account.tierRenewsAt ?? null
+      if (tier !== 'free' && renewsAt && renewsAt < Date.now()) {
+        // Expired — self-heal the record and read as free from now on.
+        tier = 'free'
+        renewsAt = null
+        firebasePatch(`accounts/${session.accountId}`, {
+          tier: 'free',
+          tierRenewsAt: null,
+          tierCancelAtEnd: false,
+        }).catch(() => {})
+      }
       return {
         tier,
         model,
         allUnlocked,
         accountId: session.accountId,
         email: account.email,
-        renewsAt: account.tierRenewsAt ?? null,
+        renewsAt,
+        cancelAtEnd: tier !== 'free' && account.tierCancelAtEnd === true,
         via: 'account',
       }
     }
@@ -402,11 +422,11 @@ export async function getRequesterTier(req: NextRequest): Promise<RequesterTier>
   if (deviceId) {
     const t = await firebaseRead<Tier>(`devices/${deviceId}/tier`)
     if (t === 'premium' || t === 'ultra') {
-      return { tier: t, model, allUnlocked, accountId: null, email: null, renewsAt: null, via: 'device' }
+      return { tier: t, model, allUnlocked, accountId: null, email: null, renewsAt: null, cancelAtEnd: false, via: 'device' }
     }
   }
 
-  return { tier: 'free', model, allUnlocked, accountId: null, email: null, renewsAt: null, via: 'none' }
+  return { tier: 'free', model, allUnlocked, accountId: null, email: null, renewsAt: null, cancelAtEnd: false, via: 'none' }
 }
 
 // ── Tier mutation (checkout, webhook, /debug grant, cancel) ───────────

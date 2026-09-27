@@ -13,7 +13,7 @@ import {
   CACHE_CONSTANTS,
 } from '@/lib/news-cache'
 import { firebaseRead } from '@/lib/firebase-server'
-import { readCustomFeed, refreshCustomTopic, type CustomFeedPayload } from '@/lib/custom-topics'
+import { readCustomFeed, fillCustomTopic, customTopicCooldownRemaining, type CustomFeedPayload } from '@/lib/custom-topics'
 import {
   detectCountryServer,
   sourcesForCountry,
@@ -346,10 +346,17 @@ function offsetFor(sp: URLSearchParams): number {
  *      maxDuration) and writes the cache, so the client's retry ("Try
  *      now") or the auto-refresh lands the warm feed.
  *
- * A fill that yields ZERO topics is returned with `pending: true` and
- * Cache-Control no-store — the empty result is never CDN-cached, so a
- * retry a minute later genuinely re-runs the fill instead of serving a
- * cached dead end for 5 minutes.
+ * THE HONEST-STATE FIX (the "stuck on Gathering forever" bug): the old
+ * code reported `pending: true` for BOTH "fill still running" and "fill
+ * completed with nothing" — a rate-limited/throttled GDELT fill looped
+ * the client's auto-retry forever with a misleading "gathering" card.
+ * Now the response distinguishes the two:
+ *   • pending: true — the fill is GENUINELY still running (deadline hit);
+ *     auto-retry makes sense, the cache will land.
+ *   • failed: true (+ retryInMs) — the fill finished and found nothing, or
+ *     the topic is in its failure cooldown (fillCustomTopic). The client
+ *     stops auto-retrying and shows the manual "Try now" card instead.
+ * Both states ship Cache-Control no-store so a retry genuinely re-runs.
  */
 const CUSTOM_FILL_BUDGET_MS = 9400
 
@@ -364,13 +371,28 @@ async function handleCustomTopic(
   let feed = await readCustomFeed(topicId)
   let filledNow = false
   let fillStillRunning: Promise<CustomFeedPayload | null> | null = null
+  let fillFailed = false
+  let retryInMs: number | undefined
 
   if (!feed || !Array.isArray(feed.topics) || feed.topics.length === 0) {
-    // One time-boxed first fill (GDELT-only; the cron's AI pass refines
-    // it). Also re-fills a cached-but-empty feed (an earlier failed fill
-    // writes nothing, so this is usually a plain cache miss).
-    try {
-      const fill = refreshCustomTopic(topicId, { aiFilter: false, mode: 'sync' })
+    // Cooldown check FIRST: a fill that recently ended with nothing parks
+    // the topic for 90s (custom-topics.ts). Answering "failed" here —
+    // without touching GDELT — is what breaks the client retry storm.
+    const cooldownLeft = customTopicCooldownRemaining(topicId)
+    if (cooldownLeft > 0) {
+      filledNow = true
+      fillFailed = true
+      retryInMs = cooldownLeft
+    } else {
+      // One time-boxed first fill (GDELT-only; the cron's AI pass refines
+      // it), single-flight + cooldown-guarded in fillCustomTopic.
+      let fillDone = false
+      const fill = fillCustomTopic(topicId, { aiFilter: false, mode: 'sync' }).then(
+        (r) => {
+          fillDone = true
+          return r
+        },
+      )
       // Hard deadline: the response ALWAYS leaves under the 10s KPI; a
       // slow fill keeps going post-response and lands in the cache.
       let deadline: ReturnType<typeof setTimeout> | undefined
@@ -382,6 +404,11 @@ async function handleCustomTopic(
       filledNow = true
       if (raced) {
         feed = raced
+      } else if (fillDone) {
+        // The fill SETTLED with nothing — a genuine failure (GDELT
+        // throttled/rejected us), not a still-running fetch.
+        fillFailed = true
+        retryInMs = customTopicCooldownRemaining(topicId)
       } else {
         // Budget exhausted mid-fill: answer now with pending:true and
         // let the fill finish in the background (it writes the cache
@@ -389,8 +416,6 @@ async function handleCustomTopic(
         fillStillRunning = fill
         feed = null
       }
-    } catch {
-      feed = null
     }
   }
 
@@ -407,10 +432,9 @@ async function handleCustomTopic(
     .slice(offset, offset + limit)
     .map((t) => (slim ? { ...t, articles: [] } : t))
 
-  // The fill ran but produced nothing (yet) → the topic is still
-  // "gathering" — either GDELT genuinely found nothing or the deadline
-  // race cut the fill off; both retry cleanly thanks to no-store.
-  const pending = filledNow && topics.length === 0
+  // pending ONLY while a fill is genuinely still running; failed is the
+  // honest completed-empty state (cooldown or settled-null).
+  const pending = fillStillRunning !== null && topics.length === 0
 
   const res = NextResponse.json({
     category: `custom:${topicId}`,
@@ -419,6 +443,8 @@ async function handleCustomTopic(
     topics,
     cached: !filledNow,
     pending,
+    failed: fillFailed && topics.length === 0,
+    retryInMs: fillFailed && topics.length === 0 ? retryInMs || 90_000 : undefined,
     fresh: true,
     refreshing: false,
     sourceCount: feed?.sourceCount ?? 0,
@@ -428,8 +454,8 @@ async function handleCustomTopic(
   })
   res.headers.set(
     'Cache-Control',
-    pending
-      ? 'no-store' // never CDN-cache a failed/unfinished fill — retries must re-run it
+    pending || (fillFailed && topics.length === 0)
+      ? 'no-store' // never CDN-cache an unfinished or failed fill — retries must re-run it
       : 'public, s-maxage=300, stale-while-revalidate=600',
   )
   return res

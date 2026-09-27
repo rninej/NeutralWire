@@ -44,6 +44,51 @@ import { isNearDuplicateTitle } from '@/lib/push/story-dedup'
 
 const GDELT_API_URL = 'https://api.gdeltproject.org/api/v2/doc/doc'
 
+// ── Single-flight + failure cooldown ────────────────────────────────────
+// PRODUCTION POST-MORTEM (the "stuck on Gathering stories" bug): every
+// pending /api/news poll started a FRESH GDELT fill (the client retries at
+// 8/16/32/64s, every visitor's browser does the same, no-store means the
+// CDN gives no relief) — a thundering herd on GDELT from shared serverless
+// egress IPs, which is exactly what keeps GDELT answering 429. The fill
+// then completes with zero articles, but the route could not tell "failed"
+// from "still running", so the client looped on "Gathering" forever.
+// Two structural guards fix the herd:
+//   • single-flight — concurrent fills for the SAME topic share one promise
+//   • cooldown — a fill that just ended with nothing parks the topic for
+//     FILL_COOLDOWN_MS (fast "failed" answers, GDELT gets room to breathe)
+const FILL_COOLDOWN_MS = 90 * 1000
+const inflightFills = new Map<string, Promise<CustomFeedPayload | null>>()
+const failedFills = new Map<string, number>()
+
+/** How long until a recently-failed topic may be filled again (0 = free). */
+export function customTopicCooldownRemaining(topicId: string): number {
+  const failedAt = failedFills.get(topicId) || 0
+  const left = FILL_COOLDOWN_MS - (Date.now() - failedAt)
+  return left > 0 ? left : 0
+}
+
+/** Guarded fill: single-flight per topic + failure cooldown. ALL fill
+ *  call sites (news route, subscribe warm-fill, cron) go through this. */
+export function fillCustomTopic(
+  topicId: string,
+  opts: { aiFilter?: boolean; mode?: 'sync' | 'background' } = {},
+): Promise<CustomFeedPayload | null> {
+  const existing = inflightFills.get(topicId)
+  if (existing) return existing
+  if (customTopicCooldownRemaining(topicId) > 0) return Promise.resolve(null)
+  const p = refreshCustomTopic(topicId, opts)
+    .then((res) => {
+      if (res) failedFills.delete(topicId)
+      else failedFills.set(topicId, Date.now())
+      return res
+    })
+    .finally(() => {
+      inflightFills.delete(topicId)
+    })
+  inflightFills.set(topicId, p)
+  return p
+}
+
 export interface CustomTopicDef {
   id: string
   label: string
@@ -99,20 +144,27 @@ const NON_NEWS = /(newsletter|subscribe|sign up|login|horoscope|daily crossword|
 interface GdeltTiming {
   perAttemptMs: number
   backoffMs: number
+  maxRecords: number
 }
-const GDELT_TIMING_SYNC: GdeltTiming = { perAttemptMs: 7000, backoffMs: 2500 }
-const GDELT_TIMING_BACKGROUND: GdeltTiming = { perAttemptMs: 12000, backoffMs: 5500 }
+const GDELT_TIMING_SYNC: GdeltTiming = { perAttemptMs: 7000, backoffMs: 2500, maxRecords: 100 }
+const GDELT_TIMING_BACKGROUND: GdeltTiming = { perAttemptMs: 12000, backoffMs: 5500, maxRecords: 200 }
 
-function fetchGdelt(
-  keywords: string[],
-  maxRecords = 200,
-  timing: GdeltTiming = GDELT_TIMING_BACKGROUND,
-): Promise<GdeltArticle[]> {
+/** Discriminated GDELT result — the caller MUST be able to tell "GDELT
+ *  refused/failed us" (rate-limit, network, non-JSON body) apart from
+ *  "the query genuinely matched nothing". The old code returned [] for
+ *  BOTH, so a rate-limited topic ran the AI keyword-widening fallback and
+ *  re-hit GDELT — doubling the load on an API that was ALREADY throttling
+ *  us, and landing the topic as an eternal "gathering" dead end. */
+type GdeltResult =
+  | { ok: true; articles: GdeltArticle[] }
+  | { ok: false; reason: 'rate' | 'network' | 'rejected' }
+
+function fetchGdelt(keywords: string[], timing: GdeltTiming): Promise<GdeltResult> {
   const kw = keywords.slice(0, 8).map((k) => `"${k.replace(/"/g, '')}"`)
   const query = `(${kw.join(' OR ')}) sourcelang:english`
-  const url = `${GDELT_API_URL}?query=${encodeURIComponent(query)}&mode=ArtList&maxrecords=${maxRecords}&format=json&sort=DateDesc&timewindow=1d`
+  const url = `${GDELT_API_URL}?query=${encodeURIComponent(query)}&mode=ArtList&maxrecords=${timing.maxRecords}&format=json&sort=DateDesc&timewindow=1d`
 
-  const attempt = (timeoutMs: number) =>
+  const attempt = (timeoutMs: number): Promise<GdeltResult> =>
     fetch(url, {
       signal: AbortSignal.timeout(timeoutMs),
       headers: {
@@ -122,14 +174,15 @@ function fetchGdelt(
       },
       cache: 'no-store',
     })
-      .then(async (res) => {
-        if (!res.ok) return { ok: false as const, status: res.status }
+      .then(async (res): Promise<GdeltResult> => {
+        if (res.status === 429 || res.status === 503) return { ok: false, reason: 'rate' }
+        if (!res.ok) return { ok: false, reason: 'rejected' }
         const ct = res.headers.get('content-type') || ''
-        if (!ct.includes('json')) return { ok: false as const, status: res.status }
+        if (!ct.includes('json')) return { ok: false, reason: 'rejected' }
         const data = (await res.json()) as { articles?: GdeltArticle[] }
-        return { ok: true as const, articles: data.articles || [] }
+        return { ok: true, articles: data.articles || [] }
       })
-      .catch(() => ({ ok: false as const, status: 0 }))
+      .catch((): GdeltResult => ({ ok: false, reason: 'network' }))
 
   return (async () => {
     // GDELT asks for "one request every 5 seconds" and answers 429 (or a
@@ -140,21 +193,20 @@ function fetchGdelt(
     // background (after()) while /api/news keeps a synchronous fallback
     // that is hard-bounded by its own sub-10s response budget.
     const first = await attempt(timing.perAttemptMs)
-    if (first.ok) return first.articles
-    if (first.status !== 429 && first.status !== 503) return []
+    if (first.ok) return first
+    if (first.reason !== 'rate') return first
     await new Promise((r) => setTimeout(r, timing.backoffMs))
     const second = await attempt(timing.perAttemptMs)
-    if (second.ok) return second.articles
+    if (second.ok) return second
     // BACKGROUND fills get one MORE patient retry (double backoff) —
     // serverless egress IPs share GDELT's rate limit, and a
-    // nobody-is-waiting fill has the time budget to out-wait it. This is
-    // what keeps a throttled first attempt from landing a topic dead.
-    if (timing === GDELT_TIMING_BACKGROUND) {
+    // nobody-is-waiting fill has the time budget to out-wait it.
+    if (timing === GDELT_TIMING_BACKGROUND && second.reason === 'rate') {
       await new Promise((r) => setTimeout(r, timing.backoffMs * 2))
       const third = await attempt(timing.perAttemptMs)
-      if (third.ok) return third.articles
+      if (third.ok) return third
     }
-    return []
+    return second
   })()
 }
 
@@ -332,19 +384,28 @@ export async function refreshCustomTopic(
   const timing = opts.mode === 'sync' ? GDELT_TIMING_SYNC : GDELT_TIMING_BACKGROUND
 
   let keywords = def.keywords
-  let raw = await fetchGdelt(keywords, 200, timing)
+  let raw: GdeltArticle[] = []
+  let firstResult = await fetchGdelt(keywords, timing)
+  if (firstResult.ok) raw = firstResult.articles
 
-  // ── AI fallback: empty first query → wider keywords → one re-query ──
-  if (raw.length === 0 && keywords.length > 0) {
+  // ── AI fallback: ONLY when GDELT answered and the query genuinely
+  //    matched nothing (too-narrow keywords). A rate-limit or network
+  //    failure must NOT trigger widening — that would burn a callAI AND
+  //    re-hit GDELT while it is already throttling us (the old behaviour,
+  //    and a direct driver of the eternal "Gathering stories" state). ──
+  if (firstResult.ok && raw.length === 0 && keywords.length > 0) {
     const broader = await aiBroadenKeywords(def.label, keywords)
     if (broader.length > 0) {
       keywords = [...keywords.slice(0, 2), ...broader].slice(0, 8)
-      raw = await fetchGdelt(keywords, 200, timing)
-      // A runtime (AI-created) topic's widened keywords are persisted so
-      // the cron's future refreshes keep the working net. Static catalog
-      // topics are shared — leave their definition alone.
-      if (raw.length > 0 && !CATALOG_BY_ID[topicId]) {
-        firebaseWrite(`customSubtopics/${topicId}/keywords`, keywords).catch(() => {})
+      const second = await fetchGdelt(keywords, timing)
+      if (second.ok) {
+        raw = second.articles
+        // A runtime (AI-created) topic's widened keywords are persisted so
+        // the cron's future refreshes keep the working net. Static catalog
+        // topics are shared — leave their definition alone.
+        if (raw.length > 0 && !CATALOG_BY_ID[topicId]) {
+          firebaseWrite(`customSubtopics/${topicId}/keywords`, keywords).catch(() => {})
+        }
       }
     }
   }

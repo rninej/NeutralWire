@@ -36,6 +36,8 @@ export async function GET(req: NextRequest) {
       account: requester.email ? { email: requester.email } : null,
       loggedIn: requester.accountId !== null,
       renewsAt: requester.renewsAt,
+      /** True when the supporter cancelled — the tier runs to renewsAt. */
+      cancelAtEnd: requester.cancelAtEnd,
       via: requester.via,
       entitlements,
       pricing: {

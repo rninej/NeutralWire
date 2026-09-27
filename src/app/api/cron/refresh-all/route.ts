@@ -36,15 +36,23 @@ export const maxDuration = 60
  *       gets a fast 200 → timeouts are impossible.
  *
  * Security: hardcoded secret (URL acts as the secret) OR a one-time
- * Firebase lease (the user-powered cron — see /src/lib/mesh/lease-server.ts).
- * Lease-triggered runs additionally respect a 25-minute interval floor
- * (Firebase lastRun + in-memory) so lease spam can never force
- * back-to-back heavy refreshes.
+ * Firebase lease (the user-powered cron — see /src/lib/mesh/lease-server.ts)
+ * OR the Vercel platform cron (vercel.json → `x-vercel-cron: 1` header —
+ * also floor-throttled below so a spoofed header can't force heavy
+ * back-to-back runs). Lease/cron-triggered runs additionally respect a
+ * 25-minute interval floor (Firebase lastRun + in-memory).
  *
- * Trigger: cron-job.org every 30 minutes AND/OR the oldest live visitor
- *   (experimental userCron feature, default ON).
+ * Trigger: Vercel cron (vercel.json, daily 05:00 UTC — the OFFLINE
+ *   guarantee) AND/OR cron-job.org every 30 minutes AND/OR the oldest
+ *   live visitor (experimental userCron feature, default ON).
  *   URL: https://neutralwire.org/api/cron/refresh-all?secret=965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd
  *   Lease: /api/cron/refresh-all?lease=<id>&peer=<peerId>
+ *
+ * The after() tail ALSO runs the DIGEST email sweep (catch-up mode) —
+ * "if users aren't online the system uses the refresh rss cron job to
+ * send the email using resend": refresh the RSS caches first, then send
+ * the newsletters off the FRESH feeds via Resend (lib/digest.ts
+ * digestSweep — the same engine /api/cron/digest uses).
  */
 
 const CRON_SECRET = '965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd'
@@ -59,11 +67,13 @@ export async function GET(req: NextRequest) {
   const t0 = Date.now()
 
   // ── Auth: admin secret (external cron) OR one-time mesh lease (a
-  // visitor's browser driving the schedule — the userCron experiment).
+  // visitor's browser driving the schedule — the userCron experiment) OR
+  // the Vercel platform cron (vercel.json schedule).
   const secret = req.nextUrl.searchParams.get('secret') || ''
   const leaseId = req.nextUrl.searchParams.get('lease') || ''
   const peer = req.nextUrl.searchParams.get('peer') || ''
-  let authorized = secret === CRON_SECRET
+  const viaVercelCron = req.headers.get('x-vercel-cron') === '1'
+  let authorized = secret === CRON_SECRET || viaVercelCron
   let viaLease = false
   if (!authorized && leaseId) {
     const lease = await consumeLease(leaseId, peer, 'refresh')
@@ -77,11 +87,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // ── Interval floor for lease-triggered runs ──
+  // ── Interval floor for lease- AND vercel-cron-triggered runs ──
   // The external cron keeps its own schedule and is NOT throttled here;
-  // visitor-driven triggers are capped so a buggy/spammy client cannot
-  // multiply invocations.
-  if (viaLease) {
+  // visitor-driven and platform-cron triggers are capped so a buggy/
+  // spoofed caller cannot multiply invocations.
+  if (viaLease || viaVercelCron) {
     if (await jobRecentlyRan('refresh', CRON_JOB_INTERVALS.refresh.serverFloorMs)) {
       return NextResponse.json({
         ok: true,
@@ -190,11 +200,11 @@ export async function GET(req: NextRequest) {
     try {
       const elapsed = Date.now() - t0
       if (elapsed < 45_000) {
-        const { customTopicsDueForRefresh, refreshCustomTopic } = await import('@/lib/custom-topics')
+        const { customTopicsDueForRefresh, fillCustomTopic } = await import('@/lib/custom-topics')
         const due = await customTopicsDueForRefresh(3)
         for (const topicId of due) {
           try {
-            const feed = await refreshCustomTopic(topicId, { aiFilter: true })
+            const feed = await fillCustomTopic(topicId, { aiFilter: true })
             console.log(
               `[cron/refresh-all] custom topic '${topicId}' refreshed: ${feed?.topics?.length || 0} topics, ${feed?.articleCount || 0} articles (${Date.now() - t0}ms into the tick)`,
             )
@@ -209,6 +219,30 @@ export async function GET(req: NextRequest) {
       }
     } catch (err) {
       console.warn('[cron/refresh-all] custom-topic refresh pass failed:', err)
+    }
+
+    // ── DIGEST EMAIL TAIL (the offline-user guarantee) ──
+    // The user spec: "if users aren't online the system uses the refresh
+    // rss cron job to send the email using resend". After the feeds are
+    // fresh, one catch-up sweep delivers the newsletters of subscribers
+    // whose last send is staler than their frequency interval — nobody
+    // needs a browser open anywhere. Runs LAST in the tail (fresh feeds →
+    // better newsletters) and only while the tick still has budget.
+    try {
+      const elapsed = Date.now() - t0
+      if (elapsed < 50_000) {
+        const { digestSweep } = await import('@/lib/digest')
+        const result = await digestSweep({ catchup: true, cap: 8 })
+        console.log(
+          `[cron/refresh-all] digest tail: ${result.due} due — ${result.sent} sent, ${result.outboxed} outboxed (${Date.now() - t0}ms into the tick)`,
+        )
+      } else {
+        console.log(
+          `[cron/refresh-all] skipping digest tail — tick already at ${elapsed}ms`,
+        )
+      }
+    } catch (err) {
+      console.warn('[cron/refresh-all] digest tail failed:', err)
     }
 
     // ── SUMMARY PRE-GENERATION (the Google indexing fix, Sep 2026) ──

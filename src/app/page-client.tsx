@@ -261,10 +261,17 @@ interface NewsResponse {
   cached: boolean
   fresh?: boolean
   staleMs?: number
-  /** Custom-subtopic feeds: true when the first fill produced nothing
-   *  (GDELT cold/429) — the client shows a "gathering stories" state
-   *  instead of a dead empty feed. */
+  /** Custom-subtopic feeds: true when the first fill is STILL RUNNING
+   *  server-side (deadline race) — the client shows a "gathering stories"
+   *  state and auto-retries; the cache lands shortly. */
   pending?: boolean
+  /** Custom-subtopic feeds: true when the fill COMPLETED with nothing
+   *  (GDELT throttled/rejected us) or the topic is in its failure
+   *  cooldown — auto-retry is pointless; the manual "Try now" card is
+   *  shown instead of an eternal "gathering" loop. */
+  failed?: boolean
+  /** Server hint: how long until the topic may be filled again. */
+  retryInMs?: number
   fetchedAt: string
   sourceCount: number
   articleCount?: number
@@ -651,6 +658,10 @@ export default function Home({
   /** Custom-subtopic feed just tried its first fill and got nothing —
    *  show "gathering stories" (with auto-retry) instead of an empty feed. */
   const [topicPending, setTopicPending] = useState(false)
+  /** Custom-subtopic fill COMPLETED with nothing (GDELT throttling us) —
+   *  stop auto-retrying and show the honest manual-retry card. */
+  const [topicFailed, setTopicFailed] = useState(false)
+  const [topicRetryInMs, setTopicRetryInMs] = useState<number | undefined>(undefined)
   const [minCoverage, setMinCoverage] = useState(1)
 
   // --- Infinite scroll state ---
@@ -1998,6 +2009,8 @@ export default function Home({
       if (!silent) setLoading(true)
       setError(null)
       setTopicPending(false)
+      setTopicFailed(false)
+      setTopicRetryInMs(undefined)
       try {
         const params = new URLSearchParams({
           category: cat,
@@ -2063,6 +2076,8 @@ export default function Home({
         setIsFresh(json.fresh !== false)
         setArticleCount(json.articleCount ?? 0)
         setTopicPending(Boolean(json.pending))
+        setTopicFailed(Boolean(json.failed))
+        setTopicRetryInMs(json.retryInMs)
         // NOTE: json.ms / json.refreshing are intentionally ignored here —
         // the cache-freshness badge was removed from the header (users
         // found it noisy); the server refreshes stale caches in the
@@ -2174,10 +2189,15 @@ export default function Home({
   // still-pending retry re-arms the effect (pending flips false→true per
   // fetch cycle); a landed feed (pending=false) never re-arms. The manual
   // "Try now" button stays for anything after that.
+  //
+  // FAILED fills never enter the auto-retry loop (topicFailed short-
+  // circuits the effect): the server's 90s failure cooldown means an
+  // immediate retry would just re-rent the same "failed" answer — the
+  // card tells the truth and the visitor taps Try now when they want.
   const pendingRetryCountRef = React.useRef(0)
   const pendingRetryCatRef = React.useRef<string | null>(null)
   useEffect(() => {
-    if (!topicPending || !isCustomCategory(category)) return
+    if (!topicPending || topicFailed || !isCustomCategory(category)) return
     if (pendingRetryCatRef.current !== category) {
       pendingRetryCatRef.current = category
       pendingRetryCountRef.current = 0
@@ -2190,7 +2210,7 @@ export default function Home({
       void fetchData(category, minCoverage, country, { quiet: true })
     }, delay)
     return () => clearTimeout(t)
-  }, [topicPending, category, minCoverage, country, fetchData])
+  }, [topicPending, topicFailed, category, minCoverage, country, fetchData])
 
   // ── Adaptive splash handoff (PWA cold start only) ──
   // The inline controller in layout.tsx holds the launch splash on screen
@@ -2741,11 +2761,14 @@ export default function Home({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
               >
-              {topicPending && isCustomCategory(category) ? (
-                /* Custom subtopic whose first GDELT fill produced nothing
-                   (cold start / rate limit). The subscribe-time background
-                   fill + the cron rotation keep warming it — tell the user
-                   that instead of a dead "no topics" end. */
+              {topicPending || (topicFailed && isCustomCategory(category)) ? (
+                /* Custom subtopic whose first GDELT fill is still running
+                   (topicPending — auto-retry armed) or completed with
+                   nothing (topicFailed — GDELT is throttling us; the
+                   server parks the topic for ~90s before refilling).
+                   The subscribe-time background fill + the cron rotation
+                   keep warming it — tell the user which of the two states
+                   they're in instead of an eternal "gathering" loop. */
                 <Card className="flex flex-col items-center gap-3 p-10 text-center">
                   <motion.div
                     animate={{ rotate: [0, 12, -8, 0] }}
@@ -2755,18 +2778,20 @@ export default function Home({
                   </motion.div>
                   <div>
                     <div className="font-semibold text-foreground">
-                      Gathering stories for{' '}
+                      {topicFailed ? 'Hit a snag gathering' : 'Gathering stories for'}{' '}
                       {customTopics.find((t) => `custom:${t.id}` === category)?.label ||
                         'your topic'}
                     </div>
                     <div className="mt-1 max-w-sm text-sm text-muted-foreground">
-                      We scan thousands of outlets for this subtopic — the first fetch
-                      can take a minute. Check back shortly, or tap below to try now.
+                      {topicFailed
+                        ? `The news scan is briefly rate-limited — it usually clears in a minute or two. Your topic stays saved; tap below to try again${topicRetryInMs ? ` (ready in ~${Math.ceil(topicRetryInMs / 1000)}s)` : ''}.`
+                        : 'We scan thousands of outlets for this subtopic — the first fetch can take a minute. It lands here automatically.'}
                     </div>
                   </div>
                   <Button
                     onClick={() => {
                       setTopicPending(false)
+                      setTopicFailed(false)
                       fetchData(category, minCoverage, country)
                     }}
                     variant="outline"

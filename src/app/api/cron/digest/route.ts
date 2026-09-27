@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
-import { firebaseRead } from '@/lib/firebase-server'
 import {
-  isDue,
-  gatherStories,
-  generateNewsletter,
-  deliverDigest,
-  markSent,
-  type DigestSubscriber,
+  digestSweep,
 } from '@/lib/digest'
 import { consumeLease, jobRecentlyRan, markJobRun, CRON_JOB_INTERVALS } from '@/lib/mesh/lease-server'
 
@@ -19,35 +13,40 @@ export const maxDuration = 60
 /**
  * GET /api/cron/digest — the email digest cron (Premium).
  *
- * THREE trigger paths, newest first:
- *   1. Visitor cron (user-powered, DEFAULT): the oldest live visitor's
- *      browser writes a one-time Firebase lease and calls
+ * FOUR trigger paths, newest first:
+ *   1. Vercel cron (vercel.json — the OFFLINE-user guarantee): fires with
+ *      the `x-vercel-cron: 1` header Vercel adds to scheduled invocations.
+ *      Runs in CATCH-UP mode — subscribers whose last send is staler than
+ *      their frequency interval get their newsletter even if nobody's
+ *      browser has been open all day (the user spec: "if users aren't
+ *      online the system uses the refresh rss cron job to send the email
+ *      using resend"). The digestSweep engine (lib/digest.ts) is shared
+ *      with the refresh-all cron's email tail.
+ *   2. Visitor cron (user-powered): the oldest live visitor's browser
+ *      writes a one-time Firebase lease and calls
  *      /api/cron/digest?lease=<id>&peer=<peerId> every 30 min — the
- *      newsletter runs while people are actually online, no external
- *      service needed. A per-job interval floor (Firebase + in-memory)
- *      keeps lease spammers from forcing back-to-back runs.
- *   2. External cron (cron-job.org), every 30 minutes:
+ *      on-time path: slot-matched delivery while people are online. A
+ *      per-job interval floor (Firebase + in-memory) keeps lease spammers
+ *      from forcing back-to-back runs.
+ *   3. External cron (cron-job.org), every 30 minutes:
  *      https://neutralwire.org/api/cron/digest?secret=965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd
- *   3. Any admin hitting it with the secret in a pinch.
+ *   4. Any admin hitting it with the secret in a pinch.
  *
- * Per tick: find subscribers whose LOCAL slot is now (weekly Mon / daily /
- * 2x / 3x), gather their personalised stories, let the AI write the
- * newsletter, send (Resend) or file to the outbox. Responds fast; the
- * sends finish post-response via after(). Capped at MAX_PER_TICK sends
- * so one tick never blows the CPU budget.
+ * Responds fast; the sends finish post-response via after(). Capped per
+ * tick so one tick never blows the CPU budget.
  */
 const CRON_SECRET = '965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd'
-const MAX_PER_TICK = 5
 
 export async function GET(req: NextRequest) {
   // ── Auth: admin secret (external cron) OR one-time mesh lease (the
-  //    visitor-powered cron — same pattern as refresh-all) ──
+  //    visitor-powered cron) OR the Vercel platform cron header ──
   const secret = req.nextUrl.searchParams.get('secret') || ''
   const leaseId = req.nextUrl.searchParams.get('lease') || ''
   const peer = req.nextUrl.searchParams.get('peer') || ''
+  const viaVercelCron = req.headers.get('x-vercel-cron') === '1'
 
   let viaLease = false
-  let authorized = secret === CRON_SECRET
+  let authorized = secret === CRON_SECRET || viaVercelCron
   if (!authorized && leaseId) {
     const lease = await consumeLease(leaseId, peer, 'digest')
     authorized = lease.ok
@@ -61,9 +60,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // ── Interval floor for lease-triggered runs (the external cron keeps
-  //    its own schedule and is exempt) ──
-  if (viaLease) {
+  // ── Interval floor for lease- AND vercel-cron-triggered runs (the
+  //    external secret cron keeps its own schedule and is exempt). The
+  //    x-vercel-cron header is platform-set but spoofable by a determined
+  //    caller — the floor turns spam into at-most-one-run-per-interval. ──
+  if (viaLease || viaVercelCron) {
     if (await jobRecentlyRan('digest', CRON_JOB_INTERVALS.digest.serverFloorMs)) {
       return NextResponse.json({ ok: true, skipped: 'interval-floor' })
     }
@@ -71,42 +72,20 @@ export async function GET(req: NextRequest) {
   }
 
   const t0 = Date.now()
-  const subscribers =
-    (await firebaseRead<Record<string, DigestSubscriber>>('digestSubscribers')) || {}
-
-  const due = Object.entries(subscribers).filter(
-    ([id, sub]) => id && sub?.email && sub.prefs?.enabled !== false && isDue(sub),
-  )
-  const batch = due.slice(0, MAX_PER_TICK)
+  const catchup = viaVercelCron
+  // Catch-up sweeps process a few more (the day's offline backlog).
+  const cap = catchup ? 8 : 5
 
   after(async () => {
-    let sent = 0
-    let outboxed = 0
-    for (const [accountId, sub] of batch) {
-      try {
-        const stories = await gatherStories(accountId)
-        if (stories.length === 0) continue
-        const newsletter = await generateNewsletter(sub.email, stories)
-        if (!newsletter) continue
-        const result = await deliverDigest(accountId, sub.email, newsletter)
-        await markSent(accountId)
-        if (result.sent) sent++
-        else outboxed++
-      } catch (err) {
-        console.warn(`[cron/digest] failed for ${accountId}:`, err)
-      }
-    }
+    const result = await digestSweep({ catchup, cap })
     console.log(
-      `[cron/digest] ${batch.length} due (${due.length} total subscribers) — ${sent} sent, ${outboxed} outboxed in ${Date.now() - t0}ms`,
+      `[cron/digest]${catchup ? ' (catch-up)' : ''} ${result.due} due — ${result.sent} sent, ${result.outboxed} outboxed in ${Date.now() - t0}ms`,
     )
   })
 
   return NextResponse.json({
     ok: true,
-    subscribers: Object.keys(subscribers).length,
-    due: due.length,
-    processing: batch.length,
-    deferred: Math.max(0, due.length - batch.length),
+    mode: catchup ? 'catchup' : 'slot',
     // 'resend' always — the key has a baked-in fallback (digest.ts).
     provider: 'resend' as const,
     ts: Date.now(),

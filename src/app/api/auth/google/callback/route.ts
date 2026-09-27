@@ -4,6 +4,7 @@ import {
   createSession,
   setSessionCookie,
 } from '@/lib/subscriptions'
+import { googleOAuthConfig } from '@/lib/google-oauth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -50,8 +51,7 @@ function decodeJwtPayload(jwt: string): IdTokenPayload | null {
 }
 
 export async function GET(req: NextRequest) {
-  const clientId = process.env.GOOGLE_CLIENT_ID || ''
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ''
+  const { clientId, clientSecret } = googleOAuthConfig()
   const code = req.nextUrl.searchParams.get('code') || ''
   const state = req.nextUrl.searchParams.get('state') || ''
   const [deviceId = '', tier = 'premium'] = state.split('|')

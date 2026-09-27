@@ -74,6 +74,77 @@ export function isDue(sub: DigestSubscriber, now = new Date()): boolean {
   return true
 }
 
+// ── Catch-up mode (the OFFLINE-user path) ────────────────────────────────
+// The visitor user-cron only runs while somebody's browser is open — a
+// day with zero visitors meant zero digests, even for subscribers whose
+// slot came and went. The server-side crons (vercel.json: refresh-all +
+// digest) now run a CATCH-UP sweep: a subscriber is due when their last
+// send is staler than their frequency interval — the preferred local HOUR
+// becomes the on-time path (user-cron), while catch-up guarantees the
+// email still goes out that day via Resend no matter what.
+const CATCHUP_INTERVALS_MS: Record<string, number> = {
+  weekly: 6 * 24 * 3600 * 1000,
+  daily: 20 * 3600 * 1000,
+  '2x': 10 * 3600 * 1000,
+  '3x': 5 * 3600 * 1000,
+}
+
+/** Catch-up due: last send older than the frequency interval (weekly
+ *  also requires Monday-or-later since the last send so the "Monday
+ *  newsletter" rhythm survives). Ignores the local slot hour — this is
+ *  the offline fallback, not the on-time path. */
+export function isCatchupDue(sub: DigestSubscriber, now = new Date()): boolean {
+  if (sub.prefs?.enabled === false) return false
+  const freq = sub.prefs?.freq || 'daily'
+  const interval = CATCHUP_INTERVALS_MS[freq] || CATCHUP_INTERVALS_MS.daily
+  if (!sub.lastSentAt) return true // never sent — welcome aboard
+  const stale = now.getTime() - sub.lastSentAt > interval
+  if (!stale) return false
+  if (freq === 'weekly') {
+    // Only catch up on/after Monday so weeklies keep a weekly cadence.
+    const local = new Date(now.toLocaleString('en-US', { timeZone: sub.timezone || 'UTC' }))
+    return local.getDay() === 1
+  }
+  return true
+}
+
+/** One digest sweep — the shared engine behind /api/cron/digest AND the
+ *  refresh-all cron's email tail ("the refresh rss cron job sends the
+ *  email using resend"). Reads the subscriber list itself, picks who is
+ *  due (slot-matching OR catch-up when `catchup`), and processes up to
+ *  `cap` newsletters: gather → AI write → Resend send (or outbox with the
+ *  failure reason). Returns the counts for logging. */
+export async function digestSweep(
+  opts: { catchup?: boolean; cap?: number } = {},
+): Promise<{ due: number; sent: number; outboxed: number }> {
+  const cap = Math.max(1, opts.cap ?? 5)
+  const subscribers =
+    (await firebaseRead<Record<string, DigestSubscriber>>('digestSubscribers')) || {}
+  const now = new Date()
+  const due = Object.entries(subscribers).filter(
+    ([id, sub]) =>
+      id && sub?.email && sub.prefs?.enabled !== false && (isDue(sub, now) || (opts.catchup && isCatchupDue(sub, now))),
+  )
+  const batch = due.slice(0, cap)
+  let sent = 0
+  let outboxed = 0
+  for (const [accountId, sub] of batch) {
+    try {
+      const stories = await gatherStories(accountId)
+      if (stories.length === 0) continue
+      const newsletter = await generateNewsletter(sub.email, stories)
+      if (!newsletter) continue
+      const result = await deliverDigest(accountId, sub.email, newsletter)
+      await markSent(accountId)
+      if (result.sent) sent++
+      else outboxed++
+    } catch (err) {
+      console.warn(`[digestSweep] failed for ${accountId}:`, err)
+    }
+  }
+  return { due: due.length, sent, outboxed }
+}
+
 /** Gather the stories for one subscriber: their custom topics + core
  * categories, newest-first, capped for the AI prompt. */
 export async function gatherStories(accountId: string): Promise<TopicArticle[]> {

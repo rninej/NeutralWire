@@ -44,6 +44,8 @@ export interface SubscriptionState {
   account: { email: string } | null
   loggedIn: boolean
   renewsAt: number | null
+  /** True when the supporter cancelled — the tier runs to renewsAt. */
+  cancelAtEnd: boolean
   entitlements: Entitlements
   pricing: { premium: PriceQuote; ultra: PriceQuote; country: string }
   payments: { provider: string }
@@ -56,6 +58,7 @@ const DEFAULT_STATE: SubscriptionState = {
   account: null,
   loggedIn: false,
   renewsAt: null,
+  cancelAtEnd: false,
   entitlements: {
     customSubtopics: false,
     archiveSearchOld: false,

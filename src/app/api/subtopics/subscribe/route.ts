@@ -6,7 +6,7 @@ import {
   subscribeCustomTopic,
   unsubscribeCustomTopic,
   readCustomFeed,
-  refreshCustomTopic,
+  fillCustomTopic,
 } from '@/lib/custom-topics'
 
 export const runtime = 'nodejs'
@@ -69,8 +69,10 @@ export async function POST(req: NextRequest) {
           if (stale) {
             // Background mode: patient GDELT timings + the AI keyword
             // fallback — nobody is waiting on this fill, it just needs to
-            // be warm before the chip gets tapped.
-            await refreshCustomTopic(topicId, { aiFilter: false, mode: 'background' })
+            // be warm before the chip gets tapped. fillCustomTopic adds
+            // single-flight + failure cooldown (concurrent subscribes to
+            // the same topic share one GDELT fill instead of stampeding).
+            await fillCustomTopic(topicId, { aiFilter: false, mode: 'background' })
           }
         } catch {}
       })

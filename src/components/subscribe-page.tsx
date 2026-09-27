@@ -162,6 +162,49 @@ function SubscribePageInner() {
   const price = sub.pricing.premium
   const ultraPrice = sub.pricing.ultra
 
+  // ── Switch / cancel (the subscribed self-service) ──
+  // Cancel keeps the rest of the month (cancelAtEnd; the tier lapses at
+  // renewsAt — enforced by getRequesterTier), and can be RESUMED while the
+  // month still runs. Two-tap confirm so nobody cancels by accident.
+  const [confirmCancel, setConfirmCancel] = React.useState(false)
+  const [cancelBusy, setCancelBusy] = React.useState(false)
+  const [cancelNotice, setCancelNotice] = React.useState<string | null>(null)
+
+  const cancelSubscription = async (undo: boolean) => {
+    setCancelBusy(true)
+    setCancelNotice(null)
+    try {
+      const res = await fetch('/api/subscription/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(undo ? { undo: true } : {}),
+      })
+      const data = (await res.json()) as {
+        ok?: boolean
+        reminder?: string
+        error?: string
+        renewsAt?: number | null
+      }
+      await sub.refresh()
+      window.dispatchEvent(new CustomEvent(SUBSCRIPTION_CHANGED_EVENT))
+      if (!res.ok) {
+        setCancelNotice(data.error || 'Something went wrong — try again.')
+      } else if (undo) {
+        setConfirmCancel(false)
+        setCancelNotice('Subscription resumed — it renews as normal.')
+      } else {
+        setConfirmCancel(false)
+        setCancelNotice(
+          `Cancelled — Premium stays yours until ${data.renewsAt ? new Date(data.renewsAt).toLocaleDateString() : 'the end of the month'}. ${data.reminder || ''}`.trim(),
+        )
+      }
+    } catch {
+      setCancelNotice('Network error — try again.')
+    } finally {
+      setCancelBusy(false)
+    }
+  }
+
   // The inline account step — shared by BOTH page states (a logged-out
   // visitor with a device-granted tier ALSO needs it to upgrade).
   const authCard = !sub.loggedIn ? (
@@ -181,7 +224,7 @@ function SubscribePageInner() {
             </Button>
           </div>
           <p className="text-center text-[11px] text-muted-foreground">
-            Google &amp; Apple sign-in arrive with their API keys — email works today.
+            Google sign-in is live; Apple arrives with its key — email always works.
           </p>
         </div>
       ) : (
@@ -271,6 +314,12 @@ function SubscribePageInner() {
             animate={{ opacity: 1, y: 0 }}
             className="mt-6"
           >
+            {kofi.tier === 'premium' && sub.tier === 'ultra' ? (
+              <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-center text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                Switching down: after your Premium payment lands, cancel the Ultra membership on
+                Ko-fi so you aren&apos;t charged for both.
+              </p>
+            ) : null}
             <KofiCheckoutPanel
               tier={kofi.tier}
               code={kofi.code}
@@ -287,7 +336,7 @@ function SubscribePageInner() {
             </button>
           </motion.div>
         ) : sub.tier !== 'free' && sub.model === 'subscription' ? (
-          /* ── Already subscribed ── */
+          /* ── Already subscribed — switch tiers or cancel ── */
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -303,20 +352,76 @@ function SubscribePageInner() {
                 <div className="min-w-0">
                   <div className="font-bold">
                     You&apos;re {sub.tier === 'ultra' ? 'Ultra' : 'Premium'}
+                    {sub.cancelAtEnd ? ' — cancelling' : ''}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
                     {sub.account?.email}
-                    {sub.renewsAt ? ` · renews ${new Date(sub.renewsAt).toLocaleDateString()}` : ''}
+                    {sub.renewsAt
+                      ? ` · ${sub.cancelAtEnd ? 'ends' : 'renews'} ${new Date(sub.renewsAt).toLocaleDateString()}`
+                      : ''}
                   </div>
                 </div>
               </div>
             </div>
+
+            {cancelNotice ? (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+                {cancelNotice}
+              </div>
+            ) : null}
+
+            {/* Switch — the OTHER tier, both directions. A Ko-fi payment
+                for the other tier re-grants at that level (a payment is
+                always honoured), so switching is just a normal checkout. */}
             {sub.tier === 'premium' ? (
               <Button className="w-full" size="lg" onClick={() => startCheckout('ultra')} disabled={busy}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MeteorShower className="h-5 w-5" />}
                 Upgrade to Ultra — {ultraPrice.display}/month
               </Button>
-            ) : null}
+            ) : (
+              <Button className="w-full" size="lg" onClick={() => startCheckout('premium')} disabled={busy}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <PremiumDiamond className="h-5 w-5" />}
+                Switch to Premium — {price.display}/month
+              </Button>
+            )}
+
+            {/* Cancel / Resume — keep the rest of the month */}
+            {sub.cancelAtEnd ? (
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="outline" onClick={() => void cancelSubscription(true)} disabled={cancelBusy}>
+                  {cancelBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Resume subscription
+                </Button>
+                <Button variant="ghost" onClick={signOut} disabled={busy} className="text-muted-foreground">
+                  <LogOut className="h-4 w-4" /> Sign out
+                </Button>
+              </div>
+            ) : confirmCancel ? (
+              <div className="space-y-2 rounded-xl border border-red-500/30 bg-red-500/5 p-3">
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  You&apos;ll keep every Premium feature until the end of the month. Also cancel
+                  the membership on Ko-fi itself so it stops charging.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => setConfirmCancel(false)} disabled={cancelBusy}>
+                    Keep my subscription
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={() => void cancelSubscription(false)} disabled={cancelBusy}>
+                    {cancelBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Yes, cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmCancel(true)}
+                className="mx-auto block text-xs text-muted-foreground underline-offset-2 hover:text-red-600 hover:underline dark:hover:text-red-400"
+              >
+                Cancel subscription
+              </button>
+            )}
+
             {authCard}
             {error ? (
               <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
