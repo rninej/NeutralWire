@@ -574,3 +574,20 @@ Stage Summary:
 - arnavjain1009@gmail.com's digest: the pipeline is proven live end-to-end (cron sweeps every ~30 min, newsletter builds, send attempts fire, audit trail written, retries every 90 min). THE remaining blocker is 100% owner-side and DNS-shaped: Resend hard-rejects third-party Gmail recipients until neutralwire.org is verified at resend.com/domains (log in → Domains → neutralwire.org → add the DKIM/SPF records it shows; the restricted API key cannot read the records for us). The moment the records propagate, the next sweep (≤90 min) delivers a real email to that Gmail — no code change or redeploy needed.
 - Reminders carried forward: rotate the GitHub PAT + Resend key when convenient (both appeared in chat); Ko-fi webhook stays at https://neutralwire.org/api/kofi/webhook; Google OAuth consent screen still Testing.
 - Known backlog: Google index SSR, sitemap polish, /story OG images; notification icon intermittent, subtopic scroll prefetch, synonym dedup.
+
+---
+Task ID: session44
+Agent: main (Super Z)
+Task: owner supplied a fresh GitHub PAT — unblock the session43 push (e1c96eb source commit + ad4a028 worklog commit were stranded local-only; remote main was still d87d04b).
+
+Work Log:
+- PAT validated with ls-remote before any write; remote main confirmed at d87d04b (session42 worklog) — exactly the stranded state session43 recorded.
+- Dropped the environment's local-only ghost snapshot a70f23d (UUID message; auto-commit of session42/43 verify PNGs + probe scripts, zero source changes) with git reset --mixed ad4a028, per established convention — files remain on disk untracked.
+- Confirmed ad4a028 touches no source (git diff e1c96eb ad4a028 -- src/ is empty), so the pushed tree is byte-identical to the fully verified session43 state (tsc 0 errors, eslint clean, build green, browser E2E both Export-gate tiers, live premium subtopic fills 32 topics/0 junk, digest sweep E2E).
+- Pushed d87d04b..ad4a028 to origin main with the PAT inline; ls-remote re-verified remote main = ad4a028 = local HEAD. Vercel auto-deploys from this push.
+
+Stage Summary:
+- All session43 work is now live on GitHub/production: Ultra-only Export, junk/social-post filter in both feed pipelines, freshness-ranked premium subtopics with more images (chess 75%, stock-markets 78%, IPOs 66%, AI 56%), compound-title splitting, and the digest retry fix (lastSentAt only on real sends, 90-min retry spacing, audit trail).
+- Nothing else changed in this session; no code touched.
+- Owner actions still pending (carried forward): (1) verify neutralwire.org at resend.com/domains — the ONLY blocker for arnavjain1009@gmail.com digest delivery (Resend 403s third-party Gmail from unverified domains; the moment DNS records propagate, the next ≤90-min sweep delivers); (2) Google OAuth consent screen still in Testing; (3) rotate the GitHub PAT + Resend key when convenient (both appeared in chat); (4) Ko-fi webhook stays at https://neutralwire.org/api/kofi/webhook.
+- Known backlog: Google index SSR, sitemap polish, /story OG images; notification icon intermittent, subtopic scroll prefetch, synonym dedup.
