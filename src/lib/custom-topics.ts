@@ -64,6 +64,7 @@ import {
   type TopicArticle,
   type FeedArticle,
 } from '@/lib/news-aggregator'
+import { isJunkTitle, isJunkDomain } from '@/lib/junk-filter'
 import { NEWS_SOURCES } from '@/lib/news-sources'
 import { CATALOG_BY_ID } from '@/lib/subtopic-catalog'
 import { isNearDuplicateTitle } from '@/lib/push/story-dedup'
@@ -425,13 +426,16 @@ async function fetchBingImages(
   keywords: string[] = [],
   timeoutMs = 4000,
 ): Promise<Array<{ title: string; imageUrl: string }>> {
+  // Top 6 keywords (was 4) × 2 markets — a deeper donor pool is the
+  // cheapest way to raise the image ratio on premium subtopics: every
+  // extra keyword is one more angle Bing may hold a photo for.
   const queries = Array.from(
     new Set(
-      [label.trim(), ...keywords.filter((k) => k.trim().length >= 3).slice(0, 4)]
+      [label.trim(), ...keywords.filter((k) => k.trim().length >= 3).slice(0, 6)]
         .map((q) => q.trim())
         .filter(Boolean),
     ),
-  ).slice(0, 5)
+  ).slice(0, 7)
   if (queries.length === 0) return []
 
   const fetchOne = async (
@@ -807,7 +811,9 @@ async function attachImages(
   budgetMs: number,
 ): Promise<void> {
   const deadline = Date.now() + budgetMs
-  const imageless = topics.slice(0, 30).filter((t) => !t.imageUrl)
+  // ALL topics are eligible (was top 30 — the 32nd/33rd card deserves a
+  // photo as much as the first; the budget guard keeps the og pass polite).
+  const imageless = topics.filter((t) => !t.imageUrl)
   if (imageless.length === 0) return
 
   // Donors 1 + 2 are cheap text matching — run them first so the og
@@ -866,8 +872,10 @@ async function attachImages(
     }
   }
 
-  // Donor 3: og:image from real publisher URLs (max 3 fetches per topic;
-  // matched pool-article links ride along as extra candidates).
+  // Donor 3: og:image from real publisher URLs (up to 5 fetches per topic
+  // — was 3, the user asked for MORE images on premium subtopics and the
+  // deadline guard below keeps the extra tries polite; matched
+  // pool-article links ride along as extra candidates).
   await Promise.all(
     imageless.map(async (t) => {
       if (t.imageUrl) return
@@ -878,7 +886,7 @@ async function attachImages(
       ]
       let tries = 0
       for (const link of links) {
-        if (tries >= 3 || Date.now() > deadline) return
+        if (tries >= 5 || Date.now() > deadline) return
         let host = ''
         try {
           host = new URL(link).hostname
@@ -895,6 +903,51 @@ async function attachImages(
       }
     }),
   )
+
+  // Donor 4: per-topic Bing query — for the topics STILL imageless after
+  // donors 1-3, query Bing News with the topic's OWN headline entities
+  // (its title usually names the exact person/event the label alone
+  // missed). Only the top 12 still-imageless topics, one query each
+  // across the two markets — ~24 fast RSS fetches, deadline-guarded.
+  const stillImageless = imageless.filter((t) => !t.imageUrl).slice(0, 12)
+  if (stillImageless.length > 0 && Date.now() < deadline - 1500) {
+    const STOP = new Set([
+      'the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'after',
+      'over', 'says', 'said', 'amid', 'as', 'at', 'in', 'on', 'of', 'to',
+      'vs', 'win', 'wins', 'new', 'live', 'update', 'updates', 'how', 'why',
+    ])
+    await Promise.all(
+      stillImageless.map(async (t) => {
+        if (Date.now() > deadline) return
+        // The 4 longest meaningful words of the headline are the query —
+        // long words are the entities (names, places, organisations).
+        const words = (t.title || '')
+          .toLowerCase()
+          .replace(/[^a-z0-9\s]+/g, ' ')
+          .split(/\s+/)
+          .filter((w) => w.length >= 4 && !STOP.has(w))
+          .sort((a, b) => b.length - a.length)
+          .slice(0, 4)
+        if (words.length < 2) return
+        const donors = await fetchBingImages(words.join(' '), [], 4000)
+        let best: { url: string; score: number } | null = null
+        for (const b of donors) {
+          if (usedDonors.has(b.imageUrl)) continue
+          const score = Math.max(
+            titleOverlapScore(t.title, b.title),
+            isNearDuplicateTitle(t.title, b.title) ? 1 : 0,
+          )
+          // Slightly stricter than donor 1 (0.35): a query built from
+          // THIS headline's own entities must overlap visibly to count.
+          if (score >= 0.45 && score > (best?.score || 0)) best = { url: b.imageUrl, score }
+        }
+        if (best) {
+          t.imageUrl = best.url
+          usedDonors.add(best.url)
+        }
+      }),
+    )
+  }
 }
 
 // ── The refresh pipeline ────────────────────────────────────────────────
@@ -937,7 +990,10 @@ export async function refreshCustomTopic(
     const [poolRes, gdeltRes] = await Promise.all([
       poolArticlesForKeywords(def.keywords, poolCats, {
         timeoutMs: Math.min(mode === 'sync' ? 9000 : 10000, remaining()),
-        maxArticles: 60,
+        // 75 (was 60): the pool is the one source that brings RSS
+        // thumbnails, real URLs and descriptions — more pool items
+        // directly raises the premium feeds' image ratio and coverage.
+        maxArticles: 75,
       }),
       // GDELT is a pure supplement now — Google News carries the topic.
       // When Google already delivered, cut the GDELT attempt early: its
@@ -1007,6 +1063,13 @@ export async function refreshCustomTopic(
   for (const a of raw) {
     if (!a.url || !a.title) continue
     const title = cleanTitle(a.title)
+    // ── JUNK GATE (shared with the main feed's parseFeed) ──
+    // Social-platform posts and gossip-blog syndications ride Google
+    // News / GDELT results ("#TSRMommyDuties: Aww! #Serayah reflects on
+    // her summer and shares photos with her") — hashtag headlines,
+    // @handles, caption verbs, too-short fragments and known social
+    // domains are dropped before they can ever cluster into a card.
+    if (isJunkTitle(title, a.domain)) continue
     if (title.length < 12 || NON_NEWS.test(title)) continue
     const domain = a.domain || (() => {
       try {
@@ -1131,13 +1194,39 @@ export async function refreshCustomTopic(
       continue
     }
     const score = titleScore(p.title, def.keywords)
-    if (score <= 0 || NON_NEWS.test(p.title)) continue
+    // Pool items are already junk-gated at parseFeed (title rules); the
+    // domain check here is the belt-and-braces pass for pool articles
+    // that reached this loop through other paths.
+    if (score <= 0 || NON_NEWS.test(p.title) || isJunkDomain(domain)) continue
     pushScored({ ...p, category: `custom:${topicId}` }, domain, score)
   }
 
   if (scored.length === 0) return null
 
-  scored.sort((a, b) => b.score - a.score || b.article.iso - a.article.iso)
+  // ── Ranking: keyword relevance FIRST, freshness close behind ──
+  // Pure keyword order buried weekend-old stories below today's merely
+  // adjacent ones — worse, Google News RSS happily returns WEEKS-old
+  // items for sparse queries (measured: a 41-day-old championship
+  // preview outranked today's Olympiad results). The ladder below rides
+  // ON TOP of the keyword score (which runs 3-32): fresh stories climb,
+  // anything past a week sinks hard, and 14-day-old items are pushed
+  // below nearly everything fresh (they stay in the feed — niche topics
+  // need depth — they just stop leading it).
+  const freshnessBonus = (iso: number): number => {
+    const ageH = (Date.now() - (iso || Date.now())) / 3600_000
+    if (ageH <= 6) return 3
+    if (ageH <= 24) return 2
+    if (ageH <= 48) return 1
+    if (ageH <= 96) return -1
+    if (ageH <= 168) return -3 // >4 days
+    if (ageH <= 336) return -7 // >1 week
+    return -14 // >2 weeks
+  }
+  scored.sort(
+    (a, b) =>
+      b.score + freshnessBonus(b.article.iso) - (a.score + freshnessBonus(a.article.iso)) ||
+      b.article.iso - a.article.iso,
+  )
   const top = scored.slice(0, 90)
 
   // ── Pass 2: AI relevance filter (background modes only, first half of
@@ -1170,13 +1259,37 @@ export async function refreshCustomTopic(
 
   // ── Pass 3: cluster + build topic cards ──
   const clusters = clusterArticles(kept.map((k) => k.article))
-  clusters.sort((a, b) => b.articles.length - a.articles.length)
+  // ── Topic ranking (the CARD order on the premium feed) ──
+  // Was: coverage only — a 3-outlet story of marginal relevance outranked
+  // THE story of the day with 1-2 sources. Now a combined rank:
+  //   relevance ×2  — the cluster's best keyword score (what the feed is
+  //                    ABOUT stays the dominant signal)
+  //   coverage ×1.2 — how many outlets carry it (capped at 10 so one
+  //                    outlet's 6-article dump can't dominate)
+  //   freshness     — ≤6h +3 / ≤24h +2 / ≤48h +1
+  // so the feed leads with topical, well-covered, TODAY stories.
+  const scoreByArticleId = new Map<string, number>()
+  for (const k of kept) scoreByArticleId.set(k.article.id, k.score)
+  const topicRank = (c: ClusteredTopic): number => {
+    let relevance = 0
+    let latest = 0
+    for (const a of c.articles) {
+      relevance = Math.max(relevance, scoreByArticleId.get(a.id) || 0)
+      latest = Math.max(latest, a.iso || 0)
+    }
+    return (
+      relevance * 2 +
+      Math.min(c.articles.length, 10) * 1.2 +
+      freshnessBonus(latest)
+    )
+  }
+  clusters.sort((a, b) => topicRank(b) - topicRank(a))
   const topics = clusters.slice(0, 32).map((c) => toTopicArticle(c, def.keywords))
 
   // ── Pass 4: images (background modes — the sync path serves instantly
   //    and the after() polish pass adds photos to the cached feed) ──
   if (mode === 'background' && !overBudget()) {
-    await attachImages(topics, def.label, def.keywords, pool, Math.min(12000, remaining()))
+    await attachImages(topics, def.label, def.keywords, pool, Math.min(16000, remaining()))
   }
 
   const payload: CustomFeedPayload = {

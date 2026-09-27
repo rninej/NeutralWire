@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { PremiumDiamond } from '@/components/premium-ui'
-import { useSubscription, openUpgradeDialog } from '@/lib/subscription-client'
+import { useSubscription } from '@/lib/subscription-client'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { BiasBar } from '@/components/bias-bar'
@@ -1730,20 +1730,14 @@ function ExportButton({ topicId }: { topicId: string }) {
   const [open, setOpen] = React.useState(false)
   const unlocked = sub.model === 'donation' || sub.entitlements.articleExport
 
-  if (!unlocked) {
-    return (
-      <button
-        type="button"
-        onClick={() => openUpgradeDialog('articleExport')}
-        className="flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-3.5 py-1.5 text-xs font-semibold text-amber-600 transition-opacity hover:opacity-90 dark:text-amber-400"
-        aria-label="Export this story (Ultra)"
-        title="Export & download this story — Ultra"
-      >
-        <PremiumDiamond className="h-3.5 w-3.5" />
-        <span className="hidden sm:inline">Export</span>
-      </button>
-    )
-  }
+  // ULTRA-ONLY SURFACE (owner request): the button used to render a locked
+  // pill for everyone else, which cluttered the sticky bar (and squeezed
+  // it on phones). Free and Premium users now see NOTHING here — the
+  // upgrade path stays available from the header's Premium button and
+  // /subscribe. The entitlement itself was already Ultra-only
+  // (entitlementsFor: articleExport = ultra) — this just stops advertising
+  // it on every story bar.
+  if (!unlocked) return null
 
   return (
     <div className="relative flex-shrink-0">

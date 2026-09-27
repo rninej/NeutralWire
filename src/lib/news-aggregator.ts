@@ -14,6 +14,7 @@ import {
 } from '@/lib/news-sources'
 import { callAI, callVisionAI } from '@/lib/ai-providers'
 import { firebaseRead, firebasePatch } from '@/lib/firebase-server'
+import { isJunkTitle } from '@/lib/junk-filter'
 
 // ---------- Types ----------
 export interface FeedArticle {
@@ -1201,6 +1202,15 @@ function parseFeed(xml: string, source: NewsSource, feedCategory: string): FeedA
     // Make the title concise — strip source prefixes, remove live/live updates
     // tags, remove "BREAKING:", and shorten common patterns.
     const conciseTitle = makeConciseTitle(decodedTitle)
+
+    // ── Social-media / non-news junk gate (shared with custom topics) ──
+    // Gossip-blog and social-platform posts ride the same RSS feeds
+    // ("#TSRMommyDuties: Aww! #Serayah reflects on her summer and shares
+    // photos with her"). Hashtag headlines, @handles, caption-style
+    // verbs ("shares photos"), gossip openers ("Aww!") and bare
+    // section-tag fragments are dropped BEFORE clustering — one pass
+    // here covers every main category AND the custom-subtopic pool.
+    if (isJunkTitle(conciseTitle, source.homepage)) continue
 
     const iso = parseDateToMs(pubDate)
 

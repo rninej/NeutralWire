@@ -34,9 +34,24 @@ export interface DigestSubscriber {
   timezone?: string
   prefs?: { enabled?: boolean; freq?: string; hour?: number }
   lastSentAt?: number
+  /** Every send ATTEMPT (successful or not) — spaces retries so the
+   * 30-min user-cron can't spam the outbox while the Resend domain is
+   * unverified, WITHOUT marking a failed send as "sent". */
+  lastAttemptAt?: number
+  /** Short reason slug of the last failed delivery — visible on the
+   * subscriber node for instant diagnosis. */
+  lastFailure?: string
 }
 
 const SIX_HOURS_MS = 6 * 3600 * 1000
+
+/** Minimum spacing between send ATTEMPTS for the same subscriber —
+ * the user-cron fires every ~30 min, and a subscriber whose delivery
+ * keeps failing (e.g. the Resend domain is still unverified) would
+ * otherwise get a fresh outbox entry on every tick. 90 min = fast
+ * recovery once the blocker clears (next attempt ≤90 min later)
+ * without outbox spam (~16 attempts/day worst case, ~15KB each). */
+const ATTEMPT_SPACING_MS = 90 * 60 * 1000
 
 /** Is a subscriber due for a digest right now (their local time)? */
 export function isDue(sub: DigestSubscriber, now = new Date()): boolean {
@@ -131,7 +146,15 @@ export async function digestSweep(
   const now = new Date()
   const due = Object.entries(subscribers).filter(
     ([id, sub]) =>
-      id && sub?.email && sub.prefs?.enabled !== false && (isDue(sub, now) || (opts.catchup && isCatchupDue(sub, now))),
+      id &&
+      sub?.email &&
+      sub.prefs?.enabled !== false &&
+      // Attempt spacing: a recent ATTEMPT (successful or failed) holds
+      // the subscriber back until ATTEMPT_SPACING_MS passes — this is
+      // what lets a failed delivery retry soon (not in 5h) without
+      // outbox spam. See markAttempt/markSent.
+      (!sub.lastAttemptAt || now.getTime() - sub.lastAttemptAt > ATTEMPT_SPACING_MS) &&
+      (isDue(sub, now) || (opts.catchup && isCatchupDue(sub, now))),
   )
   const batch = due.slice(0, cap)
   let sent = 0
@@ -139,6 +162,9 @@ export async function digestSweep(
   const perSub: string[] = []
   for (const [accountId, sub] of batch) {
     try {
+      // Every attempt — success OR failure — records lastAttemptAt so
+      // the spacing guard above can hold this subscriber back briefly.
+      await markAttempt(accountId)
       const stories = await gatherStories(accountId)
       if (stories.length === 0) {
         perSub.push(`${accountId}:no-stories`)
@@ -152,10 +178,22 @@ export async function digestSweep(
         continue
       }
       const result = await deliverDigest(accountId, sub.email, newsletter)
-      await markSent(accountId)
-      perSub.push(`${accountId}:${result.sent ? 'sent' : 'outboxed'}`)
-      if (result.sent) sent++
-      else outboxed++
+      // lastSentAt ONLY on a REAL send. Marking failed sends as "sent"
+      // (the pre-session43 bug) throttled retries to the catch-up
+      // interval — a subscriber whose every delivery 403'd (unverified
+      // Resend domain) waited 5h between attempts for an email that
+      // would keep 403ing anyway. Now: lastSentAt gates re-SENDING,
+      // lastAttemptAt gates re-TRYING — the moment the owner verifies
+      // the domain, the next sweep (≤45 min) delivers for real.
+      if (result.sent) {
+        await markSent(accountId)
+        await firebaseWrite(`digestSubscribers/${accountId}/lastFailure`, null).catch(() => {})
+        perSub.push(`${accountId}:sent`)
+        sent++
+      } else {
+        perSub.push(`${accountId}:outboxed:${result.failureSlug || 'unknown'}`)
+        outboxed++
+      }
     } catch (err) {
       console.warn(`[digestSweep] failed for ${accountId}:`, err)
       perSub.push(`${accountId}:error`)
@@ -348,14 +386,16 @@ export async function deliverDigest(
   accountId: string,
   email: string,
   newsletter: { subject: string; html: string },
-): Promise<{ sent: boolean; via: 'resend' | 'outbox' }> {
+): Promise<{ sent: boolean; via: 'resend' | 'outbox'; failureSlug?: string }> {
   const key = process.env.RESEND_API_KEY || RESEND_KEY_FALLBACK
   if (key) {
     const brandedFrom = process.env.DIGEST_FROM_EMAIL || 'NeutralWire <digest@neutralwire.org>'
     try {
       // 1 · The branded sender (works once neutralwire.org is verified).
       let r = await resendSend(key, brandedFrom, email, newsletter)
-      if (r.ok) return { sent: true, via: 'resend' }
+      if (r.ok) {
+        return { sent: true, via: 'resend' }
+      }
       // 2 · Unverified domain → Resend's test sender (delivers to the
       //    account owner only; everyone else falls to the outbox below).
       if (r.status === 403 && /not verified/i.test(r.body)) {
@@ -365,7 +405,16 @@ export async function deliverDigest(
       console.warn(
         `[digest] Resend send failed (${r.status}): ${r.body.slice(0, 300)}`,
       )
-      // 3 · Outbox — the failure reason rides along for the owner.
+      // 3 · Outbox — the failure reason rides along for the owner, and a
+      //    SHORT slug lands on the subscriber node (digestSubscribers/
+      //    <id>/lastFailure) so the diagnosis is one Firebase read away.
+      const failureSlug = failureSlugFor(r)
+      await firebaseWrite(`digestSubscribers/${accountId}/lastFailure`, {
+        slug: failureSlug,
+        status: r.status,
+        detail: r.body.slice(0, 200),
+        at: Date.now(),
+      }).catch(() => {})
       await firebasePush(`digestOutbox/${accountId}`, {
         to: email,
         subject: newsletter.subject,
@@ -373,7 +422,7 @@ export async function deliverDigest(
         at: Date.now(),
         reason: `resend ${r.status}: ${r.body.slice(0, 300)}`,
       })
-      return { sent: false, via: 'outbox' }
+      return { sent: false, via: 'outbox', failureSlug }
     } catch (err) {
       console.warn('[digest] Resend send error:', err)
     }
@@ -385,7 +434,24 @@ export async function deliverDigest(
     html: newsletter.html,
     at: Date.now(),
   })
-  return { sent: false, via: 'outbox' }
+  return { sent: false, via: 'outbox', failureSlug: 'no-key' }
+}
+
+/** Short machine-readable slug for a Resend rejection — lands in the
+ * sweep audit log and on the subscriber's lastFailure node. */
+function failureSlugFor(r: { status: number; body: string }): string {
+  if (/domain.*not verified|not verified/i.test(r.body)) return 'domain-unverified'
+  if (/only send testing emails|own email address/i.test(r.body)) return 'test-sender-only'
+  if (r.status === 401 || /restricted_api_key|invalid api key/i.test(r.body)) return 'bad-key'
+  if (r.status === 429) return 'rate-limited'
+  if (r.status === 403) return 'forbidden'
+  return `http-${r.status}`
+}
+
+/** Record a send ATTEMPT (success or failure) — the spacing guard's
+ * data. Never blocks delivery on its own failure. */
+async function markAttempt(accountId: string): Promise<void> {
+  await firebaseWrite(`digestSubscribers/${accountId}/lastAttemptAt`, Date.now()).catch(() => {})
 }
 
 /** Mark a subscriber as sent (the 6h re-send guard's data). */
