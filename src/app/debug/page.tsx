@@ -365,6 +365,64 @@ export default function DebugPage() {
     if (authed && passwordRef.current) fetchMeshLogs()
   }, [authed, fetchMeshLogs])
 
+  // ── API Status Board ──
+  // The owner's reference page: every external API NeutralWire talks to,
+  // live-checked (working / limited / limit-reached / down / not
+  // configured), quota notes where the provider exposes usage, and the
+  // exact file + env var to update when a key needs rotating. Backend:
+  // /api/debug/apis (same password gate as the rest of this dashboard).
+  interface ApiBoardItem {
+    id: string
+    name: string
+    purpose: string
+    status: 'working' | 'limited' | 'limit-reached' | 'down' | 'not-configured' | 'info'
+    statusText: string
+    quotaText?: string
+    latencyMs?: number
+    file: string
+    envVar?: string
+    keyPresent?: boolean
+  }
+  interface ApiBoardData {
+    ts: number
+    summary: { total: number; working: number; limited: number; limitReached: number; down: number; notConfigured: number; info: number }
+    groups: Array<{ name: string; items: ApiBoardItem[] }>
+  }
+  const [apiBoard, setApiBoard] = React.useState<ApiBoardData | null>(null)
+  const [apiBoardLoading, setApiBoardLoading] = React.useState(false)
+
+  const fetchApiBoard = React.useCallback(async () => {
+    if (!passwordRef.current) return
+    setApiBoardLoading(true)
+    try {
+      const res = await fetch('/api/debug/apis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordRef.current }),
+      })
+      if (res.ok) {
+        setApiBoard((await res.json()) as ApiBoardData)
+      }
+    } catch {
+      // silent — the refresh button retries
+    } finally {
+      setApiBoardLoading(false)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (authed && passwordRef.current) void fetchApiBoard()
+  }, [authed, fetchApiBoard])
+
+  const apiStatusMeta: Record<ApiBoardItem['status'], { dot: string; label: string }> = {
+    working: { dot: 'bg-emerald-500', label: 'Working' },
+    limited: { dot: 'bg-amber-500', label: 'Limited' },
+    'limit-reached': { dot: 'bg-red-500', label: 'Limit reached' },
+    down: { dot: 'bg-red-600', label: 'Not working' },
+    'not-configured': { dot: 'bg-zinc-400', label: 'Not configured' },
+    info: { dot: 'bg-blue-500', label: 'Info' },
+  }
+
   // ── Firebase Bandwidth monitor (Sep 2026 ETag fix observability) ──
   // /api/fb-stats reports the warm server instance's live counters:
   // real downloads, bytes SAVED via zero-byte 304 conditional reads,
@@ -970,6 +1028,7 @@ export default function DebugPage() {
             aria-label="Dashboard sections"
           >
             {[
+              ['#api-board', 'APIs'],
               ['#pwa-growth', 'Growth'],
               ['#feature-flags', 'Flags'],
               ['#popup-system', 'Popups'],
@@ -990,6 +1049,133 @@ export default function DebugPage() {
             ))}
           </nav>
         </div>
+
+        {/* ── API Status Board ──
+            Every external API the app talks to, live-checked, with quota
+            notes and the exact file + env var to update each key. The
+            owner's "where is everything and is it healthy" reference. */}
+        <Card id="api-board" className="mb-6 scroll-mt-20 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Network className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-bold">API Status Board</h2>
+            <span className="text-xs text-muted-foreground">
+              every external service, live-checked
+            </span>
+            {apiBoardLoading && (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+            {!apiBoardLoading && apiBoard && (
+              <span className="text-xs text-muted-foreground">
+                checked {new Date(apiBoard.ts).toLocaleTimeString()}
+              </span>
+            )}
+            <Button
+              onClick={() => void fetchApiBoard()}
+              disabled={apiBoardLoading}
+              variant="outline"
+              size="sm"
+              className="ml-auto"
+            >
+              <RefreshCw className={`h-4 w-4 ${apiBoardLoading ? 'animate-spin' : ''}`} />
+              Re-check
+            </Button>
+          </div>
+
+          {!apiBoard ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <>
+              {/* Summary tiles */}
+              <div className="mb-4 flex flex-wrap gap-2 text-xs">
+                {[
+                  ['working', apiBoard.summary.working],
+                  ['limited', apiBoard.summary.limited],
+                  ['limitReached', apiBoard.summary.limitReached],
+                  ['down', apiBoard.summary.down],
+                  ['notConfigured', apiBoard.summary.notConfigured],
+                  ['info', apiBoard.summary.info],
+                ].map(([key, count]) => {
+                  const meta = apiStatusMeta[key as ApiBoardItem['status']]
+                  if (!count) return null
+                  return (
+                    <span
+                      key={key as string}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1"
+                    >
+                      <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
+                      {meta.label}: <b>{count as number}</b>
+                    </span>
+                  )
+                })}
+              </div>
+
+              {apiBoard.groups.map((group) => (
+                <div key={group.name} className="mb-4 last:mb-0">
+                  <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    {group.name}
+                  </h3>
+                  <div className="space-y-2">
+                    {group.items.map((item) => {
+                      const meta = apiStatusMeta[item.status] || apiStatusMeta.info
+                      return (
+                        <div
+                          key={item.id}
+                          className="rounded-xl border bg-muted/20 p-3 md:p-3.5"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${meta.dot}`} />
+                            <span className="text-sm font-semibold">{item.name}</span>
+                            <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                              {meta.label}
+                            </span>
+                            {typeof item.latencyMs === 'number' && (
+                              <span className="text-[10px] text-muted-foreground">
+                                {item.latencyMs}ms
+                              </span>
+                            )}
+                            {typeof item.keyPresent === 'boolean' && (
+                              <span
+                                className={`text-[10px] font-medium ${
+                                  item.keyPresent ? 'text-emerald-600' : 'text-zinc-500'
+                                }`}
+                              >
+                                key {item.keyPresent ? 'set' : 'missing'}
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                            {item.purpose}
+                          </p>
+                          <p className="mt-1 text-xs leading-relaxed text-foreground/80">
+                            {item.statusText}
+                          </p>
+                          {item.quotaText && (
+                            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                              <span className="font-semibold">Limits:</span> {item.quotaText}
+                            </p>
+                          )}
+                          <p className="mt-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                            <span className="font-semibold">file:</span> {item.file}
+                            {item.envVar && (
+                              <>
+                                {' '}· <span className="font-semibold">key:</span> {item.envVar}{' '}
+                                <span className="opacity-70">
+                                  (set in Vercel → Settings → Environment Variables)
+                                </span>
+                              </>
+                            )}
+                          </p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </Card>
 
         {/* ── Google Discover Kit ──
             The growth programme: 10-step plan, drop-in resources and live

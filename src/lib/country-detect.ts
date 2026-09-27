@@ -339,8 +339,8 @@ export function clearCountryCache(): void {
  */
 const COUNTRY_SOURCES: Record<string, string[]> = {
   US: ['nytimes', 'cnn', 'foxnews', 'nbcnews', 'cnbc', 'npr', 'breitbart', 'vox', 'huffpost', 'abcnews', 'nationalreview', 'nypost', 'thehill', 'salon', 'rawstory', 'commondreams', 'dailywire', 'theblaze', 'washingtonpost', 'latimes', 'newyorker'],
-  GB: ['bbc', 'theguardian', 'ft', 'economist', 'skynews', 'telegraph', 'independent', 'dailymail', 'mirror', 'standard', 'express'],
-  UK: ['bbc', 'theguardian', 'ft', 'economist', 'skynews', 'telegraph', 'independent', 'dailymail', 'mirror', 'standard', 'express'],
+  GB: ['bbc', 'theguardian', 'ft', 'economist', 'skynews', 'telegraph', 'independent', 'dailymail', 'mirror', 'standard', 'express', 'metro', 'thesun', 'inews', 'men', 'birminghamlive'],
+  UK: ['bbc', 'theguardian', 'ft', 'economist', 'skynews', 'telegraph', 'independent', 'dailymail', 'mirror', 'standard', 'express', 'metro', 'thesun', 'inews', 'men', 'birminghamlive'],
   CA: ['bbc', 'theguardian', 'nytimes', 'aljazeera'],
   AU: ['bbc', 'theguardian', 'nytimes', 'aljazeera', 'cnbc'],
   IE: ['bbc', 'theguardian', 'ft'],

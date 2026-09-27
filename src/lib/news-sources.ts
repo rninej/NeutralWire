@@ -242,6 +242,12 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://feeds.bbci.co.uk/news/rss.xml', category: 'top' },
       { url: 'https://feeds.bbci.co.uk/news/world/rss.xml', category: 'world' },
       { url: 'https://feeds.bbci.co.uk/news/uk/rss.xml', category: 'world' },
+      // UK nations + England regional desks (session46 UK-sourcing upgrade
+      // — the same front pages that shape bbc.co.uk/news's UK edition).
+      { url: 'https://feeds.bbci.co.uk/news/england/rss.xml', category: 'world' },
+      { url: 'https://feeds.bbci.co.uk/news/scotland/rss.xml', category: 'world' },
+      { url: 'https://feeds.bbci.co.uk/news/wales/rss.xml', category: 'world' },
+      { url: 'https://feeds.bbci.co.uk/news/northern_ireland/rss.xml', category: 'world' },
       { url: 'https://feeds.bbci.co.uk/news/politics/rss.xml', category: 'politics' },
       { url: 'https://feeds.bbci.co.uk/news/business/rss.xml', category: 'business' },
       { url: 'https://feeds.bbci.co.uk/news/technology/rss.xml', category: 'technology' },
@@ -602,6 +608,49 @@ export const NEWS_SOURCES: NewsSource[] = [
       { url: 'https://www.express.co.uk/posts/rss/3', category: 'politics' },
       { url: 'https://www.express.co.uk/posts/rss/24', category: 'business' },
     ],
+  },
+  {
+    // session46 UK-sourcing upgrade: all feeds below were live-verified
+    // (HTTP 200 + 25-30 items each) before adding — the UK front page
+    // needed the outlets BBC's UK edition actually competes with.
+    id: 'metro',
+    name: 'Metro',
+    homepage: 'https://metro.co.uk',
+    leaning: 'center',
+    country: 'UK',
+    feeds: [{ url: 'https://metro.co.uk/feed/', category: 'top' }],
+  },
+  {
+    id: 'thesun',
+    name: 'The Sun',
+    homepage: 'https://www.thesun.co.uk',
+    leaning: 'right',
+    country: 'UK',
+    feeds: [{ url: 'https://www.thesun.co.uk/feed/', category: 'top' }],
+  },
+  {
+    id: 'inews',
+    name: 'The i',
+    homepage: 'https://inews.co.uk',
+    leaning: 'center',
+    country: 'UK',
+    feeds: [{ url: 'https://inews.co.uk/feed', category: 'top' }],
+  },
+  {
+    id: 'men',
+    name: 'Manchester Evening News',
+    homepage: 'https://www.manchestereveningnews.co.uk',
+    leaning: 'center',
+    country: 'UK',
+    feeds: [{ url: 'https://www.manchestereveningnews.co.uk/?service=rss', category: 'world' }],
+  },
+  {
+    id: 'birminghamlive',
+    name: 'BirminghamLive',
+    homepage: 'https://www.birminghammail.co.uk',
+    leaning: 'center',
+    country: 'UK',
+    feeds: [{ url: 'https://www.birminghammail.co.uk/?service=rss', category: 'world' }],
   },
 
   // ---------- ADDITIONAL SOURCES (more coverage = more sources per topic) ----------

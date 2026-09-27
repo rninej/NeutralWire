@@ -545,10 +545,16 @@ Rank these stories by national importance for ${countryDisplay} readers. Return 
     console.warn(`[gdelt-rank] AI ranking failed for ${cc}, falling back to coverage sort:`, err)
   }
 
-  // 5. AI failed → fall back to coverage desc + recency desc
-  console.warn(`[gdelt-rank] ${cc}/${dateKey}: using fallback coverage sort`)
+  // 5. AI failed → fall back to coverage desc + recency desc, with the
+  //    same sports demotion the GDELT scoring applies (a -4 effective
+  //    coverage): without it, the no-AI fallback let football dominate
+  //    the UK front page (every UK outlet has a sports desk, so match
+  //    reports out-cover domestic news).
+  console.warn(`[gdelt-rank] ${cc}/${dateKey}: using fallback coverage sort (sports demoted)`)
   return topics.sort((a, b) => {
-    if (b.coverage !== a.coverage) return b.coverage - a.coverage
+    const ea = (a.coverage || 0) - (isSportsTitle(a.title) ? 4 : 0)
+    const eb = (b.coverage || 0) - (isSportsTitle(b.title) ? 4 : 0)
+    if (eb !== ea) return eb - ea
     return b.latestSeen - a.latestSeen
   })
 }
@@ -1295,6 +1301,87 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
   }
 }
 
+// ---------- UK front-page hybrid (GB "My Country") ----------
+// See the call site comment in aggregateMyCountryViaGdelt for the why.
+// Best-effort: ANY failure keeps the GDELT-only topic list (the function
+// never throws), so the UK page can never go empty because the RSS pool
+// hiccuped.
+
+/** Recompute a merged topic's spectrum counts + coverage from its
+ * (now larger) article list — lean counts are per DISTINCT source, the
+ * same convention clusterGdeltArticles and the RSS clusterer use. */
+function recountTopicSpectrum(topic: TopicArticle): void {
+  const seen = new Set<string>()
+  let l = 0
+  let c = 0
+  let r = 0
+  for (const a of topic.articles || []) {
+    if (seen.has(a.sourceId)) continue
+    seen.add(a.sourceId)
+    if (a.leaning === 'left') l++
+    else if (a.leaning === 'right') r++
+    else c++
+  }
+  topic.leanLeft = l
+  topic.leanCenter = c
+  topic.leanRight = r
+  topic.coverage = (topic.articles || []).length
+  const latest = Math.max(0, ...(topic.articles || []).map((a) => a.iso || 0))
+  if (latest > (topic.latestSeen || 0)) topic.latestSeen = latest
+}
+
+async function ukFrontPageHybrid(
+  gdeltTopics: TopicArticle[],
+): Promise<{ topics: TopicArticle[]; extra: { articles: number; sources: number } }> {
+  const none = { topics: gdeltTopics, extra: { articles: 0, sources: 0 } }
+  try {
+    const [{ aggregateCategory }, { sourcesForCountry }, { isNearDuplicateTitle }] = await Promise.all([
+      import('@/lib/news-aggregator'),
+      import('@/lib/country-detect'),
+      import('@/lib/push/story-dedup'),
+    ])
+    // The UK's own front pages (already AI country-filtered + ranked by
+    // aggregateCategory's mycountry mode — 8-min cached, non-blocking
+    // keyword fallback when the AI is down).
+    const rss = await aggregateCategory('mycountry', {
+      limit: 40,
+      minCoverage: 1,
+      countrySourceIds: sourcesForCountry('GB'),
+      countryCode: 'GB',
+    })
+    console.log(
+      `[gdelt-uk-hybrid] UK front pages: ${rss.topics.length} topics (${rss.articleCount} articles, ${rss.sourceCount} sources) · GDELT breadth: ${gdeltTopics.length} topics`,
+    )
+    if (rss.topics.length === 0) return none
+
+    // RSS topics LEAD; each GDELT cluster either joins a near-duplicate
+    // front-page story (its articles enrich the spectrum data) or
+    // appends as regional breadth.
+    const out = [...rss.topics]
+    let merged = 0
+    for (const g of gdeltTopics) {
+      const dup = out.find((t) => isNearDuplicateTitle(t.title, g.title))
+      if (dup) {
+        dup.articles = [...(dup.articles || []), ...(g.articles || [])]
+        recountTopicSpectrum(dup)
+        merged++
+      } else {
+        out.push(g)
+      }
+    }
+    console.log(
+      `[gdelt-uk-hybrid] merged ${merged} GDELT clusters into front-page stories, appended ${gdeltTopics.length - merged} as regional breadth → ${out.length} topics total`,
+    )
+    return {
+      topics: out,
+      extra: { articles: rss.articleCount, sources: rss.sourceCount },
+    }
+  } catch (err) {
+    console.warn('[gdelt-uk-hybrid] failed — keeping GDELT-only topics:', err)
+    return none
+  }
+}
+
 // ---------- Main: aggregate GDELT articles for a country ----------
 /**
  * Fetch + cluster UK (or any country) news from GDELT.
@@ -1645,7 +1732,27 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
   }
 
   // ── Cluster into topics ──
-  const topics = clusterGdeltArticles(articles)
+  let topics = clusterGdeltArticles(articles)
+
+  // ── UK FRONT-PAGE HYBRID (session46 UK-sourcing upgrade) ──
+  // The owner's brief: the UK "My Country" page should read like BBC
+  // News's UK front page. GDELT's strong-terms query is a noisy proxy —
+  // any global article that MENTIONS "britain"/"england" competes with
+  // actual UK domestic news, and odd international mentions end up
+  // leading the page. For GB the UK's own front pages (the curated RSS
+  // pool: BBC + nations feeds, Sky, Guardian, Telegraph, Independent,
+  // Mail, Mirror, Standard, Express, Metro, Sun, The i, MEN,
+  // BirminghamLive) become the PRIMARY topic set — that IS the BBC front
+  // page material — and GDELT's clusters join as breadth (regional
+  // outlets: Yorkshire Post, Belfast Telegraph, local radio…), merged in
+  // by near-duplicate title so a story covered by both pools gains
+  // coverage + spectrum data instead of duplicating.
+  let hybridExtra = { articles: 0, sources: 0 }
+  if (cc === 'GB' || cc === 'UK') {
+    const hybrid = await ukFrontPageHybrid(topics)
+    topics = hybrid.topics
+    hybridExtra = hybrid.extra
+  }
 
   // ── Rank topics using AI with a stable daily cache ──
   // The AI acts as a news editor, ranking stories by national importance
@@ -1690,9 +1797,10 @@ Which story numbers are ACTUALLY ABOUT ${countryDisplay}? Return ONLY the number
 
   // Attach total article + newsroom counts to each topic so the topic
   // detail can show "312 articles, 14 distinct newsrooms" (like Ground News).
-  // These are the TOTAL counts from the GDELT query, not per-topic.
-  const totalArticles = raw.length
-  const totalNewsrooms = new Set(raw.map((a) => a.domain)).size
+  // For the UK hybrid these are the GDELT query totals PLUS the RSS front
+  // page pool's contribution (both pools feed the page).
+  const totalArticles = raw.length + hybridExtra.articles
+  const totalNewsrooms = new Set(raw.map((a) => a.domain)).size + hybridExtra.sources
   for (const topic of result) {
     topic.totalArticles = totalArticles
     topic.totalNewsrooms = totalNewsrooms

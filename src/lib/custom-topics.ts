@@ -191,8 +191,10 @@ function decodeXmlEntities(s: string): string {
 
 /** Fetch + parse a Google News RSS search for the keyword set. Returns
  * ok:false ONLY on transport failure (so a genuine zero-match result is
- * never mistaken for a source outage — the lesson from the GDELT ladder). */
-async function fetchGoogleNews(keywords: string[], timeoutMs: number): Promise<GoogleResult> {
+ * never mistaken for a source outage — the lesson from the GDELT ladder).
+ * Exported for the subtopic-create route's validation pass (it validates
+ * against the SAME source the fill's primary stage uses). */
+export async function fetchGoogleNews(keywords: string[], timeoutMs: number): Promise<GoogleResult> {
   const kw = keywords
     .slice(0, 8)
     .map((k) => `"${k.replace(/"/g, '').trim()}"`)
