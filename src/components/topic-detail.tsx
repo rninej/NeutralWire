@@ -18,6 +18,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   Download,
+  FileText,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { PremiumDiamond } from '@/components/premium-ui'
@@ -160,6 +161,14 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
   // not after the entire summary card has passed.
   const [askAiSticky, setAskAiSticky] = React.useState(false)
   const askAiButtonRef = React.useRef<HTMLButtonElement | null>(null)
+  // The story dialog element itself. MUST be a ref, NOT
+  // document.querySelector('[role="dialog"]') — other overlays can carry
+  // the dialog role too (the cookie-consent banner renders EARLIER in the
+  // DOM and querySelector returns the first match), which silently bound
+  // the scroll listener to an element that never scrolls → the sticky
+  // Ask AI never appeared (user-reported on first-visit free accounts,
+  // exactly when the cookie banner is mounted).
+  const dialogRef = React.useRef<HTMLDivElement | null>(null)
 
   // ── Swipe-down-to-close (mobile sheet gesture) ──
   // The article opens as a full-screen sheet; the universal mobile
@@ -325,7 +334,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
   // the entire summary card has scrolled past (which was the old behavior
   // that required scrolling to the bottom of the card).
   React.useEffect(() => {
-    const container = document.querySelector('[role="dialog"]') as HTMLElement | null
+    const container = dialogRef.current
     if (!container) return
     const onScroll = () => {
       const btn = askAiButtonRef.current
@@ -651,6 +660,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
       transition={{ duration: 0.2 }}
     >
     <motion.div
+      ref={dialogRef}
       className="h-full overflow-y-auto overscroll-contain bg-background"
       role="dialog"
       aria-modal="true"
@@ -1759,8 +1769,8 @@ function ExportButton({ topicId }: { topicId: string }) {
             className="fixed inset-0 z-10 cursor-default"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute right-0 top-full z-20 mt-1.5 w-40 overflow-hidden rounded-lg border bg-background shadow-lg">
-            {(['md', 'txt', 'json'] as const).map((f) => (
+          <div className="absolute right-0 top-full z-20 mt-1.5 w-44 overflow-hidden rounded-lg border bg-background shadow-lg">
+            {(['pdf', 'md', 'txt', 'json'] as const).map((f) => (
               <button
                 key={f}
                 type="button"
@@ -1770,8 +1780,14 @@ function ExportButton({ topicId }: { topicId: string }) {
                 }}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium hover:bg-muted/60"
               >
-                <Download className="h-3.5 w-3.5 text-muted-foreground" />
-                {f === 'md' ? 'Markdown (.md)' : f === 'txt' ? 'Plain text (.txt)' : 'JSON (.json)'}
+                {f === 'pdf' ? <FileText className="h-3.5 w-3.5 text-amber-500" /> : <Download className="h-3.5 w-3.5 text-muted-foreground" />}
+                {f === 'pdf'
+                  ? 'PDF (print-ready)'
+                  : f === 'md'
+                    ? 'Markdown (.md)'
+                    : f === 'txt'
+                      ? 'Plain text (.txt)'
+                      : 'JSON (.json)'}
               </button>
             ))}
           </div>

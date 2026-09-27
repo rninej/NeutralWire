@@ -294,6 +294,64 @@ function SubscribePageInner() {
     </div>
   ) : null
 
+  // ── DONATION MODEL ──
+  // No tiers exist when the site runs the classic donation model — every
+  // feature is unlocked for everyone. This page becomes the simple
+  // support page: the Ko-fi heart, a one-off donate button, back to the
+  // feed. No plan cards, no checkout, no auth step (the owner spec: one
+  // /debug flip removes "everything related to subscriptions").
+  if (sub.model === 'donation') {
+    return (
+      <div className="min-h-dvh bg-background">
+        <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur">
+          <div className="mx-auto flex h-14 max-w-3xl items-center gap-2 px-4">
+            <Button variant="ghost" size="sm" onClick={goBackToFeed} className="gap-1.5">
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">Back to your feed</span>
+              <span className="sm:hidden">Back</span>
+            </Button>
+            <div className="ml-auto flex items-center gap-1.5 text-sm font-bold">
+              <PremiumDiamond className="h-4 w-4" />
+              Support
+            </div>
+          </div>
+        </header>
+        <main className="mx-auto max-w-xl px-4 pb-16 pt-10 text-center">
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-rose-500/10 ring-1 ring-rose-500/30">
+              <PremiumDiamond className="h-10 w-10" />
+            </div>
+            <h1 className="text-2xl font-extrabold leading-tight sm:text-3xl">
+              NeutralWire is free — and stays free
+            </h1>
+            <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
+              Every feature is unlocked for everyone: all subtopics, the full
+              archive, the email briefing, themes and exports. If the
+              balanced coverage is worth a coffee to you, a one-off donation
+              on Ko-fi keeps the servers running.
+            </p>
+            <Button
+              size="lg"
+              className="mt-6 h-12 rounded-full bg-rose-500 px-8 text-sm font-bold text-white hover:bg-rose-600"
+              onClick={() => window.open('https://ko-fi.com/neutralwire', '_blank')}
+            >
+              <PremiumDiamond className="mr-1.5 h-4 w-4" />
+              Buy us a coffee on Ko-fi
+            </Button>
+            <p className="mt-4 text-xs text-muted-foreground">
+              Payments run entirely on Ko-fi — we never see your card
+              details. <a href="/privacy" className="underline underline-offset-2">Privacy policy</a>.
+            </p>
+          </motion.div>
+        </main>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-dvh bg-background">
       {/* ── Top bar ── */}

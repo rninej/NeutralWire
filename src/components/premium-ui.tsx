@@ -42,8 +42,32 @@ import {
  *  facet LINES inside it — the girdle band, the crown edges and the
  *  pavilion edges — all as STROKES. No filled gold plates, and not a
  *  kite: the flat table + wide girdle + one culet point read as a cut
- *  stone even at 10px. One symbol everywhere a premium feature appears. */
+ *  stone even at 10px. One symbol everywhere a premium feature appears.
+ *
+ *  DONATION MODEL: the SAME component renders the Ko-fi heart instead
+ *  (rose, filled) — one flip in /debug swaps every diamond on the site
+ *  (the owner spec: "removes all the diamonds for the hearts"). It
+ *  reads the subscription context, so this works on every page that
+ *  mounts a SubscriptionProvider and safely defaults to the diamond
+ *  everywhere else. */
 export function PremiumDiamond({ className }: { className?: string }) {
+  const { model } = useSubscription()
+  if (model === 'donation') {
+    return (
+      <span
+        className={cn('inline-flex items-center justify-center text-rose-500', className)}
+        aria-hidden="true"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          className="h-full w-full"
+        >
+          <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+        </svg>
+      </span>
+    )
+  }
   return (
     <span
       className={cn(
@@ -107,6 +131,10 @@ export function MeteorShower({ className }: { className?: string }) {
 }
 
 export function PremiumBadge({ ultra = false, className }: { ultra?: boolean; className?: string }) {
+  // No tiers to advertise in the donation model — every feature is
+  // already unlocked, so a "Premium" chip would be a lie.
+  const { model } = useSubscription()
+  if (model === 'donation') return null
   return (
     <span
       className={cn(
@@ -210,6 +238,10 @@ export function UpgradeDialog() {
 
   React.useEffect(() => {
     const onOpen = (e: Event) => {
+      // The paywall is meaningless in the donation model (everything is
+      // unlocked) — ignore any stray open events instead of showing
+      // tier cards that cannot be bought.
+      if (sub.model === 'donation') return
       const detail = (e as CustomEvent).detail as
         | { feature?: UpgradeFeature; tier?: TierId }
         | undefined
