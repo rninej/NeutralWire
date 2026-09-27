@@ -78,7 +78,7 @@ const UA = 'Mozilla/5.0 (compatible; NeutralWireBot/1.0; +https://neutralwire.or
 async function probe(
   url: string,
   init: RequestInit = {},
-  timeoutMs = 5000,
+  timeoutMs = 4000,
 ): Promise<{ ok: boolean; status: number; body: string; ms: number; json?: unknown }> {
   const t0 = Date.now()
   try {
@@ -299,7 +299,7 @@ async function checkGoogleNewsRss(): Promise<ApiItem> {
   const r = await probe(
     'https://news.google.com/rss/search?q=%22london%22&hl=en-US&gl=US&ceid=US:en',
     {},
-    7000,
+    4000,
   )
   if (r.ok && r.body.includes('<item')) {
     return { ...base, status: 'working', statusText: 'Feed answers with items.', latencyMs: r.ms, quotaText: 'Unauthenticated feed-reader endpoint — no published quota, occasional transient 5xx (one polite retry built in).' }
@@ -318,7 +318,7 @@ async function checkGdelt(): Promise<ApiItem> {
   const r = await probe(
     'https://api.gdeltproject.org/api/v2/doc/doc?query=%22united%20kingdom%22%20sourcelang%3Aenglish&mode=ArtList&maxrecords=75&format=json&sort=DateDesc&timewindow=1d',
     {},
-    9000,
+    4000,
   )
   if (r.ok && (r.json || r.body.includes('articles'))) {
     return { ...base, status: 'working', statusText: 'Query answered.', latencyMs: r.ms, quotaText: 'Free, key-less — but rate-limits SHARED SERVERLESS EGRESS IPs for hours at a time (HTTP 429). Every caller has patient retries + alternate sources.' }
@@ -329,7 +329,7 @@ async function checkGdelt(): Promise<ApiItem> {
   if (r.status === 0 && /timeout/i.test(r.body)) {
     // GDELT's rate-limiter famously takes 10-12s just to DELIVER a 429 —
     // a probe timeout here is the throttle in disguise, not an outage.
-    return { ...base, status: 'limit-reached', statusText: 'Timed out answering (the classic GDELT shared-IP throttle — its 429s take 10-12s just to arrive). Feed paths retry patiently and fall back to RSS.', latencyMs: r.ms, quotaText: 'No published quota; throttle is per egress IP and clears on its own.' }
+    return { ...base, status: 'limit-reached', statusText: 'Timed out answering (the classic GDELT shared-IP throttle — its 429s take 10-12s just to arrive, longer than this probe waits). Feed paths retry patiently and fall back to RSS.', latencyMs: r.ms, quotaText: 'No published quota; throttle is per egress IP and clears on its own.' }
   }
   return { ...base, status: 'down', statusText: `Query failed: HTTP ${r.status} ${r.body.slice(0, 120)}`, latencyMs: r.ms }
 }
@@ -341,7 +341,7 @@ async function checkBingNewsRss(): Promise<ApiItem> {
     purpose: 'Image donor for custom-subtopic cards (thumbnails only, not content)',
     file: 'src/lib/custom-topics.ts (fetchBingImages)',
   }
-  const r = await probe('https://www.bing.com/news/search?q=london&format=RSS&setmkt=en-GB&setlang=en-US', {}, 6000)
+  const r = await probe('https://www.bing.com/news/search?q=london&format=RSS&setmkt=en-GB&setlang=en-US', {}, 4000)
   if (r.ok && r.body.includes('<item')) {
     return { ...base, status: 'working', statusText: 'Feed answers with items.', latencyMs: r.ms, quotaText: 'Unauthenticated — no published quota.' }
   }
@@ -363,7 +363,7 @@ async function checkRssPool(): Promise<ApiItem> {
     ['Guardian', 'https://www.theguardian.com/world/rss'],
     ['NYT', 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml'],
   ] as const
-  const results = await Promise.all(samples.map(([, url]) => probe(url, {}, 6000)))
+  const results = await Promise.all(samples.map(([, url]) => probe(url, {}, 4000)))
   const okCount = results.filter((r) => r.ok && r.body.includes('<item')).length
   const avgMs = Math.round(results.reduce((a, r) => a + r.ms, 0) / results.length)
   const dead = samples.filter(([, url], i) => !(results[i].ok && results[i].body.includes('<item'))).map(([n]) => n)

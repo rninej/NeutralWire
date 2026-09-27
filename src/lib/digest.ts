@@ -443,6 +443,9 @@ function renderDigestEmail(opts: { email: string; note: string; rows: DigestRow[
   <tr><td style="background:#18181b;padding:18px 26px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       <tr>
+        <td width="52" valign="middle" style="padding-right:14px;">
+          <img src="https://neutralwire.org/icon-192.png" width="36" height="36" alt="NeutralWire" style="display:block;width:36px;height:36px;border-radius:8px;border:1px solid #3f3f46;outline:1px solid #18181b;" />
+        </td>
         <td style="font-size:19px;font-weight:bold;color:#fafafa;font-family:Arial,Helvetica,sans-serif;letter-spacing:0.3px;">
           Neutral<span style="color:#f59e0b;">Wire</span>
         </td>

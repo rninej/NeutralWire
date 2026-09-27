@@ -390,21 +390,35 @@ export default function DebugPage() {
   }
   const [apiBoard, setApiBoard] = React.useState<ApiBoardData | null>(null)
   const [apiBoardLoading, setApiBoardLoading] = React.useState(false)
+  const [apiBoardError, setApiBoardError] = React.useState<string | null>(null)
 
   const fetchApiBoard = React.useCallback(async () => {
     if (!passwordRef.current) return
     setApiBoardLoading(true)
+    setApiBoardError(null)
     try {
       const res = await fetch('/api/debug/apis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: passwordRef.current }),
+        // Hard client-side ceiling: whatever the server does (Vercel
+        // timeouts included), the spinner NEVER hangs the card forever.
+        signal: AbortSignal.timeout(30000),
       })
       if (res.ok) {
-        setApiBoard((await res.json()) as ApiBoardData)
+        const data = (await res.json()) as ApiBoardData
+        // Shape-guard: a truncated/proxy-mangled response must never
+        // reach the render path — that once crashed the whole page.
+        if (data && Array.isArray(data.groups) && data.summary && typeof data.summary.total === 'number') {
+          setApiBoard(data)
+        } else {
+          setApiBoardError('Board response was malformed — try Re-check.')
+        }
+      } else {
+        setApiBoardError(`Board failed to load (HTTP ${res.status}) — try Re-check.`)
       }
     } catch {
-      // silent — the refresh button retries
+      setApiBoardError('Board request timed out — try Re-check.')
     } finally {
       setApiBoardLoading(false)
     }
@@ -1081,7 +1095,15 @@ export default function DebugPage() {
             </Button>
           </div>
 
-          {!apiBoard ? (
+          {apiBoardError && !apiBoard ? (
+            <div className="flex flex-col items-center gap-2 py-6 text-center">
+              <p className="text-sm text-red-500">{apiBoardError}</p>
+              <p className="text-xs text-muted-foreground">
+                The live checks run server-side with short timeouts — a slow
+                provider can occasionally drop one round.
+              </p>
+            </div>
+          ) : !apiBoard ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
@@ -1097,7 +1119,18 @@ export default function DebugPage() {
                   ['notConfigured', apiBoard.summary.notConfigured],
                   ['info', apiBoard.summary.info],
                 ].map(([key, count]) => {
-                  const meta = apiStatusMeta[key as ApiBoardItem['status']]
+                  // The summary fields are camelCase ('limitReached',
+                  // 'notConfigured') but apiStatusMeta is keyed by the
+                  // status enum ('limit-reached', 'not-configured') —
+                  // translate, and NEVER trust the lookup: an undefined
+                  // meta once crashed the entire /debug page here.
+                  const statusKey =
+                    key === 'limitReached'
+                      ? 'limit-reached'
+                    : key === 'notConfigured'
+                      ? 'not-configured'
+                      : (key as ApiBoardItem['status'])
+                  const meta = apiStatusMeta[statusKey] || apiStatusMeta.info
                   if (!count) return null
                   return (
                     <span
@@ -1111,13 +1144,16 @@ export default function DebugPage() {
                 })}
               </div>
 
+              {apiBoardError && (
+                <p className="mb-3 text-xs text-red-500">{apiBoardError}</p>
+              )}
               {apiBoard.groups.map((group) => (
                 <div key={group.name} className="mb-4 last:mb-0">
                   <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
                     {group.name}
                   </h3>
                   <div className="space-y-2">
-                    {group.items.map((item) => {
+                    {(group.items || []).map((item) => {
                       const meta = apiStatusMeta[item.status] || apiStatusMeta.info
                       return (
                         <div
