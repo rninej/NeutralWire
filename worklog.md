@@ -612,3 +612,24 @@ Stage Summary:
 - One /debug flip to 'donation' now removes every subscription surface: hearts replace diamonds globally, the paywall can't open, /subscribe becomes a donation page, premium gates are open server- and client-side, and the privacy policy switches to the donation variant. Flipping back restores everything (verified both directions live).
 - Reminders carried forward: verify neutralwire.org at resend.com/domains (still the only blocker for arnavjain1009@gmail.com digests); Google OAuth consent screen still Testing; rotate the GitHub PAT + Resend key when convenient; Ko-fi webhook stays at https://neutralwire.org/api/kofi/webhook.
 - Known backlog: Google index SSR, sitemap polish, /story OG images; notification icon intermittent, subtopic scroll prefetch, synonym dedup.
+
+---
+Task ID: session46
+Agent: main (Super Z)
+Task: owner confirmed neutralwire.org is now VERIFIED on Resend — send a fun test digest to every premium/ultra subscriber through the newly verified domain.
+
+Work Log:
+- State check: remote main = 4f0d516 (session45 source + worklog both pushed); dropped the env's local-only ghost snapshot 3386613 (UUID message; auto-commit of session45 verify PNGs/PDFs + the pdf unit-test script, zero source changes) with git reset --mixed 4f0d516 per established convention — files remain on disk untracked.
+- Pre-flight Firebase read: 5 accounts, exactly 2 premium/ultra — arnavjain1009@gmail.com (ultra, digest 3x/day enabled, custom subtopics AI + robotics) and a tier-stub premium account a_7493d0239b259f8ef88b with NO email on record (unsendable — skipped with a logged reason; it gains an address only when its owner logs in).
+- digestSweeps audit showed the 18:00 UTC refresh-all-tail catch-up sweep had ALREADY delivered today's regular digest to the ultra subscriber (sent=1) — the verification took effect automatically, exactly the ≤90-min recovery session43 built. Sender rung of that one is unknowable with the send-only key (owner address is deliverable via both the branded sender and the test-sender fallback), which is precisely why a dedicated branded-sender test was still worth running.
+- The automated guards (6h re-send / 90-min attempt spacing) correctly hold the subscriber back for hours, so the test ran as a one-off script (scripts/test-digest-send.ts, local-untracked) reusing the REAL pipeline functions: gatherStories() → 14 stories (their custom subtopics + core categories) → generateNewsletter() → direct Resend POST from the branded sender with the full HTTP response printed and NO test-sender fallback rung (the fallback would mask an owner-address success and defeat the test's purpose).
+- RESULT: HTTP 200, Resend email id 01a0e417-4ef4-76ac-b96e-946678708c8a, from 'NeutralWire <digest@neutralwire.org>' to arnavjain1009@gmail.com, subject '[Test] Your NeutralWire digest — 14 stories across the spectrum'. Local sandbox has no AI keys so the deterministic fallback newsletter builder fired (by design — AI is polish, never a gate); production sweeps use the AI writer.
+- Audit: digestSweeps node written with trigger='manual-domain-test', perSub sent-branded. lastSentAt/lastAttemptAt deliberately untouched — they belong to the automated pipeline and were already stamped by the 18:00 UTC real send; a manual test must not corrupt guard data.
+- No source changes this session; nothing to deploy.
+
+Stage Summary:
+- The digest pipeline is now FULLY live end-to-end: Firebase → story gathering → newsletter build → Resend → branded neutralwire.org sender → third-party Gmail delivery. The last owner-side blocker is cleared; regular 3x/day digests flow automatically from here.
+- arnavjain1009@gmail.com sees TWO digest emails today: the regular 18:00 UTC one and the [Test]-prefixed 18:18 UTC branded-sender proof.
+- The premium tier-stub account cannot receive digests until it has an email (needs its owner to sign in once).
+- Carried forward: rotate the GitHub PAT + Resend key when convenient (both appeared in chat); Google OAuth consent screen still Testing; Ko-fi webhook unchanged at https://neutralwire.org/api/kofi/webhook.
+- Known backlog: Google index SSR, sitemap polish, /story OG images; notification icon intermittent, subtopic scroll prefetch, synonym dedup.
