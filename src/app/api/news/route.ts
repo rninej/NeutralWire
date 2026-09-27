@@ -337,15 +337,20 @@ function offsetFor(sp: URLSearchParams): number {
  * a structural guarantee rather than a hope:
  *   1. Subscribe-time warm fill — the feed is usually cached BEFORE the
  *      chip is ever tapped (this path then answers in <300ms).
- *   2. Patient sync timings — a cold fill runs GDELT with 12s attempts
- *      (GDELT's rate-limiter takes 10s+ just to ANSWER, so shorter
- *      timeouts abort blind), so a successful query usually completes
- *      in 1-3s and a throttled one engages the retry ladder.
+ *   2. Google News RSS first — the sync fill's primary source answers in
+ *      ~1s and alone carries a full feed for ANY topic; the heavy GDELT
+ *      ladder only joins synchronously when Google News fails/thins.
  *   3. Hard deadline race — whatever the fill is doing, the RESPONSE
  *      leaves at ~9.4s; the fill itself keeps running post-response via
  *      after() (Fluid Compute holds the invocation, bounded by
  *      maxDuration) and writes the cache, so the client's retry ("Try
  *      now") or the auto-refresh lands the warm feed.
+ *
+ * THE POLISH PASS: when the sync fill lands from the fast path, after()
+ * schedules ONE background re-fill (full source ladder + AI filter +
+ * image pass) so the cached feed gains photos, real publisher URLs and
+ * broader coverage a minute after first serve — progressive enrichment,
+ * never a delay on the visitor's first paint.
  *
  * THE HONEST-STATE FIX (the "stuck on Gathering forever" bug): the old
  * code reported `pending: true` for BOTH "fill still running" and "fill
@@ -424,6 +429,17 @@ async function handleCustomTopic(
     after(async () => {
       try {
         await fillStillRunning
+      } catch {}
+    })
+  } else if (feed && filledNow) {
+    // The sync fill landed (usually the Google News fast path, ~1-2s) —
+    // schedule ONE background polish re-fill: full source ladder (pool
+    // thumbnails + real publisher URLs), AI relevance filter, image pass.
+    // The cache swap is invisible to the visitor; their next feed refresh
+    // shows the enriched version. Bounded by maxDuration via after().
+    after(async () => {
+      try {
+        await fillCustomTopic(topicId, { aiFilter: true, mode: 'background', budgetMs: 18000 })
       } catch {}
     })
   }

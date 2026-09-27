@@ -67,12 +67,14 @@ export async function POST(req: NextRequest) {
             existing.topics.length === 0 ||
             Date.now() - (existing.updatedAt || 0) > 3 * 3600 * 1000
           if (stale) {
-            // Background mode: patient GDELT timings + the AI keyword
+            // Background mode: full source ladder (Google News RSS first,
+            // then the RSS pool + patient GDELT ladder) + the AI keyword
             // fallback — nobody is waiting on this fill, it just needs to
             // be warm before the chip gets tapped. fillCustomTopic adds
             // single-flight + failure cooldown (concurrent subscribes to
-            // the same topic share one GDELT fill instead of stampeding).
-            await fillCustomTopic(topicId, { aiFilter: false, mode: 'background' })
+            // the same topic share one fill instead of stampeding). Budget
+            // keeps the after() work inside this route's 30s maxDuration.
+            await fillCustomTopic(topicId, { aiFilter: false, mode: 'background', budgetMs: 20000 })
           }
         } catch {}
       })

@@ -1809,7 +1809,7 @@ function normalizeHost(host: string): string {
     .replace(/^(www\.|m\.|mobile\.|amp\.|amp-\d+\.)/, '')
 }
 
-async function fetchOgImage(articleUrl: string): Promise<string | null> {
+export async function fetchOgImage(articleUrl: string): Promise<string | null> {
   if (!articleUrl) return null
 
   const cached = OG_IMAGE_CACHE.get(articleUrl)
@@ -2508,6 +2508,80 @@ function clusterTopics(
   }
 
   return topics
+}
+
+// ---------- Custom-subtopic RSS pool enricher ----------
+
+/** Token-level keyword matching for the pool filter (shared semantics with
+ * custom-topics.ts): a multi-word keyword matches as a phrase; a single
+ * word matches a whole title token (or a long prefix), so "ai" never
+ * matches "said"/"maintain" the way naive substring matching does. */
+export function titleMatchesKeyword(title: string, keywords: string[]): boolean {
+  const lower = title.toLowerCase()
+  const tokens = new Set(lower.split(/[^a-z0-9]+/).filter(Boolean))
+  for (const kw of keywords) {
+    const k = kw.toLowerCase().trim()
+    if (!k) continue
+    if (k.includes(' ')) {
+      if (lower.includes(k)) return true
+    } else if (tokens.has(k)) {
+      return true
+    } else if (k.length >= 5) {
+      for (const t of tokens) if (t.startsWith(k)) return true
+    }
+  }
+  return false
+}
+
+/** Keyword-filtered articles from the site's own RSS pool — the enricher
+ * source for Premium custom subtopics. Reuses fetchFeed (in-process 5-min
+ * cache shared with the main feed refreshes, so warm instances pay ZERO
+ * extra fetches) over the feeds of the given categories, keeps articles
+ * from the last 48h whose titles actually match a topic keyword, dedups
+ * by URL, and caps the result. */
+export async function poolArticlesForKeywords(
+  keywords: string[],
+  feedCategories: string[],
+  opts: { maxArticles?: number; timeoutMs?: number } = {},
+): Promise<FeedArticle[]> {
+  const maxArticles = opts.maxArticles ?? 40
+  const seenFeed = new Set<string>()
+  const feeds: Array<{ url: string; source: NewsSource; feedCategory: string }> = []
+  for (const cat of feedCategories) {
+    for (const f of feedsForCategory(cat as Category, {})) {
+      if (seenFeed.has(f.url)) continue
+      seenFeed.add(f.url)
+      feeds.push(f)
+    }
+  }
+  if (feeds.length === 0) return []
+
+  const ac = new AbortController()
+  const timeout = setTimeout(() => ac.abort(), opts.timeoutMs ?? 10000)
+  try {
+    const results = await Promise.all(
+      feeds.map((f) => fetchFeed(f.url, f.source, f.feedCategory, ac.signal)),
+    )
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000
+    const seen = new Set<string>()
+    const out: FeedArticle[] = []
+    for (const r of results) {
+      for (const a of r) {
+        if (a.iso < cutoff) continue
+        if (!titleMatchesKeyword(a.title, keywords)) continue
+        const key = a.sourceId + '|' + a.link.split('?')[0]
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(a)
+        if (out.length >= maxArticles) return out
+      }
+    }
+    return out
+  } catch {
+    return []
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 // ---------- Public: aggregate a category ----------

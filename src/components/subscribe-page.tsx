@@ -73,6 +73,31 @@ function SubscribePageInner() {
 
   const deviceId = getClientDeviceId()
 
+  // ── Back-to-feed navigation ──
+  // router.push('/') waits for the home route's full RSC payload (server
+  // render + Firebase reads) BEFORE the subscribe page closes — on a
+  // loaded feed that took multiple seconds, which read as "the page takes
+  // forever to close". Two fixes:
+  //   • the in-app entry point (the header Premium button) tags its
+  //     navigation with ?from=app — router.back() then pops the client
+  //     router cache and the feed repaints instantly, no server round-trip
+  //     (Next 16 keeps no history.state.idx to sniff, so the marker is the
+  //     deterministic signal);
+  //   • direct /subscribe visits (typed URL, external link, checkout
+  //     redirect) still push, but the payload is prefetched on mount so
+  //     the swap is warm.
+  const goBackToFeed = () => {
+    const fromApp = new URLSearchParams(window.location.search).get('from') === 'app'
+    if (fromApp) router.back()
+    else router.push('/')
+  }
+  React.useEffect(() => {
+    // Warm the home route's payload during idle time (dynamic route —
+    // router.prefetch fetches the RSC payload ahead of the tap).
+    const t = setTimeout(() => router.prefetch('/'), 600)
+    return () => clearTimeout(t)
+  }, [])
+
   const submitAuth = async (mode: 'signin' | 'register') => {
     setBusy(true)
     setError(null)
@@ -274,7 +299,7 @@ function SubscribePageInner() {
       {/* ── Top bar ── */}
       <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-3xl items-center gap-2 px-4">
-          <Button variant="ghost" size="sm" onClick={() => router.push('/')} className="gap-1.5">
+          <Button variant="ghost" size="sm" onClick={goBackToFeed} className="gap-1.5">
             <ArrowLeft className="h-4 w-4" />
             <span className="hidden sm:inline">Back to your feed</span>
             <span className="sm:hidden">Back</span>
@@ -429,7 +454,7 @@ function SubscribePageInner() {
               </div>
             ) : null}
             <div className="grid grid-cols-2 gap-2">
-              <Button variant="outline" onClick={() => router.push('/')}>
+              <Button variant="outline" onClick={goBackToFeed}>
                 Back to my feed
               </Button>
               <Button variant="ghost" onClick={signOut} disabled={busy} className="text-muted-foreground">

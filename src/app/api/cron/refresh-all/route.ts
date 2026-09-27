@@ -204,7 +204,15 @@ export async function GET(req: NextRequest) {
         const due = await customTopicsDueForRefresh(3)
         for (const topicId of due) {
           try {
-            const feed = await fillCustomTopic(topicId, { aiFilter: true })
+            // Adaptive per-topic budget: the tick has (60s maxDuration -
+            // elapsed - the digest tail's share) left; split it across the
+            // due topics so one heavy fill can never eat the whole tick.
+            const perTopic = Math.max(5000, Math.floor((55_000 - (Date.now() - t0)) / Math.max(1, due.length)))
+            const feed = await fillCustomTopic(topicId, {
+              aiFilter: true,
+              mode: 'background',
+              budgetMs: perTopic,
+            })
             console.log(
               `[cron/refresh-all] custom topic '${topicId}' refreshed: ${feed?.topics?.length || 0} topics, ${feed?.articleCount || 0} articles (${Date.now() - t0}ms into the tick)`,
             )

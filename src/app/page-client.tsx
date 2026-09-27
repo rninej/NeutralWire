@@ -3195,7 +3195,7 @@ function MonetizationButton({ onAccount }: { onAccount: () => void }) {
   return (
     <Button
       variant="ghost"
-      onClick={() => router.push('/subscribe')}
+      onClick={() => router.push('/subscribe?from=app')}
       className="relative h-9 gap-1.5 rounded-full px-2.5 text-xs font-semibold text-amber-600 transition-colors hover:bg-amber-500/10 hover:text-amber-600 active:scale-95 dark:text-amber-400 dark:hover:text-amber-400"
       aria-label={premium ? 'Your subscription' : 'Get NeutralWire Premium'}
       title={
