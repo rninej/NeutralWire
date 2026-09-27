@@ -9,7 +9,14 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const maxDuration = 60
 
-webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+// Only set VAPID details if the private key is configured — same guard as
+// pushify.ts. Lets the route build/run in dev environments without
+// VAPID_PRIVATE_KEY (the POST handler only STORES the scheduled push;
+// sending happens via the trigger routes, which set it lazily). In
+// production (Vercel) the key is always present.
+if (VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+}
 
 /**
  * Schedule a test notification to be sent at a specific time.

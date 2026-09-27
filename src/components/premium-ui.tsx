@@ -17,7 +17,7 @@
 
 import * as React from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Check, Loader2, Mail, Lock, LogOut, Sparkles, ExternalLink, Copy } from 'lucide-react'
+import { X, Check, Loader2, Mail, Lock, LogOut, Sparkles, ExternalLink, Copy, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -36,12 +36,13 @@ import {
 
 // ── The golden diamond ──────────────────────────────────────────────────
 
-/** The global premium mark — a real cut GEM: a flat table across the top,
- *  a crown that flares out to the wide girdle, and a pavilion that tapers
- *  to a single point. Six golden planes whose opacity steps draw the
- *  facet LINES through the stone (bright table, deeper wings) so it reads
- *  as a drawn, lined diamond — not a filled blob, not a kite — even at
- *  10px. One symbol everywhere a premium feature appears. */
+/** The global premium mark — a golden GEM drawn in pure OUTLINES: the
+ *  outer silhouette (a flat table across the top, a crown flaring out
+ *  to the wide girdle, a pavilion tapering to a single point) plus the
+ *  facet LINES inside it — the girdle band, the crown edges and the
+ *  pavilion edges — all as STROKES. No filled gold plates, and not a
+ *  kite: the flat table + wide girdle + one culet point read as a cut
+ *  stone even at 10px. One symbol everywhere a premium feature appears. */
 export function PremiumDiamond({ className }: { className?: string }) {
   return (
     <span
@@ -51,19 +52,23 @@ export function PremiumDiamond({ className }: { className?: string }) {
       )}
       aria-hidden="true"
     >
-      <svg viewBox="0 0 24 24" fill="currentColor" className="h-full w-full drop-shadow-[0_0_1px_rgba(245,158,11,0.6)]">
-        {/* crown — left corner facet */}
-        <path d="M6 3.5H11L8 9H2L6 3.5Z" opacity="0.78" />
-        {/* crown — the bright table facet (the stone's flat top) */}
-        <path d="M11 3.5H13L16 9H8L11 3.5Z" opacity="1" />
-        {/* crown — right corner facet */}
-        <path d="M13 3.5H18L22 9H16L13 3.5Z" opacity="0.78" />
-        {/* pavilion — left wing */}
-        <path d="M2 9H8L12 21.5L2 9Z" opacity="0.6" />
-        {/* pavilion — the deep centre facet down to the point */}
-        <path d="M8 9H16L12 21.5L8 9Z" opacity="0.92" />
-        {/* pavilion — right wing */}
-        <path d="M16 9H22L12 21.5L16 9Z" opacity="0.6" />
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="h-full w-full drop-shadow-[0_0_1px_rgba(245,158,11,0.6)]"
+      >
+        {/* the outer edges — flat table, crown flaring to the girdle, pavilion to one point */}
+        <path d="M7 3.5h10l4.5 5.5L12 20.5 2.5 9Z" />
+        {/* the girdle — the stone's wide band */}
+        <path d="M2.5 9h19" />
+        {/* the inner crown facet lines — through the top of the stone */}
+        <path d="M10.5 3.5 8 9M13.5 3.5 16 9" />
+        {/* the inner pavilion facet lines — through the cone down to the point */}
+        <path d="M8 9l4 11.5L16 9" />
       </svg>
     </span>
   )
@@ -656,6 +661,12 @@ export function KofiCheckoutPanel({
   const [granted, setGranted] = React.useState<'premium' | 'ultra' | null>(null)
   const [note, setNote] = React.useState<string | null>(null)
   const [altEmail, setAltEmail] = React.useState('')
+  // Options 2 and 3 start COLLAPSED — the panel leads with the single
+  // zero-effort path (option 1 · pay with your account email). The
+  // fallback code and the waiting tools unfold on demand so nobody
+  // wades through UI they don't need; the background poll runs either way.
+  const [fallbackOpen, setFallbackOpen] = React.useState(false)
+  const [waitingOpen, setWaitingOpen] = React.useState(false)
   // The tier when the pay panel opened — the poll succeeds when the live
   // tier RISES past it (or /api/kofi/claim lands an unclaimed payment).
   const startTierRef = React.useRef<'free' | 'premium' | 'ultra'>(sub.tier)
@@ -795,65 +806,102 @@ export function KofiCheckoutPanel({
         </a>
       </div>
 
-      {/* 2 · Fallback — the link code for different-email payments */}
-      <div className="rounded-xl border p-3">
-        <div className="text-xs font-semibold">2 · Paying with a different email?</div>
-        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-          Copy this code into the Ko-fi message box — the payment still links to your account.
-        </p>
+      {/* 2 · Fallback (collapsed by default) — the link code for different-email payments */}
+      <div className="rounded-xl border">
         <button
           type="button"
-          onClick={() => copy(code, 'code')}
-          className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 py-2 transition-colors hover:bg-muted/60"
-          aria-label="Copy claim code"
+          onClick={() => setFallbackOpen((v) => !v)}
+          aria-expanded={fallbackOpen}
+          className="flex w-full items-center justify-between gap-2 p-3 text-left"
         >
-          <span className="font-mono text-base font-bold tracking-[0.2em] text-amber-600 dark:text-amber-400">
-            {code}
-          </span>
-          {copied === 'code' ? (
-            <Check className="h-4 w-4 text-emerald-500" />
-          ) : (
-            <Copy className="h-4 w-4 text-muted-foreground" />
-          )}
+          <span className="text-xs font-semibold">2 · Paying with a different email?</span>
+          <ChevronDown
+            className={cn(
+              'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
+              fallbackOpen && 'rotate-180',
+            )}
+          />
         </button>
+        {fallbackOpen ? (
+          <div className="px-3 pb-3">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Copy this code into the Ko-fi message box — the payment still links to your account.
+            </p>
+            <button
+              type="button"
+              onClick={() => copy(code, 'code')}
+              className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 py-2 transition-colors hover:bg-muted/60"
+              aria-label="Copy claim code"
+            >
+              <span className="font-mono text-base font-bold tracking-[0.2em] text-amber-600 dark:text-amber-400">
+                {code}
+              </span>
+              {copied === 'code' ? (
+                <Check className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <Copy className="h-4 w-4 text-muted-foreground" />
+              )}
+            </button>
+          </div>
+        ) : null}
       </div>
 
-      {/* 3 · Waiting state — polls + manual check */}
-      <div className="rounded-xl border bg-muted/30 p-3">
-        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          {checking ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Sparkles className="h-3.5 w-3.5 text-amber-500" />
-          )}
-          {checking ? 'Checking for your payment…' : '3 · Waiting for your payment'}
-        </div>
-        <div className="mt-2 flex items-center gap-2">
-          <input
-            type="email"
-            value={altEmail}
-            onChange={(e) => setAltEmail(e.target.value)}
-            placeholder="Paid with a different email?"
-            className="min-w-0 flex-1 rounded-md border bg-background px-2.5 py-1.5 text-xs"
-          />
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => altEmail.trim() && check(altEmail.trim())}
-            disabled={checking || !altEmail.trim()}
-          >
-            Find
-          </Button>
-        </div>
+      {/* 3 · Waiting (collapsed by default) — the poll keeps running in the background either way */}
+      <div className="rounded-xl border bg-muted/30">
         <button
           type="button"
-          onClick={() => void check()}
-          disabled={checking}
-          className="mt-1.5 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
+          onClick={() => setWaitingOpen((v) => !v)}
+          aria-expanded={waitingOpen}
+          className="flex w-full items-center justify-between gap-2 p-3 text-left"
         >
-          {checking ? 'Checking…' : "I've paid — check now"}
+          <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            {checking ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+            )}
+            {checking ? 'Checking for your payment…' : '3 · Waiting for your payment'}
+          </span>
+          <ChevronDown
+            className={cn(
+              'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
+              waitingOpen && 'rotate-180',
+            )}
+          />
         </button>
-        {note ? <p className="mt-1.5 text-[11px] text-muted-foreground">{note}</p> : null}
+        {waitingOpen ? (
+          <div className="px-3 pb-3">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              It unlocks automatically the moment the payment lands — you don't have to wait here.
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="email"
+                value={altEmail}
+                onChange={(e) => setAltEmail(e.target.value)}
+                placeholder="Paid with a different email?"
+                className="min-w-0 flex-1 rounded-md border bg-background px-2.5 py-1.5 text-xs"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => altEmail.trim() && check(altEmail.trim())}
+                disabled={checking || !altEmail.trim()}
+              >
+                Find
+              </Button>
+            </div>
+            <button
+              type="button"
+              onClick={() => void check()}
+              disabled={checking}
+              className="mt-1.5 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
+            >
+              {checking ? 'Checking…' : "I've paid — check now"}
+            </button>
+            {note ? <p className="mt-1.5 text-[11px] text-muted-foreground">{note}</p> : null}
+          </div>
+        ) : null}
       </div>
     </div>
   )

@@ -568,8 +568,10 @@ async function logTierChange(who: string, tier: Tier): Promise<void> {
 
 // ── Ko-fi payments (the live checkout provider) ──────────────────────────
 
-/** The Ko-fi page supporters pay on (memberships + one-off coffees). */
-export const KOFI_PAGE_URL = 'https://ko-fi.com/neutralwire'
+/** The Ko-fi page supporters pay on — the MEMBERSHIP TIERS page, so the
+ *  “Continue to Ko-fi” button lands supporters directly on the tier
+ *  picker (Premium / Ultra) instead of the general page. */
+export const KOFI_PAGE_URL = 'https://ko-fi.com/neutralwire/tiers'
 
 /** The Ko-fi webhook verification token. Env var first (Vercel → Project →
  *  Settings → Environment Variables); the fallback is the token from the

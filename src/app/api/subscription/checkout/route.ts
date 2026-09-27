@@ -19,7 +19,8 @@ export const maxDuration = 20
  * Body: { tier: 'premium' | 'ultra', deviceId? }
  *
  * Ko-fi has no server-side checkout API — the supporter pays on
- * ko-fi.com/neutralwire (Memberships named "Premium" and "Ultra"), and the
+ * ko-fi.com/neutralwire/tiers (the membership tier picker; tiers named
+ * "Premium" and "Ultra"), and the
  * webhook (POST /api/kofi/webhook) fulfils the grant the moment the payment
  * lands. This endpoint hands the client everything the pay-panel needs:
  *

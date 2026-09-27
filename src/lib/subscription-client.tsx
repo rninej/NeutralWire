@@ -84,9 +84,11 @@ export function getClientDeviceId(): string {
   }
 }
 
-/** The Ko-fi page supporters pay on (memberships + one-off coffees).
- *  Client-safe mirror of the server constant in subscriptions.ts. */
-export const KOFI_PAGE_URL = 'https://ko-fi.com/neutralwire'
+/** The Ko-fi page supporters pay on — the MEMBERSHIP TIERS page, so the
+ *  checkout button lands directly on the tier picker (Premium / Ultra)
+ *  instead of the general Ko-fi page. Client-safe mirror of the server
+ *  constant in subscriptions.ts. */
+export const KOFI_PAGE_URL = 'https://ko-fi.com/neutralwire/tiers'
 
 // ── The upgrade-dialog open/close event bus ──
 export const UPGRADE_OPEN_EVENT = 'neutralwire:upgrade-open'
