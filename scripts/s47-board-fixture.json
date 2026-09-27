@@ -1,0 +1,204 @@
+{
+  "ok": true,
+  "ts": 1790550000000,
+  "summary": { "total": 21, "working": 12, "limited": 2, "limitReached": 2, "down": 2, "notConfigured": 2, "info": 3 },
+  "groups": [
+    {
+      "name": "AI providers",
+      "items": [
+        {
+          "id": "gemini", "name": "Google Gemini",
+          "purpose": "AI layer — newsletters, subtopic creation, country filtering, headline ranking (the primary AI provider)",
+          "status": "working",
+          "statusText": "Key valid — models endpoint answered.",
+          "quotaText": "Free tier ≈ 10 RPM / 1500 requests/day per flash model (no usage API — see recorded call stats). · Recorded: 1234/1300 calls succeeded (95%) · last rate-limit 3h ago · last success 2m ago",
+          "latencyMs": 412,
+          "file": "src/lib/ai-providers.ts", "envVar": "GEMINI_API_KEY", "keyPresent": true
+        },
+        {
+          "id": "groq", "name": "Groq",
+          "purpose": "AI fallback #1 — fast open models when Gemini is throttled",
+          "status": "limit-reached",
+          "statusText": "Rate limited right now (HTTP 429).",
+          "quotaText": "≈ 30 RPM / 14,400 requests/day — resets daily. · Recorded: 88/102 calls succeeded (86%)",
+          "latencyMs": 910,
+          "file": "src/lib/ai-providers.ts", "envVar": "GROQ_API_KEY", "keyPresent": true
+        },
+        {
+          "id": "openrouter", "name": "OpenRouter",
+          "purpose": "AI fallback #2 — aggregated models (last rung of the AI chain)",
+          "status": "working",
+          "statusText": "Key valid — usage endpoint answered.",
+          "quotaText": "Usage API says: $1.24 of $5.00 used (25% of limit) · free tier · Recorded: 40/45 calls succeeded (89%)",
+          "latencyMs": 620,
+          "file": "src/lib/ai-providers.ts", "envVar": "OPENROUTER_API_KEY", "keyPresent": true
+        }
+      ]
+    },
+    {
+      "name": "Email",
+      "items": [
+        {
+          "id": "resend", "name": "Resend (email)",
+          "purpose": "Premium digest delivery — the only outbound email path",
+          "status": "working",
+          "statusText": "Key alive (send-only restricted key — cannot read domains, but sending works).",
+          "quotaText": "Free plan: 100 emails/day, 3,000/month. Sender: digest@neutralwire.org (domain verified).",
+          "latencyMs": 355,
+          "file": "src/lib/digest.ts (sender ladder) · src/app/api/digest/unsubscribe/route.ts",
+          "envVar": "RESEND_API_KEY (+ DIGEST_FROM_EMAIL, optional)", "keyPresent": true
+        }
+      ]
+    },
+    {
+      "name": "News & data",
+      "items": [
+        {
+          "id": "google-news-rss", "name": "Google News RSS",
+          "purpose": "PRIMARY source for custom subtopics + subtopic-creation validation",
+          "status": "working",
+          "statusText": "Feed answers with items.",
+          "quotaText": "Unauthenticated feed-reader endpoint — no published quota, occasional transient 5xx (one polite retry built in).",
+          "latencyMs": 780,
+          "file": "src/lib/custom-topics.ts (fetchGoogleNews)"
+        },
+        {
+          "id": "gdelt", "name": "GDELT DOC API",
+          "purpose": "My Country aggregation (all countries) + custom-subtopic supplement + creation validation",
+          "status": "limit-reached",
+          "statusText": "Timed out answering (the classic GDELT shared-IP throttle — its 429s take 10-12s just to arrive). Feed paths retry patiently and fall back to RSS.",
+          "quotaText": "No published quota; throttle is per egress IP and clears on its own.",
+          "latencyMs": 9000,
+          "file": "src/lib/gdelt-aggregator.ts · src/lib/custom-topics.ts · src/app/api/subtopics/create/route.ts"
+        },
+        {
+          "id": "bing-news-rss", "name": "Bing News RSS",
+          "purpose": "Image donor for custom-subtopic cards (thumbnails only, not content)",
+          "status": "working",
+          "statusText": "Feed answers with items.",
+          "quotaText": "Unauthenticated — no published quota.",
+          "latencyMs": 540,
+          "file": "src/lib/custom-topics.ts (fetchBingImages)"
+        },
+        {
+          "id": "rss-pool", "name": "RSS pool (90+ outlets)",
+          "purpose": "The main category feeds — every outlet in news-sources.ts (BBC, Sky, Guardian, Telegraph, Mail, Mirror, Standard, Express, NYT, CNN, Fox…)",
+          "status": "limited",
+          "statusText": "Sample 3/4 healthy — NYT not answering right now.",
+          "latencyMs": 1650,
+          "file": "src/lib/news-sources.ts (the source catalogue)"
+        },
+        {
+          "id": "firebase", "name": "Firebase RTDB",
+          "purpose": "The entire data layer — caches, accounts, subscriptions, feeds, health stats",
+          "status": "working",
+          "statusText": "Database reachable.",
+          "quotaText": "Spark free plan: 1GB stored / 10GB/month download (the ETag cache keeps real usage far below).",
+          "latencyMs": 120,
+          "file": "src/lib/firebase-server.ts (DB_URL constant — no key: public read/write rules)"
+        }
+      ]
+    },
+    {
+      "name": "Geo",
+      "items": [
+        {
+          "id": "ip-api", "name": "ip-api.com (geo)",
+          "purpose": "Server-side visitor country detection (My Country / Relevant tabs)",
+          "status": "working",
+          "statusText": "Answers correctly.",
+          "quotaText": "Free for non-commercial: 45 requests/minute per IP (cache-first usage in the app).",
+          "latencyMs": 98,
+          "file": "src/lib/country-detect.ts (detectCountryServer)"
+        },
+        {
+          "id": "ipwho", "name": "ipwho.is (geo fallback)",
+          "purpose": "Browser-side geo fallback + server backup",
+          "status": "down",
+          "statusText": "Failed: HTTP 0.",
+          "latencyMs": 5000,
+          "file": "src/lib/country-detect.ts"
+        }
+      ]
+    },
+    {
+      "name": "Payments",
+      "items": [
+        {
+          "id": "kofi", "name": "Ko-fi (payments)",
+          "purpose": "ACTIVE payment flow — Premium/Ultra purchases + donations land as webhooks",
+          "status": "info",
+          "statusText": "Inbound webhook: configure it in the Ko-fi dashboard (Developer → Webhooks) → https://neutralwire.org/api/kofi/webhook. No outbound API to health-check.",
+          "quotaText": "Ko-fi takes its own fee per payment; no API quota.",
+          "file": "src/app/api/kofi/webhook/route.ts (inbound — NeutralWire never calls out to Ko-fi)"
+        },
+        {
+          "id": "stripe", "name": "Stripe (legacy checkout)",
+          "purpose": "Legacy subscription checkout verify path — Ko-fi is the ACTIVE payment flow",
+          "status": "not-configured",
+          "statusText": "No STRIPE_SECRET_KEY env var — Ko-fi webhook (free/donation flow) is the active payment path.",
+          "file": "src/app/api/subscription/checkout/route.ts · src/app/api/subscription/cancel/route.ts",
+          "envVar": "STRIPE_SECRET_KEY", "keyPresent": false
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "items": [
+        {
+          "id": "google-oauth", "name": "Google Sign-In",
+          "purpose": "Account login with Google",
+          "status": "working",
+          "statusText": "Credentials present; Google auth endpoints up. NOTE: consent screen was still in Testing mode last checked — publishing it unlocks non-test emails.",
+          "latencyMs": 210,
+          "file": "src/app/api/auth/google/route.ts (+ /callback)",
+          "envVar": "GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET", "keyPresent": true
+        },
+        {
+          "id": "apple-oauth", "name": "Apple Sign-In",
+          "purpose": "Account login with Apple",
+          "status": "not-configured",
+          "statusText": "Env vars missing — the Apple button is hidden until they are set.",
+          "file": "src/app/api/auth/apple/route.ts",
+          "envVar": "APPLE_CLIENT_ID + APPLE_TEAM_ID + APPLE_KEY_ID + APPLE_PRIVATE_KEY (.p8 contents)",
+          "keyPresent": false
+        }
+      ]
+    },
+    {
+      "name": "Push",
+      "items": [
+        {
+          "id": "web-push", "name": "Web Push (VAPID)",
+          "purpose": "Browser push notifications — broadcasts + breaking stories",
+          "status": "info",
+          "statusText": "Using the baked-in VAPID key pair — fine, but rotating to env keys invalidates old subscriptions.",
+          "quotaText": "Push service (FCM/APNs/web-push) is free; no quota. Endpoint health is per-subscription — see the Push tools card.",
+          "file": "src/lib/vapid.ts (baked-in fallback keys) · src/lib/pushify.ts",
+          "envVar": "VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY (rotate via scripts/generate-vapid.js)", "keyPresent": false
+        }
+      ]
+    },
+    {
+      "name": "Scheduling",
+      "items": [
+        {
+          "id": "vercel-cron", "name": "Vercel cron",
+          "purpose": "Server-side refresh-all (RSS + email tail) + digest catch-up sweep",
+          "status": "info",
+          "statusText": "Scheduled by the Vercel platform (header-authenticated). Off-visitor guarantee for feeds and digests.",
+          "quotaText": "Hobby plan: cron invocations share the serverless execution budget.",
+          "file": "vercel.json (crons array) · src/app/api/cron/refresh-all/route.ts · src/app/api/cron/digest/route.ts"
+        },
+        {
+          "id": "external-cron", "name": "cron-job.org (external)",
+          "purpose": "Every-30-min tick that fans out to refresh + digest (independent of Vercel)",
+          "status": "info",
+          "statusText": "Deliberately NOT pinged by this board (a GET would fire real work). If digests stall, check the cron-job.org dashboard for failures.",
+          "quotaText": "Free tier: unlimited-ish jobs at ≥1-min intervals.",
+          "file": "Configured in the cron-job.org dashboard → hits /api/cron/* with the secret (URLs in src/app/api/cron/*/route.ts headers)"
+        }
+      ]
+    }
+  ]
+}
