@@ -653,3 +653,21 @@ Stage Summary:
 - The UK My Country page is built BBC-front-page-first: 16 UK outlets (5 new + BBC nations feeds) as the primary topic set, GDELT merged for breadth, sports demoted — the top story now matches BBC's own lead.
 - Subtopic creation works even with every AI provider dead (deterministic keyword fallback + Google News validation); 'AI busy' 503s are gone.
 - Owner actions pending: paste a GitHub PAT to push this session's commit; rotate PAT + Resend key when convenient; Google OAuth consent still Testing. Known backlog unchanged (Google index SSR, sitemap polish, /story OG images, notification icon intermittent, subtopic scroll prefetch, synonym dedup).
+
+---
+Task ID: session47
+Agent: main (Super Z)
+Task: owner supplied a fresh GitHub PAT — push session46's blocked commits (the 4-task implementation) to production and verify the deployment live.
+
+Work Log:
+- State check: local main sat at 41976db = 9ad7306 (session46 worklog) on top of 6364ecd (the 4-task implementation) plus a UUID auto-commit ghost (103 files: session46 verify PNGs + test scripts, mostly zero-diff re-adds). Per convention dropped the ghost with git reset --mixed 9ad7306 — new artifacts stay local-untracked; verify PNGs/scripts from earlier sessions were already tracked in the pushed lineage, and the only working-tree diffs vs HEAD were mode-only (0 content changes), so HEAD is byte-identical to the tree that passed tsc/build/E2E in session46.
+- Pre-push sanity: npx tsc --noEmit → 0 errors.
+- PUSHED with the owner's fresh PAT: 4f0d516..9ad7306 main -> main; ls-remote verified (9ad7306 on remote). Vercel auto-deploy completed in under a minute.
+- PROD VERIFICATION BATTERY: (1) deploy signal — GET /api/digest/unsubscribe?token=bad → 400 with the friendly branded HTML (new route live, not 404); (2) GET /debug → 200, VLM on the screenshot: clean password-gate render, zero layout defects (the API Status Board card sits behind the owner password, by design); (3) POST /api/debug/apis with a wrong password → 401 (route deployed + gate intact; plaintext admin password is owner-only, hash in src/lib/admin-auth.ts); (4) GET /my-country is a client-side category, not a route — instead read Firebase: newsCache/mycountry__GB holds 39 stories with the BBC-front-page hybrid shape intact (Burnham social care #1, counter-terror RAF investigation #2 — exactly the session46 'AFTER' measurement; cache stamped 2026-09-27T21:01Z by the sandbox E2E, prod's refresh cycle re-warms it with identical deployed code); (5) homepage screenshot + VLM: clean render, featured + 4 story cards, no defects; (6) digestSweeps audit trail intact (manual-grid-layout-test → refresh-all-tail → user-cron-lease; today's first ultra digest sweep fires at its scheduled hour with the new grid template automatically).
+- Committed this worklog entry separately; pushed with the same PAT.
+
+Stage Summary:
+- Everything from session46 is now LIVE on neutralwire.org: the 2-column grid digest email (next automatic sweep sends it to the ultra subscriber), the /debug API Status Board (owner password unlocks it), the UK BBC-front-page My Country sourcing, and the AI-fallback subtopic creation. No regressions observed on the deployed site.
+- The new PAT works; consider it now chat-exposed like its predecessors (rotate when convenient, along with the Resend key).
+- Google OAuth consent screen still in Testing; Ko-fi webhook unchanged at https://neutralwire.org/api/kofi/webhook.
+- Known backlog unchanged: Google index SSR, sitemap polish, /story OG images, notification icon intermittent, subtopic scroll prefetch, synonym dedup.
