@@ -137,17 +137,34 @@ interface GdeltArticle {
 
 const NON_NEWS = /(newsletter|subscribe|sign up|login|horoscope|daily crossword|sudoku|weather forecast|stock quotes|classifieds)/i
 
-/** Per-attempt fetch timing. The SYNC path (a visitor is waiting on the
- * chip they just tapped) uses tight timeouts so the whole first fill
- * stays inside /api/news's sub-10s response budget; the BACKGROUND path
- * (subscribe-time warm fill, cron) can afford the patient 12s ones. */
+/** Per-attempt fetch timing. BOTH paths use PATIENT attempts now:
+ * GDELT's rate-limiter answers 429 slowly — observed 10-12s just to
+ * DELIVER the rejection — so a 7s "sync" timeout aborted before the 429
+ * ever arrived, reading as a network failure with NO retry (the old
+ * eternal-Gathering driver). With 12s attempts the 429 lands, the retry
+ * ladder engages, and the /api/news deadline race simply reports
+ * honest `pending` while the fill finishes post-response via after()
+ * (Fluid Compute) — the client's auto-retry then serves the warm cache.
+ * Sync asks for fewer records (75 — GDELT's floor, fastest answer). */
 interface GdeltTiming {
   perAttemptMs: number
   backoffMs: number
   maxRecords: number
+  /** The third, double-backoff retry is background-only. */
+  patientThirdRetry: boolean
 }
-const GDELT_TIMING_SYNC: GdeltTiming = { perAttemptMs: 7000, backoffMs: 2500, maxRecords: 100 }
-const GDELT_TIMING_BACKGROUND: GdeltTiming = { perAttemptMs: 12000, backoffMs: 5500, maxRecords: 200 }
+const GDELT_TIMING_SYNC: GdeltTiming = {
+  perAttemptMs: 12000,
+  backoffMs: 5000,
+  maxRecords: 75,
+  patientThirdRetry: false,
+}
+const GDELT_TIMING_BACKGROUND: GdeltTiming = {
+  perAttemptMs: 12000,
+  backoffMs: 5500,
+  maxRecords: 200,
+  patientThirdRetry: true,
+}
 
 /** Discriminated GDELT result — the caller MUST be able to tell "GDELT
  *  refused/failed us" (rate-limit, network, non-JSON body) apart from
@@ -201,7 +218,7 @@ function fetchGdelt(keywords: string[], timing: GdeltTiming): Promise<GdeltResul
     // BACKGROUND fills get one MORE patient retry (double backoff) —
     // serverless egress IPs share GDELT's rate limit, and a
     // nobody-is-waiting fill has the time budget to out-wait it.
-    if (timing === GDELT_TIMING_BACKGROUND && second.reason === 'rate') {
+    if (timing.patientThirdRetry && second.reason === 'rate') {
       await new Promise((r) => setTimeout(r, timing.backoffMs * 2))
       const third = await attempt(timing.perAttemptMs)
       if (third.ok) return third
@@ -362,11 +379,12 @@ function toTopicArticle(cluster: ClusteredTopic): TopicArticle {
  *
  * `opts.mode`:
  *   - 'sync'      — a visitor is waiting on this fill RIGHT NOW (they
- *                   tapped a brand-new chip). GDELT attempts use tight
- *                   timeouts (7s + 2.5s backoff) so the fill usually
- *                   lands inside /api/news's sub-10s response budget;
- *                   the route ALSO hard-races the fill against a wall
- *                   clock, so this mode is a best-effort fast path.
+ *                   tapped a brand-new chip). The /api/news deadline
+ *                   race answers at ~9.4s with honest `pending` while
+ *                   the fill KEEPS RUNNING post-response via after();
+ *                   patient 12s attempts mean a slow GDELT 429 is
+ *                   actually SEEN (and retried) instead of aborting
+ *                   blind at 7s.
  *   - 'background' (default) — nobody is waiting (subscribe-time warm
  *                   fill, cron rotation): patient 12s attempts + retries.
  *

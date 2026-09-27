@@ -337,9 +337,10 @@ function offsetFor(sp: URLSearchParams): number {
  * a structural guarantee rather than a hope:
  *   1. Subscribe-time warm fill — the feed is usually cached BEFORE the
  *      chip is ever tapped (this path then answers in <300ms).
- *   2. Tight sync timings — a cold fill runs GDELT with 7s attempts and a
- *      2.5s backoff (see custom-topics.ts), so the common paths (healthy
- *      GDELT 1-3s; instant 429 + 2.5s backoff + retry) finish in-budget.
+ *   2. Patient sync timings — a cold fill runs GDELT with 12s attempts
+ *      (GDELT's rate-limiter takes 10s+ just to ANSWER, so shorter
+ *      timeouts abort blind), so a successful query usually completes
+ *      in 1-3s and a throttled one engages the retry ladder.
  *   3. Hard deadline race — whatever the fill is doing, the RESPONSE
  *      leaves at ~9.4s; the fill itself keeps running post-response via
  *      after() (Fluid Compute holds the invocation, bounded by
