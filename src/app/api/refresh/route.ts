@@ -16,6 +16,11 @@ import {
 } from '@/lib/country-detect'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { trimTopicForArchive, snapshotArchived, markSnapshotArchived } from '@/lib/topic-archive'
+import {
+  readCustomFeed,
+  fillCustomTopic,
+  customTopicCooldownRemaining,
+} from '@/lib/custom-topics'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -37,6 +42,58 @@ export async function GET(req: NextRequest) {
   const minCoverage = Math.max(1, Math.min(8, Number(sp.get('minCoverage') || '1')))
   const force = sp.get('force') === '1'
   const countryOverride = sp.get('country') || ''
+
+  // ── CUSTOM SUBTOPIC FEEDS (custom:<topicId>) ──
+  // THE WIPE BUG (user-reported "loads for a second, then glitches to
+  // 'No topics found'"): this route used to treat custom:<id> like an
+  // ordinary category — aggregateCategory ran with a bogus category
+  // name, returned an EMPTY topic list, wrote a garbage
+  // newsCache/custom:<id> room (two are still live in Firebase from
+  // before this fix), and the client's stale-feed heal (which calls
+  // /api/refresh 3s after showing a >10-min-old feed) SWAPPED that
+  // empty list into the visible feed. Serving the real custom feed
+  // here + refilling in the background makes the heal do its actual
+  // job for subtopics: fresh content, no wipe.
+  if (typeof category === 'string' && category.startsWith('custom:')) {
+    const topicId = category.slice('custom:'.length).replace(/[^a-z0-9-]/gi, '').slice(0, 60)
+    if (!topicId) {
+      return NextResponse.json({ error: 'Bad custom topic' }, { status: 400 })
+    }
+    const feed = await readCustomFeed(topicId).catch(() => null)
+    const ageMs = feed?.updatedAt ? Date.now() - feed.updatedAt : Infinity
+    const stale = ageMs > 10 * 60 * 1000
+    // Refill in the background when stale AND not cooling down from a
+    // recent failed fill (the cooldown is the anti-thundering-herd guard
+    // from custom-topics.ts — /api/refresh must not become a way around
+    // it). Budget 18s: images + full source ladder, same as the news
+    // route's after() polish pass.
+    if (stale && customTopicCooldownRemaining(topicId) === 0) {
+      after(async () => {
+        try {
+          await fillCustomTopic(topicId, {
+            aiFilter: true,
+            mode: 'background',
+            budgetMs: 18000,
+          })
+        } catch {}
+      })
+    }
+    const topics = (feed?.topics || [])
+      .filter((t) => t.coverage >= minCoverage)
+      .slice(0, limit)
+      .map((t) => ({ ...t, articles: [] })) // slim, like every other path
+    return NextResponse.json({
+      category,
+      country: '',
+      countryName: '',
+      topics,
+      cached: true,
+      fresh: !stale,
+      sourceCount: feed?.sourceCount ?? 0,
+      articleCount: feed?.articleCount ?? topics.length,
+      fetchedAt: feed?.updatedAt ? new Date(feed.updatedAt).toISOString() : null,
+    })
+  }
 
   // Resolve country for virtual categories.
   let country = countryOverride

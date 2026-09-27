@@ -728,15 +728,23 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
             Uses ml-auto so the whole group sits on the RIGHT side of the
             bar. When the sticky Ask AI button appears (on scroll), it
             slides in to the LEFT of the like/share group — the group
-            shifts left just enough to make room, not all the way left. */}
-        <div className="ml-auto flex items-center gap-2">
+            shifts left just enough to make room, not all the way left.
+            MOBILE OVERFLOW FIX (user-reported: the Export button glitched
+            when scrolling because the incoming Ask AI pushed the group
+            past the viewport): min-w-0 + flex-shrink on the group, the
+            sticky Ask AI is ICON-ONLY below sm (max-w-9 ≈ 36px instead of
+            128px), and the Share label folds away while askAiSticky is
+            true on phones — the bar now fits Close + AskAI + like/share +
+            Export on a 360px screen without squeezing anything. */}
+        <div className="ml-auto flex min-w-0 items-center gap-2">
           {/* ── Sticky Ask AI button ──
               Sits to the LEFT of like/share (inside the right group).
               Appears ONLY when the user scrolls past the original Ask AI
-              button. Fades + slides in from the right. */}
+              button. Fades + slides in from the right. Icon-only on phones
+              (the wordmark joins from sm up) so it costs 36px, not 128px. */}
           <div
             className={`overflow-hidden transition-all duration-300 flex-shrink-0 ${
-              askAiSticky ? 'max-w-32 opacity-100' : 'max-w-0 opacity-0'
+              askAiSticky ? 'max-w-9 sm:max-w-32 opacity-100' : 'max-w-0 opacity-0'
             }`}
           >
             <button
@@ -745,9 +753,9 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
               className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity whitespace-nowrap"
               aria-label="Ask AI about this story"
             >
-              <span className="flex items-center gap-1.5 rounded-full bg-background px-3 py-1.5 text-xs font-semibold">
+              <span className="flex items-center gap-1.5 rounded-full bg-background px-2 sm:px-3 py-1.5 text-xs font-semibold">
                 <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
-                <span>Ask AI</span>
+                <span className="hidden sm:inline">Ask AI</span>
               </span>
             </button>
           </div>
@@ -791,10 +799,10 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
             // Different gradient from the Ask AI button (which is
             // purple→blue→cyan). Share uses amber→orange→rose so the two
             // CTAs are visually distinct.
-            className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 hover:opacity-90 transition-opacity shadow-sm"
+            className="flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 hover:opacity-90 transition-opacity shadow-sm flex-shrink-0"
             aria-label="Share this story"
           >
-            <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
+            <span className="flex items-center gap-1.5 rounded-full bg-background px-2.5 sm:px-4 py-1.5 text-xs font-semibold">
               <AnimatePresence mode="wait" initial={false}>
                 {shared ? (
                   <motion.span
@@ -818,8 +826,11 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
                     className="flex items-center gap-1.5"
                   >
                     <Share2 className="h-3.5 w-3.5 text-orange-500" />
-                    {/* Show "Share" on ALL viewports (mobile + desktop) */}
-                    <span>Share</span>
+                    {/* "Share" wordmark on all viewports EXCEPT phones
+                        while the sticky Ask AI is showing (the mobile
+                        overflow fix — the label folds to reclaim ~50px
+                        exactly when the bar is at its fullest). */}
+                    <span className={askAiSticky ? 'hidden sm:inline' : ''}>Share</span>
                   </motion.span>
                 )}
               </AnimatePresence>
@@ -1735,16 +1746,16 @@ function ExportButton({ topicId }: { topicId: string }) {
   }
 
   return (
-    <div className="relative">
+    <div className="relative flex-shrink-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label="Export this story"
-        className="flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-3.5 py-1.5 text-xs font-semibold text-amber-600 transition-opacity hover:opacity-90 dark:text-amber-400"
+        className="flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold text-amber-600 transition-opacity hover:opacity-90 dark:text-amber-400"
       >
         <PremiumDiamond className="h-3.5 w-3.5" />
-        <span>Export</span>
+        <span className="hidden sm:inline">Export</span>
       </button>
       {open ? (
         <>

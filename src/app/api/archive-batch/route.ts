@@ -49,7 +49,20 @@ const MAX_BATCH = 120 // sanity cap — one feed page is ≤ 60 topics
 function sanitizeRoom(raw: unknown): string | null {
   if (typeof raw !== 'string') return null
   const r = raw.replace(/^newsCache\//, '').replace(/\.json$/, '')
+  // Custom-subtopic feeds live under customFeeds/<feedId> — the client
+  // sends 'custom:<feedId>' as the room when it just loaded a premium
+  // subtopic feed. Without this, custom topics never archived and the
+  // Sources popup on their cards 404'd forever.
+  if (/^custom:[a-z0-9-]{1,60}$/i.test(r)) return r
   return /^[A-Za-z0-9_]{1,40}$/.test(r) ? r : null
+}
+
+/** Read a room's payload — newsCache/<room> or customFeeds/<feedId> for
+ * custom: rooms (same path rule as topic-lookup's searchKey). */
+function roomPath(room: string): string {
+  return room.startsWith('custom:')
+    ? `customFeeds/${room.slice('custom:'.length).replace(/[^a-z0-9-]/gi, '')}`
+    : `newsCache/${room}`
 }
 
 export async function POST(req: NextRequest) {
@@ -93,7 +106,7 @@ export async function POST(req: NextRequest) {
       const payload = await firebaseRead<{
         topics?: TopicArticle[]
         updatedAt?: number
-      }>(`newsCache/${room}`)
+      }>(roomPath(room))
       if (!payload?.topics || !Array.isArray(payload.topics)) continue
       // Keep the index warm for this room (self-heal, one small PATCH).
       void writeTopicIndex(room, payload.topics)

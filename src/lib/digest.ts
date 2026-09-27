@@ -113,9 +113,17 @@ export function isCatchupDue(sub: DigestSubscriber, now = new Date()): boolean {
  *  email using resend"). Reads the subscriber list itself, picks who is
  *  due (slot-matching OR catch-up when `catchup`), and processes up to
  *  `cap` newsletters: gather → AI write → Resend send (or outbox with the
- *  failure reason). Returns the counts for logging. */
+ *  failure reason). Returns the counts for logging.
+ *
+ *  OBSERVABILITY (added after the "no email ever arrived" investigation):
+ *  every sweep writes one tiny `digestSweeps/<ts>` log node — trigger,
+ *  due/sent/outboxed counts and a per-subscriber status line — so the
+ *  pipeline's behaviour is inspectable in Firebase instead of silently
+ *  unknown. That investigation found lastSentAt=never + an EMPTY outbox
+ *  for the only subscriber: something failed BEFORE delivery, with no
+ *  trace anywhere. This log ends that blind spot. */
 export async function digestSweep(
-  opts: { catchup?: boolean; cap?: number } = {},
+  opts: { catchup?: boolean; cap?: number; trigger?: string } = {},
 ): Promise<{ due: number; sent: number; outboxed: number }> {
   const cap = Math.max(1, opts.cap ?? 5)
   const subscribers =
@@ -128,20 +136,41 @@ export async function digestSweep(
   const batch = due.slice(0, cap)
   let sent = 0
   let outboxed = 0
+  const perSub: string[] = []
   for (const [accountId, sub] of batch) {
     try {
       const stories = await gatherStories(accountId)
-      if (stories.length === 0) continue
+      if (stories.length === 0) {
+        perSub.push(`${accountId}:no-stories`)
+        continue
+      }
       const newsletter = await generateNewsletter(sub.email, stories)
-      if (!newsletter) continue
+      if (!newsletter) {
+        // generateNewsletter now ALWAYS returns something (the fallback
+        // builder below) — kept as a belt-and-braces guard.
+        perSub.push(`${accountId}:newsletter-null`)
+        continue
+      }
       const result = await deliverDigest(accountId, sub.email, newsletter)
       await markSent(accountId)
+      perSub.push(`${accountId}:${result.sent ? 'sent' : 'outboxed'}`)
       if (result.sent) sent++
       else outboxed++
     } catch (err) {
       console.warn(`[digestSweep] failed for ${accountId}:`, err)
+      perSub.push(`${accountId}:error`)
     }
   }
+  // One tiny log node per sweep (never scanned by anything — pure audit).
+  await firebaseWrite(`digestSweeps/${Date.now()}`, {
+    trigger: opts.trigger || 'unknown',
+    catchup: !!opts.catchup,
+    due: due.length,
+    processed: batch.length,
+    sent,
+    outboxed,
+    perSub: perSub.slice(0, 10),
+  }).catch(() => {})
   return { due: due.length, sent, outboxed }
 }
 
@@ -179,7 +208,15 @@ export async function gatherStories(accountId: string): Promise<TopicArticle[]> 
   return unique.slice(0, 14)
 }
 
-/** The AI newsletter writer — returns ready-to-send HTML. */
+/** The AI newsletter writer — returns ready-to-send HTML.
+ *
+ * THE AI IS A POLISH LAYER, NEVER A GATE: when callAI is unavailable (no
+ * keys on the box, a provider outage, a malformed reply) the newsletter
+ * is NOT skipped — this was the silent killer in the "no email ever
+ * arrived" case (lastSentAt=never, empty outbox: every sweep died at
+ * the AI step without a trace). A clean, deterministic HTML digest is
+ * built from the gathered stories themselves (see
+ * buildFallbackNewsletter), so the email goes out EVERY time. */
 export async function generateNewsletter(
   email: string,
   stories: TopicArticle[],
@@ -200,19 +237,67 @@ export async function generateNewsletter(
       .join(', ')}\n\nReply with only the JSON.`,
     maxTokens: 1800,
   })
-  if (!raw) return null
-  try {
-    const m = raw.match(/\{[\s\S]*\}/)
-    if (!m) return null
-    const parsed = JSON.parse(m[0]) as { subject?: string; html?: string }
-    if (!parsed.html) return null
-    return {
-      subject: parsed.subject?.slice(0, 120) || 'Your NeutralWire digest',
-      html: parsed.html.slice(0, 60000),
+  if (raw) {
+    try {
+      const m = raw.match(/\{[\s\S]*\}/)
+      if (m) {
+        const parsed = JSON.parse(m[0]) as { subject?: string; html?: string }
+        if (parsed.html) {
+          return {
+            subject: parsed.subject?.slice(0, 120) || 'Your NeutralWire digest',
+            html: parsed.html.slice(0, 60000),
+          }
+        }
+      }
+    } catch {
+      // fall through to the deterministic builder below
     }
-  } catch {
-    return null
   }
+  return buildFallbackNewsletter(email, stories)
+}
+
+/** Deterministic newsletter — no AI, no failure modes. Clean HTML with
+ * INLINE styles (email clients strip <style> blocks and many disregard
+ * class attributes), one section per story: headline, summary, the
+ * L/C/R coverage split, and a read-more link back to the site. */
+function buildFallbackNewsletter(
+  email: string,
+  stories: TopicArticle[],
+): { subject: string; html: string } {
+  const esc = (s: string) =>
+    (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const greeting = email.split('@')[0] || 'there'
+  const sections = stories
+    .map((s) => {
+      const total = Math.max(1, s.leanLeft + s.leanCenter + s.leanRight)
+      const pct = (n: number) => Math.round((n / total) * 100)
+      return `
+    <section style="margin:0 0 28px 0;">
+      <h2 style="margin:0 0 8px 0; font-size:18px; line-height:1.3; color:#111;">${esc(s.title)}</h2>
+      ${s.summary ? `<p style="margin:0 0 10px 0; font-size:14px; line-height:1.55; color:#444;">${esc(s.summary.slice(0, 240))}</p>` : ''}
+      <p style="margin:0 0 10px 0; font-size:12px; color:#666;">${s.coverage} ${
+        s.coverage === 1 ? 'source' : 'sources'
+      } &middot; coverage split: Left ${pct(s.leanLeft)}% &middot; Centre ${pct(s.leanCenter)}% &middot; Right ${pct(s.leanRight)}%</p>
+      <a href="https://neutralwire.org/?topic=${encodeURIComponent(s.topicId)}" style="display:inline-block; padding:8px 14px; border-radius:8px; background:#18181b; color:#fafafa; font-size:13px; text-decoration:none;">Read the full picture</a>
+    </section>`
+    })
+    .join('')
+  const html = `<!doctype html>
+<html><body style="margin:0; padding:24px; background:#f4f4f5; font-family:Georgia, 'Times New Roman', serif;">
+  <div style="max-width:560px; margin:0 auto; background:#ffffff; border-radius:12px; padding:28px;">
+    <h1 style="margin:0 0 4px 0; font-size:22px; color:#111;">Your NeutralWire digest</h1>
+    <p style="margin:0 0 24px 0; font-size:13px; color:#888;">Hello ${esc(greeting)} — how the spectrum covered today, side by side.</p>
+    ${sections}
+    <p style="margin:28px 0 0 0; font-size:12px; color:#999; border-top:1px solid #eee; padding-top:16px;">
+      Sent by <a href="https://neutralwire.org" style="color:#666;">NeutralWire</a> — neutral news, every spectrum.
+    </p>
+  </div>
+</body></html>`
+  const subject =
+    stories.length > 1
+      ? `Your NeutralWire digest — ${stories.length} stories across the spectrum`
+      : `Your NeutralWire digest — ${stories[0]?.title?.slice(0, 60) || "today's stories"}`
+  return { subject: subject.slice(0, 120), html: html.slice(0, 60000) }
 }
 
 /** Send via Resend (when configured) — else file to the outbox.

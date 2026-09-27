@@ -58,9 +58,16 @@ async function roomForTopic(topicId: string): Promise<string | null> {
   try {
     const room = await firebaseRead<string>(`${TOPIC_INDEX}/${topicId}`)
     // A stale index entry can point at a room string we can trust
-    // structurally (letters/digits/underscore only — never a path
-    // traversal; it is only ever interpolated under newsCache/).
-    if (typeof room === 'string' && /^[A-Za-z0-9_]{1,40}$/.test(room)) return room
+    // structurally (letters/digits/underscore — never a path traversal;
+    // it is only ever interpolated under newsCache/). Custom-feed rooms
+    // ('custom:<feedId>') additionally carry a colon + hyphenated feed id.
+    if (
+      typeof room === 'string' &&
+      (/^[A-Za-z0-9_]{1,40}$/.test(room) ||
+        /^custom:[a-z0-9-]{1,60}$/.test(room))
+    ) {
+      return room
+    }
     return null
   } catch {
     return null
@@ -194,15 +201,20 @@ export async function findTopicAnywhere(
   return null
 }
 
-/** Search one newsCache key for the topic. */
+/** Search one room for the topic. Rooms are either newsCache keys
+ * ('top', 'relevant__GB', …) or custom-subtopic feeds ('custom:chess' →
+ * customFeeds/chess) — the custom: rooms are written into the topicIndex
+ * by refreshCustomTopic and by this route, so premium-subtopic stories
+ * resolve exactly like main-feed stories. */
 async function searchKey(
   key: string,
   topicId: string,
 ): Promise<TopicArticle | null> {
   try {
-    const payload = await firebaseRead<{ topics?: TopicArticle[] }>(
-      `newsCache/${key}`,
-    )
+    const path = key.startsWith('custom:')
+      ? `customFeeds/${key.slice('custom:'.length).replace(/[^a-z0-9-]/gi, '')}`
+      : `newsCache/${key}`
+    const payload = await firebaseRead<{ topics?: TopicArticle[] }>(path)
     if (payload?.topics) {
       // Self-heal: index every topic in this room so future lookups
       // (ours and other instances') skip the scan for them.

@@ -63,12 +63,20 @@ function markArchived(topicIds: string[]): void {
 // Track if an archiver run is already in flight (prevent duplicates)
 let archiverRunning = false
 
-/** The room key for a feed the client just loaded (mirrors cachePath()). */
+/** The room key for a feed the client just loaded (mirrors cachePath()).
+ * Custom subtopic feeds (custom:<feedId>) keep their 'custom:' room form —
+ * the batch route reads them from customFeeds/<feedId>, which is what
+ * finally archives premium-subtopic stories (their cards' Sources popup
+ * and shared links depend on the archive). */
 function roomForFeed(
   category: string | undefined,
   countryCode: string | null | undefined,
 ): string | undefined {
   const cat = (category || 'relevant').toLowerCase()
+  if (cat.startsWith('custom:')) {
+    const feedId = cat.slice('custom:'.length).replace(/[^a-z0-9-]/g, '')
+    return feedId ? `custom:${feedId}` : undefined
+  }
   if (cat === 'relevant' || cat === 'mycountry') {
     const c = (countryCode || 'INT').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'INT'
     return `${cat}__${c}`

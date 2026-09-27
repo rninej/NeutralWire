@@ -229,46 +229,60 @@ export function dropNearDuplicateTopics<T extends { title: string }>(topics: T[]
   const keptEnts: Array<Set<string>> = []
   for (const t of topics) {
     const kws = titleKeywordSet(t.title)
-    if (kws.size >= 3) {
-      const candEnts = entityTokens(t.title)
-      let dup = false
-      for (let i = 0; i < kept.length; i++) {
-        let shared = 0
-        for (const w of kws) if (keptSets[i].has(w)) shared++
-        if (shared < 2) continue
-        const union = kws.size + keptSets[i].size - shared
-        const jaccard = union ? shared / union : 0
-
-        // GUARD: entity-only differences on both sides → different
-        // events (Kyiv vs Lviv); keep both.
-        const diffCand: string[] = []
-        const diffKept: string[] = []
-        for (const w of kws) if (!keptSets[i].has(w)) diffCand.push(w)
-        for (const w of keptSets[i]) if (!kws.has(w)) diffKept.push(w)
-        if (
-          diffCand.length > 0 &&
-          diffKept.length > 0 &&
-          diffCand.every((w) => keptEnts[i].has(w) || candEnts.has(w)) &&
-          diffKept.every((w) => keptEnts[i].has(w) || candEnts.has(w))
-        ) {
-          continue
-        }
-
-        if (shared >= 2 && jaccard >= 0.55) { dup = true; break }
-        // A shared token counts as a shared ENTITY when entity-ish in
-        // EITHER title (union semantics — same as isNearDuplicateTitle).
-        let sharedEntities = 0
-        for (const w of kws) {
-          if (keptSets[i].has(w) && (keptEnts[i].has(w) || candEnts.has(w))) sharedEntities++
-        }
-        if (shared >= 3 && jaccard >= 0.3 && sharedEntities >= 2) { dup = true; break }
-        if (shared >= 3 && jaccard >= 0.4 && sharedEntities >= 1) { dup = true; break }
-      }
-      if (dup) continue
-      keptSets.push(kws)
-      keptEnts.push(candEnts)
+    if (kws.size < 3) {
+      // Not enough tokens to fingerprint — keep as-is. The empty-set
+      // placeholders keep kept/keptSets/keptEnts INDEX-ALIGNED: the old
+      // code pushed to `kept` WITHOUT a keptSets entry, so the first
+      // short-title topic misaligned the arrays and every later
+      // near-dup check read keptSets[i] === undefined → TypeError
+      // "reading 'has'" → the WHOLE room write failed → that category
+      // went permanently stale (observed live on newsCache/politics and
+      // relevant__GB). A short-title kept topic can never fingerprint-
+      // match anything (shared=0 → continue), so semantics are
+      // unchanged — only the crash is gone.
+      kept.push(t)
+      keptSets.push(new Set())
+      keptEnts.push(new Set())
+      continue
     }
+    const candEnts = entityTokens(t.title)
+    let dup = false
+    for (let i = 0; i < kept.length; i++) {
+      let shared = 0
+      for (const w of kws) if (keptSets[i].has(w)) shared++
+      if (shared < 2) continue
+      const union = kws.size + keptSets[i].size - shared
+      const jaccard = union ? shared / union : 0
+
+      // GUARD: entity-only differences on both sides → different
+      // events (Kyiv vs Lviv); keep both.
+      const diffCand: string[] = []
+      const diffKept: string[] = []
+      for (const w of kws) if (!keptSets[i].has(w)) diffCand.push(w)
+      for (const w of keptSets[i]) if (!kws.has(w)) diffKept.push(w)
+      if (
+        diffCand.length > 0 &&
+        diffKept.length > 0 &&
+        diffCand.every((w) => keptEnts[i].has(w) || candEnts.has(w)) &&
+        diffKept.every((w) => keptEnts[i].has(w) || candEnts.has(w))
+      ) {
+        continue
+      }
+
+      if (shared >= 2 && jaccard >= 0.55) { dup = true; break }
+      // A shared token counts as a shared ENTITY when entity-ish in
+      // EITHER title (union semantics — same as isNearDuplicateTitle).
+      let sharedEntities = 0
+      for (const w of kws) {
+        if (keptSets[i].has(w) && (keptEnts[i].has(w) || candEnts.has(w))) sharedEntities++
+      }
+      if (shared >= 3 && jaccard >= 0.3 && sharedEntities >= 2) { dup = true; break }
+      if (shared >= 3 && jaccard >= 0.4 && sharedEntities >= 1) { dup = true; break }
+    }
+    if (dup) continue
     kept.push(t)
+    keptSets.push(kws)
+    keptEnts.push(candEnts)
   }
   return kept
 }

@@ -240,7 +240,7 @@ export async function GET(req: NextRequest) {
       const elapsed = Date.now() - t0
       if (elapsed < 50_000) {
         const { digestSweep } = await import('@/lib/digest')
-        const result = await digestSweep({ catchup: true, cap: 8 })
+        const result = await digestSweep({ catchup: true, cap: 8, trigger: 'refresh-all-tail' })
         console.log(
           `[cron/refresh-all] digest tail: ${result.due} due — ${result.sent} sent, ${result.outboxed} outboxed (${Date.now() - t0}ms into the tick)`,
         )

@@ -46,13 +46,19 @@ export async function GET(
   const countryHint = sp.get('country') || ''
 
   try {
-    // Build the hint key (virtual categories carry the country suffix).
+    // Build the hint key (virtual categories carry the country suffix;
+    // custom subtopic feeds pass their 'custom:<feedId>' room straight
+    // through — topic-lookup reads those from customFeeds/, not newsCache).
     let hint: string | undefined
     if (catHint) {
-      const isVirtual = catHint === 'relevant' || catHint === 'mycountry'
-      hint = isVirtual
-        ? `${catHint}__${(countryHint || 'INT').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'INT'}`
-        : catHint
+      if (catHint.startsWith('custom:')) {
+        hint = catHint
+      } else {
+        const isVirtual = catHint === 'relevant' || catHint === 'mycountry'
+        hint = isVirtual
+          ? `${catHint}__${(countryHint || 'INT').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'INT'}`
+          : catHint
+      }
     }
 
     const topic = await findTopicAnywhere(topicId, { hint })

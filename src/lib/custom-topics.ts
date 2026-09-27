@@ -67,6 +67,7 @@ import {
 import { NEWS_SOURCES } from '@/lib/news-sources'
 import { CATALOG_BY_ID } from '@/lib/subtopic-catalog'
 import { isNearDuplicateTitle } from '@/lib/push/story-dedup'
+import { writeTopicIndex } from '@/lib/topic-lookup'
 
 // ── Single-flight + failure cooldown ────────────────────────────────────
 // PRODUCTION POST-MORTEM (the "stuck on Gathering stories" bug): every
@@ -415,6 +416,10 @@ const BING_TTL_MS = 5 * 60 * 1000
  * Simple queries only — Bing ignores complex OR syntax (returns zero
  * items) — so we fire the topic label + first keywords as separate
  * parallel queries and pool the items. */
+/** Fetch + parse Bing News RSS image donors. TWO markets (en-US +
+ * en-GB) are pooled so a story thin in one index can still pick up its
+ * photo from the other — items dedup by image URL + normalized title
+ * afterwards, so the doubled queries just deepen the donor pool. */
 async function fetchBingImages(
   label: string,
   keywords: string[] = [],
@@ -422,19 +427,23 @@ async function fetchBingImages(
 ): Promise<Array<{ title: string; imageUrl: string }>> {
   const queries = Array.from(
     new Set(
-      [label.trim(), ...keywords.filter((k) => k.trim().length >= 3).slice(0, 2)]
+      [label.trim(), ...keywords.filter((k) => k.trim().length >= 3).slice(0, 4)]
         .map((q) => q.trim())
         .filter(Boolean),
     ),
-  ).slice(0, 3)
+  ).slice(0, 5)
   if (queries.length === 0) return []
 
-  const fetchOne = async (q: string): Promise<Array<{ title: string; imageUrl: string }>> => {
-    const cached = BING_CACHE.get(q)
+  const fetchOne = async (
+    q: string,
+    market: string,
+  ): Promise<Array<{ title: string; imageUrl: string }>> => {
+    const cacheKey = `${market}:${q}`
+    const cached = BING_CACHE.get(cacheKey)
     if (cached && Date.now() - cached.ts < BING_TTL_MS) return cached.items
     try {
       const res = await fetch(
-        `${BING_NEWS_RSS}?q=${encodeURIComponent(q)}&format=RSS&setmkt=en-US&setlang=en-US`,
+        `${BING_NEWS_RSS}?q=${encodeURIComponent(q)}&format=RSS&setmkt=${market}&setlang=en-US`,
         {
           signal: AbortSignal.timeout(timeoutMs),
           headers: {
@@ -451,7 +460,7 @@ async function fetchBingImages(
       const items: Array<{ title: string; imageUrl: string }> = []
       const itemRe = /<item>([\s\S]*?)<\/item>/g
       let m: RegExpExecArray | null
-      while ((m = itemRe.exec(xml)) !== null && items.length < 15) {
+      while ((m = itemRe.exec(xml)) !== null && items.length < 25) {
         const block = m[1]
         const title = decodeXmlEntities(
           (block.match(/<title>([\s\S]*?)<\/title>/)?.[1] || '').trim(),
@@ -471,14 +480,20 @@ async function fetchBingImages(
         if (!httpsImg) continue
         items.push({ title, imageUrl: httpsImg })
       }
-      BING_CACHE.set(q, { ts: Date.now(), items })
+      BING_CACHE.set(cacheKey, { ts: Date.now(), items })
       return items
     } catch {
       return []
     }
   }
 
-  const pooled = (await Promise.all(queries.map(fetchOne))).flat()
+  const pooled = (
+    await Promise.all(
+      queries.flatMap((q) =>
+        (['en-US', 'en-GB'] as const).map((market) => fetchOne(q, market)),
+      ),
+    )
+  ).flat()
   // Different queries can surface the same story/image — dedup by image
   // URL and by normalized title so the donor pool stays clean.
   const seenImg = new Set<string>()
@@ -566,6 +581,53 @@ function cleanTitle(raw: string): string {
     .replace(/\s+/g, ' ').trim()
 }
 
+/** Stable short hash of a title's words — ids/link-keys for split halves. */
+function wordHash(s: string): string {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
+  return Math.abs(h).toString(36)
+}
+
+/** Split a two-stories-in-one headline into its halves — or null when the
+ * title is a single story (the overwhelmingly common case).
+ *
+ * The user-reported case: "Chess Olympiad: Gukesh's brilliance helps India
+ * pip Germany; women crush Uzbekistan" — one wire roundup that covers TWO
+ * separate matches. Shown whole, the feed presents two news as one card
+ * with an unwieldy headline. We split at the FIRST strong divider
+ * ('; ' or ' | ') when BOTH halves look like standalone headlines:
+ *   • ≥ 15 characters and ≥ 3 words each ("women crush Uzbekistan" — the
+ *     exact second half of the reported title — is a perfectly good
+ *     3-word headline; the earlier ≥ 4-word guard refused to split it),
+ *   • the halves don't share a leading identical prefix ("Update: X;
+ *     Update: Y"-style roundups of the SAME story stay whole), and
+ *   • neither half opens with a filler continuation ("and more",
+ *     "watch live", "photos") — those aren't stories.
+ * Colons alone never split — "Chess Olympiad: Gukesh…" is ONE story with
+ * a kicker, exactly how headlines normally work. */
+const HALF_FILLER = /^(and|or|but|also|plus|watch|live|update|updates|photos|video|report|more)\b/i
+function splitCompoundTitle(title: string): [string, string] | null {
+  const dividers = ['; ', ' | ']
+  for (const d of dividers) {
+    const at = title.indexOf(d)
+    if (at < 0) continue
+    const a = title.slice(0, at).trim().replace(/[,;:|]+$/, '').trim()
+    const b = title.slice(at + d.length).trim().replace(/^[,;:|]+\s*/, '').trim()
+    if (a.length < 15 || b.length < 15) continue
+    if (a.split(/\s+/).length < 3 || b.split(/\s+/).length < 3) continue
+    if (HALF_FILLER.test(a) || HALF_FILLER.test(b)) continue
+    // Same leading 3 words on both halves = same story, two updates.
+    const wa = a.toLowerCase().split(/\s+/)
+    const wb = b.toLowerCase().split(/\s+/)
+    if (wa.slice(0, 3).join(' ') === wb.slice(0, 3).join(' ')) continue
+    // Halves continue mid-sentence in the original ("…Germany; women
+    // crush Uzbekistan") — capitalise so each reads as its own headline.
+    const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s)
+    return [cap(a), cap(b)]
+  }
+  return null
+}
+
 /** AI relevance filter — one batched call, returns indices to KEEP. */
 async function aiFilterArticles(
   label: string,
@@ -640,7 +702,38 @@ function clusterArticles(articles: FeedArticle[]): ClusteredTopic[] {
   return clusters
 }
 
-function toTopicArticle(cluster: ClusteredTopic): TopicArticle {
+/** Pick the cluster's HEADLINE — not just the first article's title.
+ * When several outlets cover one story their titles differ in quality:
+ * some are crisp ("India pip Germany at Chess Olympiad"), some are
+ * compound roundups, some trail off with filler. Score every candidate:
+ *   • single-story titles (no ';'/'|' divider) strongly preferred — a
+ *     compound title on the card was the user-reported glitch,
+ *   • keyword-relevant titles preferred (the topic IS about these),
+ *   • medium length preferred (35-110 chars) — clickbait one-liners and
+ *     marathon wire titles both lose points,
+ * and keep the best. Ties keep the cluster's original first title so
+ * behaviour is deterministic. */
+function pickClusterTitle(articles: FeedArticle[], keywords: string[]): string {
+  let best: string | null = null
+  let bestScore = -Infinity
+  for (const a of articles) {
+    const t = a.title || ''
+    if (!t) continue
+    let s = 0
+    if (!/[;|]/.test(t)) s += 10 // single story, not a roundup
+    s += Math.min(8, titleScore(t, keywords))
+    if (t.length >= 35 && t.length <= 110) s += 3
+    else if (t.length > 140) s -= 4
+    if (/\b(watch|live|updates?)\b[:\s]/i.test(t)) s -= 2
+    if (s > bestScore) {
+      bestScore = s
+      best = t
+    }
+  }
+  return best || articles[0]?.title || ''
+}
+
+function toTopicArticle(cluster: ClusteredTopic, keywords: string[] = []): TopicArticle {
   const arts = cluster.articles
   const leanLeft = arts.filter((a) => a.leaning === 'left').length
   const leanRight = arts.filter((a) => a.leaning === 'right').length
@@ -652,6 +745,12 @@ function toTopicArticle(cluster: ClusteredTopic): TopicArticle {
     .replace(/[^a-z0-9]+/g, '-')
     .slice(0, 60)
     .replace(/^-+|-+$/g, '')}`
+  // The card's HEADLINE is the best title among the cluster's articles
+  // (single-story + keyword-relevant + sensibly sized — see
+  // pickClusterTitle), NOT merely the first article's title: clusters
+  // whose seed was a two-stories-in-one wire roundup used to show that
+  // compound mess as the card title.
+  const headline = pickClusterTitle(arts, keywords)
   // Summary: prefer a real RSS description (pool articles carry one);
   // fall back to the best title (Google/GDELT items have none).
   const withDescription = arts.find((a) => a.description && a.description.length > 40)
@@ -659,7 +758,7 @@ function toTopicArticle(cluster: ClusteredTopic): TopicArticle {
     (withDescription?.description || arts[0]?.title || '').slice(0, 240)
   return {
     topicId,
-    title: cluster.title,
+    title: headline,
     summary,
     imageUrl: withImage?.imageUrl || null,
     coverage: arts.length,
@@ -708,7 +807,7 @@ async function attachImages(
   budgetMs: number,
 ): Promise<void> {
   const deadline = Date.now() + budgetMs
-  const imageless = topics.slice(0, 24).filter((t) => !t.imageUrl)
+  const imageless = topics.slice(0, 30).filter((t) => !t.imageUrl)
   if (imageless.length === 0) return
 
   // Donors 1 + 2 are cheap text matching — run them first so the og
@@ -727,46 +826,68 @@ async function attachImages(
       if (usedDonors.has(b.imageUrl)) continue
       const score = Math.max(titleOverlapScore(t.title, b.title),
         isNearDuplicateTitle(t.title, b.title) ? 1 : 0)
-      if (score >= 0.45 && score > (best?.score || 0)) best = { url: b.imageUrl, score }
+      // 0.35 (was 0.45): Bing items are already on-topic by construction
+      // (they matched the topic's own search), so this gate only rules out
+      // UNRELATED grabs — every point of threshold was trading away real
+      // photos for safety the donor pool doesn't need.
+      if (score >= 0.35 && score > (best?.score || 0)) best = { url: b.imageUrl, score }
     }
     if (best) {
       t.imageUrl = best.url
       usedDonors.add(best.url)
     }
   }
+  // Donor 2 + 2b: POOL story thumbnails — a pool article the cluster
+  // missed by wording still often covers the same story (near-duplicate
+  // tight, overlap 0.55). When the matched pool article has NO thumbnail
+  // but DOES have a real publisher URL, it becomes an og:image CANDIDATE
+  // for donor 3 — Google-News-only clusters would otherwise have zero
+  // real URLs to og-fetch.
+  const ogPoolCandidates = new Map<TopicArticle, string>()
   for (const t of imageless) {
     if (t.imageUrl) continue
     let best: { url: string; score: number } | null = null
+    let bestMatch: FeedArticle | null = null
     for (const p of poolArticles) {
-      if (!p.imageUrl || usedDonors.has(p.imageUrl)) continue
+      if (usedDonors.has(p.imageUrl || '\u0000')) continue
       const score = isNearDuplicateTitle(t.title, p.title)
         ? 1
         : titleOverlapScore(t.title, p.title)
-      if (score >= 0.55 && score > (best?.score || 0)) best = { url: p.imageUrl, score }
+      if (score >= 0.55 && score > (best?.score || 0)) {
+        best = { url: p.imageUrl || '', score }
+        bestMatch = p
+      }
     }
-    if (best) {
+    if (best?.url) {
       t.imageUrl = best.url
       usedDonors.add(best.url)
+    } else if (bestMatch?.link) {
+      ogPoolCandidates.set(t, bestMatch.link)
     }
   }
 
-  // Donor 3: og:image from real publisher URLs (max 2 fetches per topic).
+  // Donor 3: og:image from real publisher URLs (max 3 fetches per topic;
+  // matched pool-article links ride along as extra candidates).
   await Promise.all(
     imageless.map(async (t) => {
       if (t.imageUrl) return
+      const poolLink = ogPoolCandidates.get(t)
+      const links = [
+        ...(poolLink ? [poolLink] : []),
+        ...t.articles.map((a) => a.link).filter(Boolean),
+      ]
       let tries = 0
-      for (const a of t.articles) {
-        if (tries >= 2 || Date.now() > deadline) return
-        if (!a.link) continue
+      for (const link of links) {
+        if (tries >= 3 || Date.now() > deadline) return
         let host = ''
         try {
-          host = new URL(a.link).hostname
+          host = new URL(link).hostname
         } catch {
           continue
         }
         if (host.endsWith('news.google.com')) continue
         tries += 1
-        const og = await fetchOgImage(a.link)
+        const og = await fetchOgImage(link)
         if (og) {
           t.imageUrl = og
           return
@@ -816,7 +937,7 @@ export async function refreshCustomTopic(
     const [poolRes, gdeltRes] = await Promise.all([
       poolArticlesForKeywords(def.keywords, poolCats, {
         timeoutMs: Math.min(mode === 'sync' ? 9000 : 10000, remaining()),
-        maxArticles: 40,
+        maxArticles: 60,
       }),
       // GDELT is a pure supplement now — Google News carries the topic.
       // When Google already delivered, cut the GDELT attempt early: its
@@ -871,10 +992,11 @@ export async function refreshCustomTopic(
   // ── Pass 1: heuristics over both article shapes ──
   const seenLinks = new Set<string>()
   const domainCounts: Record<string, number> = {}
-  const scored: Array<{ article: FeedArticle; score: number }> = []
+  const scored: Array<{ article: FeedArticle; score: number; inherited?: boolean }> = []
 
-  const pushScored = (article: FeedArticle, domain: string, score: number) => {
-    const linkKey = article.link.split('?')[0].toLowerCase().replace(/\/$/, '')
+  const pushScored = (article: FeedArticle, domain: string, score: number, linkKeyOverride?: string) => {
+    const linkKey =
+      linkKeyOverride || article.link.split('?')[0].toLowerCase().replace(/\/$/, '')
     if (!linkKey || seenLinks.has(linkKey)) return
     seenLinks.add(linkKey)
     domainCounts[domain] = (domainCounts[domain] || 0) + 1
@@ -894,6 +1016,59 @@ export async function refreshCustomTopic(
       }
     })()
     if (!domain) continue
+    // ── COMPOUND-TITLE SPLIT ("2 news shown in one article") ──
+    // Wire-service roundups pack two distinct stories into one headline:
+    //   "Chess Olympiad: Gukesh's brilliance helps India pip Germany;
+    //    women crush Uzbekistan"
+    // Splitting at the semicolon (or a ' | ' divider) turns each half
+    // into its own card — each keeps the article link (it genuinely
+    // covers both stories) but the FEED stops presenting two news as
+    // one. Both halves must look like real headlines (≥ 15 chars,
+    // ≥ 3 words); ordinary titles that merely contain a semicolon stay
+    // whole. A half that loses every topical keyword in the split
+    // ("women crush Uzbekistan") inherits the parent's score minus a
+    // small penalty — the parent matched the topic, so its halves are
+    // on-topic by construction; without the inheritance the second
+    // story silently vanished from the feed.
+    const halves = splitCompoundTitle(title)
+    if (halves) {
+      const parentScore = titleScore(title, def.keywords)
+      for (const half of halves) {
+        const ownScore = titleScore(half, def.keywords)
+        const inherited = ownScore <= 0 && parentScore > 0
+        // A split half inherits the FULL parent score: the parent article
+        // matched the topic with these very words — "women crush
+        // Uzbekistan" is exactly as much chess news as the headline it
+        // rode in on, and a penalised inheritance dropped it below the
+        // 32-cluster cutoff (the second story of the split vanished).
+        const score = ownScore > 0 ? ownScore : parentScore
+        if (score <= 0) continue
+        pushScored(
+          {
+            id: `${topicId}:${a.url.slice(0, 80)}#${wordHash(half)}`,
+            title: half,
+            link: a.url,
+            description: half,
+            pubDate: null,
+            iso: a.iso || Date.now(),
+            imageUrl: a.socialimage || null,
+            sourceId: domain,
+            sourceName: domain,
+            sourceHomepage: `https://${domain}`,
+            leaning: leaningFor(domain),
+            country: a.sourcecountry || '',
+            category: `custom:${topicId}`,
+          },
+          domain,
+          score,
+          // distinct link key so the second half isn't dropped as a
+          // same-URL duplicate of the first
+          `${a.url.split('?')[0].toLowerCase()}#${wordHash(half)}`,
+        )
+        if (inherited) scored[scored.length - 1].inherited = true
+      }
+      continue
+    }
     const score = titleScore(title, def.keywords)
     if (score <= 0) continue
     pushScored(
@@ -926,6 +1101,35 @@ export async function refreshCustomTopic(
     } catch {
       domain = p.sourceId
     }
+    // Same compound-title split as the raw loop: pool roundups ("Chess
+    // Olympiad: Indian women hold China; men romp to a win") pack two
+    // stories into one headline exactly like Google/GDELT items do, and
+    // pool items are the ones that carry the thumbnail BOTH halves then
+    // inherit.
+    const halves = splitCompoundTitle(p.title)
+    if (halves) {
+      const parentScore = titleScore(p.title, def.keywords)
+      for (const half of halves) {
+        const ownScore = titleScore(half, def.keywords)
+        const inherited = ownScore <= 0 && parentScore > 0
+        // Full parent score on inheritance — see the raw-loop twin above.
+        const halfScore = ownScore > 0 ? ownScore : parentScore
+        if (halfScore <= 0) continue
+        pushScored(
+          {
+            ...p,
+            id: `${p.id}#${wordHash(half)}`,
+            title: half,
+            category: `custom:${topicId}`,
+          },
+          domain,
+          halfScore,
+          `${p.link.split('?')[0].toLowerCase()}#${wordHash(half)}`,
+        )
+        if (inherited) scored[scored.length - 1].inherited = true
+      }
+      continue
+    }
     const score = titleScore(p.title, def.keywords)
     if (score <= 0 || NON_NEWS.test(p.title)) continue
     pushScored({ ...p, category: `custom:${topicId}` }, domain, score)
@@ -934,7 +1138,7 @@ export async function refreshCustomTopic(
   if (scored.length === 0) return null
 
   scored.sort((a, b) => b.score - a.score || b.article.iso - a.article.iso)
-  const top = scored.slice(0, 60)
+  const top = scored.slice(0, 90)
 
   // ── Pass 2: AI relevance filter (background modes only, first half of
   //    the budget — images and the cache write outrank it near the cap) ──
@@ -948,7 +1152,17 @@ export async function refreshCustomTopic(
         top.map((t) => ({ title: t.article.title, domain: t.article.sourceName, score: t.score })),
       )
       if (keepIdx && keepIdx.length >= 3) {
-        kept = keepIdx.map((i) => top[i]).filter(Boolean)
+        // PROTECTED: split halves that inherited their score carry none of
+        // the topic's keywords ("women crush Uzbekistan" never says
+        // "chess") — the AI rightly can't see the topical link and drops
+        // them, which deleted the second story of every compound split.
+        // They are on-topic by PARENTAGE, so they rejoin whatever the AI
+        // kept.
+        const keepSet = new Set(keepIdx)
+        for (let i = 0; i < top.length; i++) {
+          if (top[i].inherited) keepSet.add(i)
+        }
+        kept = top.filter((_, i) => keepSet.has(i))
       }
     }
   }
@@ -957,12 +1171,12 @@ export async function refreshCustomTopic(
   // ── Pass 3: cluster + build topic cards ──
   const clusters = clusterArticles(kept.map((k) => k.article))
   clusters.sort((a, b) => b.articles.length - a.articles.length)
-  const topics = clusters.slice(0, 24).map(toTopicArticle)
+  const topics = clusters.slice(0, 32).map((c) => toTopicArticle(c, def.keywords))
 
   // ── Pass 4: images (background modes — the sync path serves instantly
   //    and the after() polish pass adds photos to the cached feed) ──
   if (mode === 'background' && !overBudget()) {
-    await attachImages(topics, def.label, def.keywords, pool, Math.min(9000, remaining()))
+    await attachImages(topics, def.label, def.keywords, pool, Math.min(12000, remaining()))
   }
 
   const payload: CustomFeedPayload = {
@@ -972,6 +1186,12 @@ export async function refreshCustomTopic(
     topics,
   }
   await firebaseWrite(`customFeeds/${topicId}`, payload)
+  // Index every topic → its custom-feed room so /api/topic lookups (the
+  // card's Sources popup, shared links, OG images) find custom-subtopic
+  // stories in O(1) instead of 404-ing — customFeeds rooms were never in
+  // the topicIndex before, which is why the Sources button did nothing
+  // on premium subtopics.
+  void writeTopicIndex(`custom:${topicId}`, topics)
   return payload
 }
 

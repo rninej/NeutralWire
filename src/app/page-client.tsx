@@ -2008,9 +2008,22 @@ export default function Home({
       lastFetchCatRef.current = cat
       if (!silent) setLoading(true)
       setError(null)
-      setTopicPending(false)
-      setTopicFailed(false)
-      setTopicRetryInMs(undefined)
+      // ── Custom-subtopic state handling (the "No topics found" FLASH) ──
+      // The auto-retry loop re-fetches quietly (loading stays FALSE) while
+      // a fill is still running. The OLD code reset topicPending/
+      // topicFailed to false HERE — at fetch START — so for the whole
+      // duration of every quiet poll the client rendered loading=false +
+      // topics=[] + pending=false → the "No topics found. Try a different
+      // category…" card flashed over the Gathering card. Now the pending/
+      // failed state of a CUSTOM category survives until the response
+      // arrives (it sets the truth below); non-custom categories keep the
+      // immediate reset so a stale gathering state can never leak into a
+      // main feed.
+      if (!isCustom) {
+        setTopicPending(false)
+        setTopicFailed(false)
+        setTopicRetryInMs(undefined)
+      }
       try {
         const params = new URLSearchParams({
           category: cat,
@@ -2075,9 +2088,12 @@ export default function Home({
         setIsCached(!!json.cached)
         setIsFresh(json.fresh !== false)
         setArticleCount(json.articleCount ?? 0)
-        setTopicPending(Boolean(json.pending))
-        setTopicFailed(Boolean(json.failed))
-        setTopicRetryInMs(json.retryInMs)
+        // Truth arrives WITH the response: pending/failed/retryInMs only
+        // ever mean something for custom categories (the main categories'
+        // responses never set them).
+        setTopicPending(isCustom ? Boolean(json.pending) : false)
+        setTopicFailed(isCustom ? Boolean(json.failed) : false)
+        setTopicRetryInMs(isCustom ? json.retryInMs : undefined)
         // NOTE: json.ms / json.refreshing are intentionally ignored here —
         // the cache-freshness badge was removed from the header (users
         // found it noisy); the server refreshes stale caches in the
@@ -2163,10 +2179,14 @@ export default function Home({
         if (!silent) {
           setError(e instanceof Error ? e.message : 'Failed to load news')
           setTopics([])
+          setTopicPending(false)
+          setTopicFailed(false)
         }
         // Silent-refetch failure: the visible feed is already good content
-        // — keep it on screen (no error card, no blanking). The stale-feed
-        // heal effect refreshes it in the background.
+        // — keep it on screen (no error card, no blanking). A custom topic's
+        // pending state also SURVIVES (a network blip during a quiet poll
+        // must not kill the auto-retry loop) — the stale-feed heal effect
+        // refreshes it in the background.
       } finally {
         if (reqId === reqIdRef.current) setLoading(false)
       }
@@ -2761,7 +2781,7 @@ export default function Home({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
               >
-              {topicPending || (topicFailed && isCustomCategory(category)) ? (
+              {isCustomCategory(category) && (topicPending || topicFailed) ? (
                 /* Custom subtopic whose first GDELT fill is still running
                    (topicPending — auto-retry armed) or completed with
                    nothing (topicFailed — GDELT is throttling us; the

@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
   const cap = catchup ? 8 : 5
 
   after(async () => {
-    const result = await digestSweep({ catchup, cap })
+    const result = await digestSweep({ catchup, cap, trigger: catchup ? 'vercel-cron-catchup' : viaLease ? 'user-cron-lease' : 'secret' })
     console.log(
       `[cron/digest]${catchup ? ' (catch-up)' : ''} ${result.due} due — ${result.sent} sent, ${result.outboxed} outboxed in ${Date.now() - t0}ms`,
     )
