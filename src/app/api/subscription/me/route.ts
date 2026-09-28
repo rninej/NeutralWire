@@ -35,6 +35,11 @@ export async function GET(req: NextRequest) {
       tier: requester.tier,
       account: requester.email ? { email: requester.email } : null,
       loggedIn: requester.accountId !== null,
+      /** The visitor's own account id — the client mirrors it locally so
+       * Interest Engine v2 pings can teach the account-level profile
+       * (email digest + onboarding taste live there). Never exposed to
+       * anyone but the session owner. */
+      accountId: requester.accountId || null,
       renewsAt: requester.renewsAt,
       /** True when the supporter cancelled — the tier runs to renewsAt. */
       cancelAtEnd: requester.cancelAtEnd,

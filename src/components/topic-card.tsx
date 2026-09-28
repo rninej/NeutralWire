@@ -756,6 +756,24 @@ function TopicCard({ topic, variant = 'default', onOpenDetail, onDismiss, index 
           <Badge variant="secondary" className="text-[10px]">
             {topic.coverage} {topic.coverage === 1 ? 'source' : 'sources'}
           </Badge>
+          {/* Interest Engine v2: "For you" badge — shown when the server's
+              learned-profile match for this story is strong (interestScore
+              ≥ 20). The title attribute surfaces the matched terms, the
+              explainable "why you're seeing this". Absent when the
+              smartPersonalization flag is off (the /debug revert). */}
+          {(topic.interestScore || 0) >= 20 && (
+            <Badge
+              className="text-[9px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30"
+              variant="outline"
+              title={
+                topic.matchedTerms?.length
+                  ? `Matched your interests: ${topic.matchedTerms.join(', ')}`
+                  : 'Matched your interests'
+              }
+            >
+              For you
+            </Badge>
+          )}
           {/* Blindspot badge — only shown for blindspot topics.
               Shows which side is covering the story (the side with ≥80%).
               Blue badge = left-leaning blindspot (right isn't covering).

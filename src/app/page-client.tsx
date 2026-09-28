@@ -80,6 +80,7 @@ import {
   markTopicSeen,
   getCountryNewsCount,
   bumpCountryNewsCount,
+  getAccountId,
   type EngagementStats,
 } from '@/lib/user-interests'
 import { ScrollToTop } from '@/components/scroll-to-top'
@@ -311,6 +312,7 @@ export default function Home({
   meshRelay = true,
   userCron = true,
   notifRaiseFix = true,
+  smartPersonalization = true,
   monetizationModel = 'subscription',
 }: {
   initialSubtopicNav?: NavVariant
@@ -333,6 +335,13 @@ export default function Home({
    *  ON; flipped from /debug. Mirrored into the SW below so the click
    *  handler can honour it with zero network. */
   notifRaiseFix?: boolean
+  /** Interest Engine v2 master switch (SSR-provided): ON = /api/news
+   *  requests carry the device id so the server re-ranks the Relevant
+   *  feed from the learned interest profile (digest + notifications
+   *  consume the same profile server-side regardless). OFF = the
+   *  original client-only personalisation. Default ON; the /debug
+   *  revert. */
+  smartPersonalization?: boolean
   /** THE MONETIZATION SWITCH (SSR-provided): 'subscription' = the tier
    *  model (premium gates live, donation popups stand down); 'donation'
    *  = the original Ko-fi donation site (all gates open). Flipped from
@@ -939,7 +948,10 @@ export default function Home({
     setSeenTopics(getSeenTopics())
     const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
     if (deviceId) {
-      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'click')
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'click', {
+        topicId: topic.topicId,
+        category: categoryRef.current || undefined,
+      })
       // Update local state shortly so the boost is visible next render
       setTimeout(() => {
         setEngagement(getEngagement())
@@ -1009,6 +1021,7 @@ export default function Home({
         topic.title,
         topic.summary || '',
         'dislike',
+        { topicId: topic.topicId, category: categoryRef.current || undefined },
       ).catch(() => {})
       fetch('/api/engagement', {
         method: 'POST',
@@ -1073,6 +1086,42 @@ export default function Home({
       const urlParams = new URLSearchParams(window.location.search)
       const topicId = urlParams.get('topic')
       if (!topicId) return
+
+      // ── Interest Engine v2: digest click tracking (?src=digest&usr=…) ──
+      // Digest email links carry src=digest + usr=<accountId>. The click
+      // is the strongest email-engagement signal (+4 per term in the
+      // account profile) AND clears the "sent but not clicked" drag so
+      // future digests stop deprioritising a story the reader clearly
+      // wanted. Params are stripped immediately (like=1 pattern) so a
+      // refresh never double-counts.
+      if (urlParams.get('src') === 'digest') {
+        const digestAccountId = urlParams.get('usr') || undefined
+        try {
+          const cleanUrl = new URL(window.location.href)
+          cleanUrl.searchParams.delete('src')
+          cleanUrl.searchParams.delete('usr')
+          window.history.replaceState(window.history.state || {}, '', cleanUrl.toString())
+        } catch {
+          // URL API unavailable — the one-shot guard below still holds
+        }
+        const payload: Record<string, unknown> = {
+          type: 'digest_click',
+          topicId,
+        }
+        const devId = getDeviceId()
+        if (devId) payload.deviceId = devId
+        if (digestAccountId) payload.accountId = digestAccountId
+        else {
+          const acct = getAccountId()
+          if (acct) payload.accountId = acct
+        }
+        fetch('/api/interest/track', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          keepalive: true,
+        }).catch(() => {})
+      }
 
       // ── Notification Like auto-press (?like=1) ──
       // The SW appends like=1 when the user tapped the notification's Like
@@ -1811,7 +1860,14 @@ export default function Home({
           personalizationBoost(t, interests, engagement) +
           (isLocalTopic(t) ? LOCAL_BOOST : 0) +
           (t.boostScore || 0) +
-          (likedTopicIds.has(t.topicId) ? LIKED_DIRECT_BOOST : 0)
+          (likedTopicIds.has(t.topicId) ? LIKED_DIRECT_BOOST : 0) +
+          // Interest Engine v2: the SERVER-side learned-profile score for
+          // this story (set by /api/news?personalize=… when the
+          // smartPersonalization flag is ON). Blended at full weight so
+          // the keyword-level signal dominates the coarse sector boosts;
+          // absent (0) when the flag is off → this exact line is a no-op
+          // and the sort behaves exactly as before (the revert path).
+          (t.interestScore || 0)
         return {
           topic: t,
           base,
@@ -2034,6 +2090,20 @@ export default function Home({
         if (country && isVirtual) {
           params.set('country', country.code)
         }
+        // ── Interest Engine v2: server-side personalised ranking ──
+        // When the smartPersonalization flag is ON, the device id rides
+        // along so /api/news re-ranks the SHARED country cache against
+        // this visitor's learned interest profile (the response then
+        // carries interestScore + matchedTerms per story and is never
+        // CDN-cached across users). The mesh-first path above never
+        // personalises (it serves the shared snapshot) — exactly the
+        // revert path when the flag is off.
+        if (smartPersonalization && !isCustom) {
+          const devId = typeof window !== 'undefined' ? getDeviceId() : ''
+          if (devId) params.set('personalize', devId)
+          const acctId = getAccountId()
+          if (acctId) params.set('acct', acctId)
+        }
 
         // ── Mesh-first path (experimental P2P relay) ──
         // Try the verified peer relay BEFORE touching the server. This
@@ -2043,8 +2113,15 @@ export default function Home({
         // below runs — a cold load is NEVER slowed down. Virtual
         // categories need a known country (the room key is per-country);
         // blindspots is a cross-category view the mesh never serves.
+        //
+        // Interest Engine v2: when smartPersonalization is ON the mesh is
+        // BYPASSED — the shared P2P snapshot is by definition the same
+        // feed for every peer, while the personalised /api/news ranking
+        // is per-visitor. Reverting the flag from /debug restores the
+        // mesh-first path unchanged.
         let json: NewsResponse | null = null
         const canMesh =
+          !smartPersonalization &&
           meshRelay &&
           !isCustom &&
           cat !== 'blindspots' &&

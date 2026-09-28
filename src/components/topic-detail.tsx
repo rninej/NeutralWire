@@ -514,7 +514,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     // Track engagement: sharing is a strong signal (+15 per sector)
     const deviceId = getDeviceId()
     if (deviceId) {
-      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'share').catch(() => {})
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'share', { topicId: topic.topicId }).catch(() => {})
     }
     try {
       if (navigator.share) {
@@ -536,7 +536,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     saveVote(newVote)
     const deviceId = getDeviceId()
     if (deviceId && newVote === 'liked') {
-      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'like').catch(() => {})
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'like', { topicId: topic.topicId }).catch(() => {})
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
       }, 300)
@@ -549,7 +549,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     saveVote(newVote)
     const deviceId = getDeviceId()
     if (deviceId && newVote === 'disliked') {
-      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'dislike').catch(() => {})
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'dislike', { topicId: topic.topicId }).catch(() => {})
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
       }, 300)
@@ -1247,7 +1247,7 @@ function AskAiPanel({
     // Track engagement: asking AI is a strong interest signal (+10)
     const deviceId = getDeviceId()
     if (deviceId) {
-      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'ai').catch(() => {})
+      bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'ai', { topicId: topic.topicId }).catch(() => {})
       // Notify the news page to refresh its engagement cache
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
@@ -1391,7 +1391,7 @@ function AskAiPanel({
                         setLoading(true)
                         const deviceId = getDeviceId()
                         if (deviceId) {
-                          bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'ai').catch(() => {})
+                          bumpEngagementForTopic(deviceId, topic.title, topic.summary || '', 'ai', { topicId: topic.topicId }).catch(() => {})
                           setTimeout(() => {
                             window.dispatchEvent(new CustomEvent('neutralwire:engagement-changed'))
                           }, 300)

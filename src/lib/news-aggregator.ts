@@ -73,6 +73,12 @@ export interface TopicArticle {
    * like promotes the story a few positions for EVERY visitor. Included
    * in the client's personalization score too. */
   boostScore?: number
+  /** Interest Engine v2 (set by /api/news when ?personalize=… and the
+   * visitor's learned profile matches this story): the bounded interest
+   * delta (−70..+70) and the top matched terms — the explainable
+   * "why you're seeing this" signal for the UI. */
+  interestScore?: number
+  matchedTerms?: string[]
 }
 
 export interface CategoryCachePayload {

@@ -146,6 +146,7 @@ const MILESTONE_DONATE_FLAG_PATH = 'featureFlags/milestoneDonate'
 const MESH_RELAY_FLAG_PATH = 'featureFlags/meshRelay'
 const USER_CRON_FLAG_PATH = 'featureFlags/userCron'
 const MONETIZATION_MODEL_FLAG_PATH = 'featureFlags/monetizationModel'
+const SMART_PERSONALIZATION_FLAG_PATH = 'featureFlags/smartPersonalization'
 
 // Per-instance memos (10s) — bound Firebase reads when many clients hit
 // this endpoint simultaneously on a warm serverless instance.
@@ -159,6 +160,7 @@ let milestoneDonateMemo: { value: boolean; ts: number } | null = null
 let meshRelayMemo: { value: boolean; ts: number } | null = null
 let userCronMemo: { value: boolean; ts: number } | null = null
 let monetizationMemo: { value: 'subscription' | 'donation'; ts: number } | null = null
+let smartPersonalizationMemo: { value: boolean; ts: number } | null = null
 const MEMO_TTL_MS = 10 * 1000
 
 function sha256(s: string): string {
@@ -195,7 +197,7 @@ function normalizeBooleanFlag(v: unknown, fallback: boolean): boolean {
 export async function GET() {
   // All flags are fetched in parallel — one cold instance pays the
   // RTDB reads at most, then all answers are memoized together.
-  const [navResult, popupResult, notifLikeResult, notifRaiseFixResult, videoResult, videoPreviewResult, milestoneDonateResult, meshRelayResult, userCronResult, monetizationResult] = await Promise.allSettled([
+  const [navResult, popupResult, notifLikeResult, notifRaiseFixResult, videoResult, videoPreviewResult, milestoneDonateResult, meshRelayResult, userCronResult, monetizationResult, smartPersonalizationResult] = await Promise.allSettled([
     (async () => {
       if (navMemo && Date.now() - navMemo.ts < MEMO_TTL_MS) return navMemo.value
       const stored = await firebaseRead<string>(NAV_FLAG_PATH)
@@ -276,6 +278,15 @@ export async function GET() {
       const value = stored === 'donation' ? 'donation' : 'subscription'
       monetizationMemo = { value, ts: Date.now() }
       return value
+    }),
+    (async () => {
+      if (smartPersonalizationMemo && Date.now() - smartPersonalizationMemo.ts < MEMO_TTL_MS) return smartPersonalizationMemo.value
+      const stored = await firebaseRead<boolean>(SMART_PERSONALIZATION_FLAG_PATH)
+      // DEFAULT ON — the smart experience is the shipped behaviour; the
+      // /debug flip is the owner's revert to the original systems.
+      const value = normalizeBooleanFlag(stored, true)
+      smartPersonalizationMemo = { value, ts: Date.now() }
+      return value
     })(),
   ])
 
@@ -299,6 +310,8 @@ export async function GET() {
         notifLikeResult.status === 'fulfilled' ? notifLikeResult.value : true,
       notifRaiseFix:
         notifRaiseFixResult.status === 'fulfilled' ? notifRaiseFixResult.value : true,
+      smartPersonalization:
+        smartPersonalizationResult.status === 'fulfilled' ? smartPersonalizationResult.value : true,
       videoWatch: videoResult.status === 'fulfilled' ? videoResult.value : true,
       videoPreview:
         videoPreviewResult.status === 'fulfilled' ? videoPreviewResult.value : false,
@@ -328,6 +341,7 @@ export async function POST(req: NextRequest) {
     popupSystem?: string
     notifLike?: boolean | string
     notifRaiseFix?: boolean | string
+    smartPersonalization?: boolean | string
     videoWatch?: boolean | string
     videoPreview?: boolean | string
     milestoneDonate?: boolean | string
@@ -349,6 +363,7 @@ export async function POST(req: NextRequest) {
   const wantsPopup = body.popupSystem !== undefined
   const wantsNotifLike = body.notifLike !== undefined
   const wantsNotifRaiseFix = body.notifRaiseFix !== undefined
+  const wantsSmartPersonalization = body.smartPersonalization !== undefined
   const wantsVideo = body.videoWatch !== undefined
   const wantsVideoPreview = body.videoPreview !== undefined
   const wantsMilestoneDonate = body.milestoneDonate !== undefined
@@ -421,6 +436,16 @@ export async function POST(req: NextRequest) {
     }
     notifRaiseFixMemo = { value: notifRaiseFix, ts: Date.now() }
     console.log(`[flags] notifRaiseFix set to '${notifRaiseFix}' (applies to ALL users)`)
+  }
+
+  if (wantsSmartPersonalization) {
+    const smartPersonalization = normalizeBooleanFlag(body.smartPersonalization, true)
+    const ok = await firebaseWrite(SMART_PERSONALIZATION_FLAG_PATH, smartPersonalization)
+    if (!ok) {
+      return NextResponse.json({ error: 'Firebase write failed (smartPersonalization)' }, { status: 500 })
+    }
+    smartPersonalizationMemo = { value: smartPersonalization, ts: Date.now() }
+    console.log(`[flags] smartPersonalization set to '${smartPersonalization}' (applies to ALL users)`)
   }
 
   if (wantsVideo) {

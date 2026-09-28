@@ -16,6 +16,7 @@
  */
 
 import * as React from 'react'
+import { setAccountIdLocal } from './user-interests'
 
 export type Tier = 'free' | 'premium' | 'ultra'
 export type Model = 'donation' | 'subscription'
@@ -170,6 +171,10 @@ export function SubscriptionProvider({
       if (!res.ok) throw new Error('failed')
       const data = (await res.json()) as Partial<SubscriptionState>
       setState((prev) => ({ ...prev, ...data, loading: false }))
+      // Mirror the account id locally so Interest Engine v2 learning pings
+      // (user-interests.ts trackInterestEvent) can teach the account-level
+      // profile — the one the email digest ranks from.
+      setAccountIdLocal((data as { accountId?: string | null }).accountId || null)
       const newTier = data.tier || 'free'
       const prevTier = seenTierRef.current
       seenTierRef.current = newTier

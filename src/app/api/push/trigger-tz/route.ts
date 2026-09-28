@@ -4,6 +4,7 @@ import { firebaseDelete, firebaseRead, firebaseWrite } from '@/lib/firebase-serv
 import { readCachedNews, isVirtualCategory } from '@/lib/news-cache'
 import { consumeLease, jobRecentlyRan, markJobRun, CRON_JOB_INTERVALS } from '@/lib/mesh/lease-server'
 import { buildBriefingPayload } from '@/lib/push/briefing-payload'
+import { readInterestProfile, scoreStoryDelta } from '@/lib/interest-engine'
 import {
   titleSignature,
   isNearDuplicateSignature,
@@ -330,6 +331,21 @@ export async function GET(req: NextRequest) {
       // Firebase hiccup → default to ON (never break notification sending)
     }
 
+    // ── Interest Engine v2 (smartPersonalization) ──
+    // Read once per run: ON = every device's story pick gains the learned
+    // keyword-profile delta ON TOP of the proven sector/engagement score
+    // (the engine layer is additive — flipping the flag off from /debug
+    // restores the exact original scoring). Notification click-throughs
+    // feed the same profile via story_open pings (the push URL opens the
+    // page), so notifications learn from what you actually open.
+    let smartPersonalization = true
+    try {
+      const storedSmart = await firebaseRead<boolean | string>('featureFlags/smartPersonalization')
+      if (storedSmart === false || storedSmart === 'false') smartPersonalization = false
+    } catch {
+      // default ON
+    }
+
     if (toNotify.length === 0) {
       return NextResponse.json({
         ok: true, message: 'No devices need notifications', sent: 0,
@@ -557,6 +573,15 @@ export async function GET(req: NextRequest) {
         // near-duplicate re-headlines of stories already picked in this run
         // (catches "139 killed" vs "169 killed" — same event, different
         // numbers — and the OpenAI/Australia same-event-different-words twin).
+        //
+        // Interest Engine v2: when smartPersonalization is ON, the device's
+        // learned keyword/bigram profile (interestProfiles/<deviceId> — fed
+        // by story opens, likes, shares, digest clicks) adds its delta on
+        // top of the proven base score. Same weight as the feed so a
+        // story you'd actually open outranks generic importance.
+        const engineProfile = smartPersonalization
+          ? await readInterestProfile(target.deviceId).catch(() => null)
+          : null
         const scored = freshStories.map((s) => {
           const sig = titleSignature(s.title)
           const alreadySentTopic = allSentTopicIds.has(s.topicId)
@@ -572,6 +597,7 @@ export async function GET(req: NextRequest) {
           return {
             story: s,
             score: scoreStoryForDevice(s, target.interests, target.engagement)
+              + (engineProfile ? scoreStoryDelta(s, engineProfile).score : 0) // learned taste
               - (alreadySentTopic ? 50 : 0)        // deprioritize exact dup
               - (alreadySentNearDup ? 50 : 0),     // deprioritize semantic dup
           }

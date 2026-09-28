@@ -14,9 +14,18 @@
  *   +10% per relevant click (max 100%)
  *   "not over-specialized" — capped per-sector at 100% and the rest of the
  *   catalog still gets shown; we just *boost* matching topics in the feed.
+ *
+ * NEW (Interest Engine v2): every meaningful interaction ALSO pings
+ * /api/interest/track, which folds keyword/bigram-level learning into
+ * interestProfiles/<deviceId> (+ the account profile when signed in).
+ * That server-side profile is what re-ranks the Relevant feed, picks
+ * digest stories and scores notification candidates. Fire-and-forget:
+ * the ping can never block or break the page.
  */
 
 // ── Sectors ──
+import { getDeviceId } from './referral'
+
 export const SECTORS = [
   { id: 'politics', label: 'Politics', emoji: '🏛️' },
   { id: 'world', label: 'World News', emoji: '🌍' },
@@ -33,6 +42,68 @@ export type SectorId = (typeof SECTORS)[number]['id']
 const INTERESTS_KEY = 'neutralwire:interests'
 const ENGAGEMENT_KEY = 'neutralwire:engagement'
 const SEEN_TOPICS_KEY = 'neutralwire:seen-topics'
+const ACCOUNT_ID_KEY = 'neutralwire:account-id'
+
+// ── Interest Engine v2: server-side learning pings ──
+
+/** The signed-in account id (mirrored by SubscriptionProvider from
+ * /api/subscription/me) — absent for anonymous visitors. */
+export function getAccountId(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return localStorage.getItem(ACCOUNT_ID_KEY) || null
+  } catch {
+    return null
+  }
+}
+
+export function setAccountIdLocal(accountId: string | null | undefined): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (accountId) localStorage.setItem(ACCOUNT_ID_KEY, accountId)
+    else localStorage.removeItem(ACCOUNT_ID_KEY)
+  } catch {
+    // silent
+  }
+}
+
+export type ClientInterestEvent =
+  | 'story_open' | 'story_share' | 'story_like' | 'story_dislike'
+  | 'digest_click' | 'notification_click'
+
+/**
+ * Fire-and-forget learning ping → /api/interest/track. NEVER throws,
+ * never awaits (returns void). Learning must be invisible.
+ */
+export function trackInterestEvent(evt: {
+  type: ClientInterestEvent
+  topicId?: string
+  title?: string
+  summary?: string
+  category?: string
+}): void {
+  if (typeof window === 'undefined') return
+  try {
+    const deviceId = getDeviceId()
+    const accountId = getAccountId()
+    if (!deviceId && !accountId) return
+    const payload: Record<string, unknown> = { type: evt.type }
+    if (deviceId) payload.deviceId = deviceId
+    if (accountId) payload.accountId = accountId
+    if (evt.topicId) payload.topicId = evt.topicId
+    if (evt.title) payload.title = evt.title
+    if (evt.summary) payload.summary = evt.summary
+    if (evt.category) payload.category = evt.category
+    fetch('/api/interest/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch(() => {})
+  } catch {
+    // silent
+  }
+}
 
 // ── Seen-topics tracking (client-side) ──
 // Records which topicIds the user has already opened. Used to DEMOTE seen
@@ -228,12 +299,17 @@ export async function bumpEngagement(
  * Use this when a user opens a topic — it bumps every sector the topic
  * touches, so a "Trump signs AI executive order" story bumps both
  * 'politics' and 'technology'.
+ *
+ * The optional `meta` (topicId + category) ALSO fires one Interest
+ * Engine v2 learning ping — the keyword-level signal the server-side
+ * profile learns from.
  */
 export async function bumpEngagementForTopic(
   deviceId: string,
   title: string,
   summary: string = '',
   reason: 'click' | 'ai' | 'share' | 'time' | 'like' | 'dislike' = 'click',
+  meta?: { topicId?: string; category?: string },
 ): Promise<void> {
   const sectors = detectSectors(title, summary)
   for (const sector of sectors) {
@@ -244,6 +320,24 @@ export async function bumpEngagementForTopic(
       reason === 'time' ? 2 :
       10 // click, ai
     await bumpEngagement(deviceId, sector, amount, reason)
+  }
+
+  // Interest Engine v2 ping — one per interaction (not per sector).
+  // 'ai' (asking the AI about a story) is deep engagement → story_open;
+  // 'time' is too weak to teach anything → skip.
+  if (meta?.topicId && reason !== 'time') {
+    const evtType: ClientInterestEvent | null =
+      reason === 'share' ? 'story_share' :
+      reason === 'like' ? 'story_like' :
+      reason === 'dislike' ? 'story_dislike' :
+      'story_open'
+    trackInterestEvent({
+      type: evtType,
+      topicId: meta.topicId,
+      title,
+      summary,
+      category: meta.category,
+    })
   }
 }
 

@@ -16,6 +16,7 @@ import {
   Calendar,
   Download,
   RefreshCw,
+  Brain,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -437,6 +438,68 @@ export default function DebugPage() {
     info: { dot: 'bg-blue-500', label: 'Info' },
   }
 
+  // ── Interest Profile Inspector (Interest Engine v2 observability) ──
+  // The owner's window into what the personalisation brain has LEARNED
+  // for any device (defaults to this browser's own device id): top terms
+  // with scores, sector affinities, negative terms, recent learning
+  // events. GET /api/interest/track is admin-password gated.
+  interface InterestProfileView {
+    ok: boolean
+    deviceId: string
+    smartPersonalization: boolean
+    profile: {
+      version: number
+      createdAt: number
+      updatedAt: number
+      eventCount: number
+      termCount: number
+      topicCount: number
+      topTerms: Array<{ term: string; score: number; touches: number; lastSeen: number }>
+      negativeTerms: Array<{ term: string; score: number; touches: number }>
+      sectors: Array<{ sector: string; score: number }>
+    } | null
+    events: Array<{ id: string; type: string; topicId?: string | null; title?: string | null; at: number }>
+  }
+  const [interestDeviceId, setInterestDeviceId] = React.useState('')
+  const [interestProfile, setInterestProfile] = React.useState<InterestProfileView | null>(null)
+  const [interestLoading, setInterestLoading] = React.useState(false)
+  const [interestError, setInterestError] = React.useState<string | null>(null)
+
+  const fetchInterestProfile = React.useCallback(async (deviceId: string) => {
+    if (!passwordRef.current || !deviceId.trim()) return
+    setInterestLoading(true)
+    setInterestError(null)
+    try {
+      const res = await fetch(
+        `/api/interest/track?deviceId=${encodeURIComponent(deviceId.trim())}&password=${encodeURIComponent(passwordRef.current)}`,
+        { cache: 'no-store' },
+      )
+      if (res.ok) {
+        setInterestProfile((await res.json()) as InterestProfileView)
+      } else {
+        setInterestError(`Inspector failed (HTTP ${res.status}) — check the device id and password.`)
+      }
+    } catch {
+      setInterestError('Inspector request failed — try again.')
+    } finally {
+      setInterestLoading(false)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    // Prefill this browser's own device id once mounted.
+    try {
+      const id = getDeviceId()
+      if (id) setInterestDeviceId(id)
+    } catch {}
+  }, [])
+
+  React.useEffect(() => {
+    if (authed && passwordRef.current && interestDeviceId) {
+      void fetchInterestProfile(interestDeviceId)
+    }
+  }, [authed, interestDeviceId, fetchInterestProfile])
+
   // ── Firebase Bandwidth monitor (Sep 2026 ETag fix observability) ──
   // /api/fb-stats reports the warm server instance's live counters:
   // real downloads, bytes SAVED via zero-byte 304 conditional reads,
@@ -675,6 +738,13 @@ export default function DebugPage() {
   const [userCron, setUserCron] = React.useState<boolean | null>(null)
   const [userCronFlipping, setUserCronFlipping] = React.useState(false)
   const [userCronResult, setUserCronResult] = React.useState<string | null>(null)
+  // Interest Engine v2 master switch (default ON): server-side learned
+  // personalisation of the Relevant feed, the digest story pick, and
+  // notification scoring. OFF = the original systems everywhere (the
+  // owner's one-click revert). Learning keeps recording either way.
+  const [smartPersonalization, setSmartPersonalization] = React.useState<boolean | null>(null)
+  const [smartPersonalizationFlipping, setSmartPersonalizationFlipping] = React.useState(false)
+  const [smartPersonalizationResult, setSmartPersonalizationResult] = React.useState<string | null>(null)
 
   // ── Monetization model (subscription tiers vs the original donations) ──
   const [monetizationModel, setMonetizationModel] = React.useState<'subscription' | 'donation' | null>(null)
@@ -712,6 +782,7 @@ export default function DebugPage() {
         setMilestoneDonate(d?.milestoneDonate !== false)
         setMeshRelay(d?.meshRelay !== false)
         setUserCron(d?.userCron !== false)
+        setSmartPersonalization(d?.smartPersonalization !== false)
         setMonetizationModel(d?.monetizationModel === 'donation' ? 'donation' : 'subscription')
       })
       .catch(() => {
@@ -724,13 +795,14 @@ export default function DebugPage() {
         setMilestoneDonate(true)
         setMeshRelay(true)
         setUserCron(true)
+        setSmartPersonalization(true)
         setMonetizationModel('subscription')
       })
   }, [])
 
   /** POST one boolean flag (shared by the experimental switches). */
   const flipBooleanFlag = async (
-    flag: 'notifLike' | 'notifRaiseFix' | 'videoWatch' | 'videoPreview' | 'milestoneDonate' | 'meshRelay' | 'userCron',
+    flag: 'notifLike' | 'notifRaiseFix' | 'videoWatch' | 'videoPreview' | 'milestoneDonate' | 'meshRelay' | 'userCron' | 'smartPersonalization',
     value: boolean,
   ): Promise<boolean> => {
     if (!passwordRef.current) return false
@@ -1043,6 +1115,7 @@ export default function DebugPage() {
           >
             {[
               ['#api-board', 'APIs'],
+              ['#interest-inspector', 'Interests'],
               ['#pwa-growth', 'Growth'],
               ['#feature-flags', 'Flags'],
               ['#popup-system', 'Popups'],
@@ -1209,6 +1282,171 @@ export default function DebugPage() {
                   </div>
                 </div>
               ))}
+            </>
+          )}
+        </Card>
+
+        {/* ── Interest Profile Inspector ──
+            What the personalisation brain has LEARNED for a device: top
+            terms (keyword/bigram affinity), sector affinities, negative
+            terms, and the recent learning events. The window into the
+            Interest Engine v2 — visible learning, not a black box. */}
+        <Card id="interest-inspector" className="mb-6 scroll-mt-20 p-4 md:p-6">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Brain className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-base font-bold">Interest Profile Inspector</h2>
+            <span className="text-xs text-muted-foreground">
+              what the personalisation brain has learned
+            </span>
+            {interestLoading && (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+            {interestProfile?.profile && (
+              <span className="text-xs text-muted-foreground">
+                {interestProfile.profile.eventCount} events · {interestProfile.profile.termCount} terms · updated{' '}
+                {new Date(interestProfile.profile.updatedAt).toLocaleString()}
+              </span>
+            )}
+            <Button
+              onClick={() => void fetchInterestProfile(interestDeviceId)}
+              disabled={interestLoading || !interestDeviceId.trim()}
+              variant="outline"
+              size="sm"
+              className="ml-auto"
+            >
+              <RefreshCw className={`h-4 w-4 ${interestLoading ? 'animate-spin' : ''}`} />
+              Re-check
+            </Button>
+          </div>
+
+          <div className="mb-4 flex flex-wrap gap-2">
+            <Input
+              value={interestDeviceId}
+              onChange={(e) => setInterestDeviceId(e.target.value)}
+              placeholder="device id (or acct_<accountId> for an account profile)"
+              className="max-w-md font-mono text-xs"
+            />
+            <Button
+              onClick={() => void fetchInterestProfile(interestDeviceId)}
+              disabled={interestLoading || !interestDeviceId.trim()}
+              size="sm"
+            >
+              Look up
+            </Button>
+          </div>
+
+          {interestError && (
+            <p className="text-sm text-red-500">{interestError}</p>
+          )}
+
+          {!interestError && !interestProfile && !interestLoading && (
+            <p className="text-sm text-muted-foreground">
+              Enter a device id above to inspect its learned interest profile.
+            </p>
+          )}
+
+          {interestProfile && !interestProfile.profile && (
+            <p className="text-sm text-muted-foreground">
+              No profile recorded for this device yet — it appears after the
+              first story open, like, share or digest click (3+ events before
+              personalisation activates).
+            </p>
+          )}
+
+          {interestProfile?.profile && (
+            <>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div>
+                  <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Top learned terms
+                  </h3>
+                  <div className="space-y-1.5">
+                    {interestProfile.profile.topTerms.slice(0, 12).map((t) => {
+                      const max = Math.max(
+                        1,
+                        ...interestProfile.profile!.topTerms.map((x) => Math.abs(x.score)),
+                      )
+                      const pct = Math.round((Math.abs(t.score) / max) * 100)
+                      return (
+                        <div key={t.term} className="flex items-center gap-2 text-xs">
+                          <span className="w-36 shrink-0 truncate font-mono" title={t.term}>
+                            {t.term}
+                          </span>
+                          <span className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                            <span
+                              className={`block h-full rounded-full ${
+                                t.score >= 0 ? 'bg-amber-500' : 'bg-red-500'
+                              }`}
+                              style={{ width: `${Math.max(3, pct)}%` }}
+                            />
+                          </span>
+                          <span className="w-14 shrink-0 text-right tabular-nums text-muted-foreground">
+                            {t.score > 0 ? '+' : ''}
+                            {t.score}
+                          </span>
+                          <span className="w-10 shrink-0 text-right text-muted-foreground">
+                            ×{t.touches}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Sector affinities
+                  </h3>
+                  <div className="flex flex-wrap gap-1.5">
+                    {interestProfile.profile.sectors.map((s) => (
+                      <span
+                        key={s.sector}
+                        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                          s.score >= 0
+                            ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                            : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
+                        }`}
+                      >
+                        {s.sector} {s.score > 0 ? '+' : ''}
+                        {s.score}
+                      </span>
+                    ))}
+                  </div>
+                  {interestProfile.profile.negativeTerms.length > 0 && (
+                    <>
+                      <h3 className="mb-2 mt-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                        Learned dislikes
+                      </h3>
+                      <div className="flex flex-wrap gap-1.5">
+                        {interestProfile.profile.negativeTerms.map((t) => (
+                          <span
+                            key={t.term}
+                            className="inline-flex items-center rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-[11px] font-medium text-red-600 dark:text-red-400"
+                          >
+                            {t.term} {t.score}
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <h3 className="mb-2 mt-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Recent learning events
+                  </h3>
+                  <div className="space-y-1">
+                    {interestProfile.events.slice(0, 8).map((e) => (
+                      <p key={e.id} className="truncate font-mono text-[10px] text-muted-foreground">
+                        {new Date(e.at).toLocaleTimeString()} · {e.type}
+                        {e.title ? ` · ${e.title.slice(0, 46)}` : ''}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <p className="mt-3 text-[11px] text-muted-foreground">
+                Feed ranking activates at 3+ events; terms decay with a 14-day
+                half-life; the digest ranks from the account profile
+                (acct_&lt;id&gt;). Personalisation consumption is{' '}
+                <b>{interestProfile.smartPersonalization ? 'ON' : 'reverted (OFF)'}</b>.
+              </p>
             </>
           )}
         </Card>
@@ -1889,6 +2127,90 @@ export default function DebugPage() {
                 {notifRaiseFixFlipping ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : notifRaiseFix ? (
+                  'Turn off'
+                ) : (
+                  'Turn on'
+                )}
+              </Button>
+            </div>
+
+            {/* ── Interest Engine v2 (smart personalisation) ── */}
+            <div
+              className={cn(
+                'flex items-start gap-3 rounded-xl border-2 p-4 transition-colors',
+                smartPersonalization === false ? 'border-border opacity-70' : 'border-amber-500/30 bg-amber-500/5',
+              )}
+            >
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  smartPersonalization ? 'bg-amber-500/15 text-amber-500' : 'bg-muted text-muted-foreground',
+                )}
+              >
+                <Brain className="h-4.5 w-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold">Smart personalisation (Interest Engine v2)</span>
+                  {smartPersonalization !== null && (
+                    <span
+                      className={cn(
+                        'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                        smartPersonalization
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-muted-foreground/20 text-muted-foreground',
+                      )}
+                    >
+                      {smartPersonalization ? 'Live' : 'Reverted'}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Every story open, like, share, Ask-AI and digest click feeds a
+                  server-side keyword/bigram interest profile (14-day half-life,
+                  3-event activation). <b>ON</b>: the Relevant feed re-ranks
+                  server-side per visitor (with &ldquo;For you&rdquo; badges), the email
+                  digest picks stories by taste (custom topics boosted,
+                  emailed-but-never-clicked stories dragged down), and
+                  notification picks add the learned delta. <b>OFF</b>: all three
+                  surfaces return to the original systems — client-side boosts,
+                  newest-first digest, sector-keyword notification scoring.
+                  Learning keeps recording either way; inspect any device below
+                  in the Interest Profile Inspector.
+                </p>
+                {smartPersonalizationResult && (
+                  <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    {smartPersonalizationResult}
+                  </p>
+                )}
+              </div>
+              <Button
+                variant={smartPersonalization ? 'destructive' : 'default'}
+                size="sm"
+                disabled={smartPersonalizationFlipping || smartPersonalization === null}
+                onClick={async () => {
+                  if (smartPersonalizationFlipping || smartPersonalization === null) return
+                  setSmartPersonalizationFlipping(true)
+                  setSmartPersonalizationResult(null)
+                  const next = !smartPersonalization
+                  const ok = await flipBooleanFlag('smartPersonalization', next)
+                  if (ok) {
+                    setSmartPersonalization(next)
+                    setSmartPersonalizationResult(
+                      next
+                        ? '✓ On — the interest engine ranks the feed, digest and notifications (applies on next load/sweep)'
+                        : '✓ Off — original systems restored everywhere (feed on next load, digest/notifications from the next sweep)',
+                    )
+                  } else {
+                    setSmartPersonalizationResult('Failed to update (check password)')
+                  }
+                  setSmartPersonalizationFlipping(false)
+                }}
+                className="shrink-0"
+              >
+                {smartPersonalizationFlipping ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : smartPersonalization ? (
                   'Turn off'
                 ) : (
                   'Turn on'

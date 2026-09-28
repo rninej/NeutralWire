@@ -13,6 +13,12 @@ import {
   CACHE_CONSTANTS,
 } from '@/lib/news-cache'
 import { firebaseRead } from '@/lib/firebase-server'
+import {
+  isSmartPersonalizationOn,
+  readMergedProfile,
+  rankStoriesForProfile,
+  scoreStoryDelta,
+} from '@/lib/interest-engine'
 import { readCustomFeed, fillCustomTopic, customTopicCooldownRemaining, type CustomFeedPayload } from '@/lib/custom-topics'
 import {
   detectCountryServer,
@@ -90,6 +96,58 @@ function boostTopics(topics: TopicArticle[], boostMap: Record<string, number>): 
   // Stable: Array.prototype.sort is stable in modern V8; ties keep order.
   scored.sort((a, b) => a.target - b.target)
   return scored.map((s) => (s.boost > 0 ? { ...s.topic, boostScore: s.boost } : s.topic))
+}
+
+// ── Interest Engine v2: server-side personalised ranking ──
+// When the client passes ?personalize=<deviceId> (which it does while the
+// smartPersonalization flag is ON), the SHARED country cache is re-ranked
+// against the visitor's learned interest profile BEFORE limit slicing:
+//
+//   score = (N − i) × 2 + interestDelta × 1.5
+//
+// The position term preserves the site's editorial ranking (coverage,
+// local-boost, freshness) as a base; the interest delta (bounded ±70) can
+// lift a strong match from mid-list to the top — the Google-Discover
+// feel — while a cold profile (eventCount < 3) changes nothing at all.
+// A diversity pass demotes stories whose strongest bigram already
+// appeared twice, so one event can't flood the feed.
+//
+// Responses that carry personal data are NEVER CDN-cached (private
+// Cache-Control) — one visitor's ranking must never leak to another.
+async function personalizeTopics(
+  topics: TopicArticle[],
+  personalizeId: string,
+  accountId: string,
+): Promise<{ topics: TopicArticle[]; personalized: boolean }> {
+  if (!personalizeId) return { topics, personalized: false }
+  try {
+    if (!(await isSmartPersonalizationOn())) return { topics, personalized: false }
+    const profile = await readMergedProfile(personalizeId, accountId || null)
+    if (!profile || profile.eventCount < 3) return { topics, personalized: false }
+
+    const now = Date.now()
+    const N = topics.length
+    // Position base preserves the editorial ranking; the interest delta
+    // (bounded ±70, ×1.5) can lift a strong match from mid-list to the top.
+    const positionBase = new Map<string, number>()
+    topics.forEach((t, i) => positionBase.set(t.topicId, (N - i) * 2))
+    const ranked = rankStoriesForProfile(topics, profile, (t) =>
+      (positionBase.get(t.topicId) || 0) + scoreStoryDelta(t, profile, now).score * 1.5,
+    )
+
+    // Tag interesting stories (interestScore + matchedTerms) so the UI can
+    // badge them and the interest stays explainable; then emit in ranked
+    // order via a topicId → tagged-topic map.
+    const tagged = new Map<string, TopicArticle>()
+    for (const t of topics) {
+      const d = scoreStoryDelta(t, profile, now)
+      tagged.set(t.topicId, d.score !== 0 ? { ...t, interestScore: d.score, matchedTerms: d.matchedTerms } : t)
+    }
+    const reordered = ranked.map((r) => tagged.get(r.story.topicId) || r.story)
+    return { topics: reordered, personalized: true }
+  } catch {
+    return { topics, personalized: false } // personalisation must never break news
+  }
 }
 
 /**
@@ -182,6 +240,13 @@ export async function GET(req: NextRequest) {
     return handleBlindspots(req, limit, minCoverage, slim, offset, t0)
   }
 
+  // ── Interest Engine v2 params ──
+  // personalize=<deviceId> (+ acct=<accountId> when signed in): re-rank the
+  // shared cache against the visitor's learned profile. Only sent by the
+  // client while the smartPersonalization flag is ON — the /debug revert.
+  const personalizeId = (sp.get('personalize') || '').trim().slice(0, 64)
+  const personalizeAcct = (sp.get('acct') || '').trim().slice(0, 64)
+
   const aggregate = async (): Promise<{
     topics: TopicArticle[]
     sourceCount: number
@@ -221,23 +286,31 @@ export async function GET(req: NextRequest) {
       // Apply the global topic boost (notification likes) to the fresh list.
       const boostMap = await readTopicBoostMap()
       const boostedTopics = boostTopics(payload.topics, boostMap)
+      // Interest Engine v2: personalised re-rank of the fresh list (no-op
+      // without ?personalize=… / cold profile / flag off).
+      const personalized = await personalizeTopics(boostedTopics, personalizeId, personalizeAcct)
       const freshResponse = NextResponse.json({
         category,
         country,
         countryName,
-        topics: applyFilters(boostedTopics, limit, minCoverage, offset, slim),
+        topics: applyFilters(personalized.topics, limit, minCoverage, offset, slim),
         cached: false,
         fresh: true,
         sourceCount: payload.sourceCount,
         articleCount: payload.articleCount,
         fetchedAt: new Date(payload.updatedAt).toISOString(),
         ms: Date.now() - t0,
+        personalized: personalized.personalized,
       })
       // CDN-cache the fresh aggregate too — repeated hits (bots, SW,
-      // multiple users on the same new category) skip the function.
+      // multiple users on the same new category) skip the function — but
+      // NEVER when the response is personalised (per-visitor ranking
+      // must not sit on a shared edge cache).
       freshResponse.headers.set(
         'Cache-Control',
-        'public, s-maxage=300, stale-while-revalidate=600',
+        personalized.personalized
+          ? 'private, max-age=30'
+          : 'public, s-maxage=300, stale-while-revalidate=600',
       )
       return freshResponse
     } catch (err) {
@@ -254,7 +327,10 @@ export async function GET(req: NextRequest) {
   // see the same promoted ordering as page one.
   const boostMap = await readTopicBoostMap()
   const boostedCached = boostTopics(cached.topics, boostMap)
-  const truncated = applyFilters(boostedCached, limit, minCoverage, offset, slim)
+  // Interest Engine v2: personalised re-rank of the shared cache (no-op
+  // without ?personalize=… / cold profile / flag off).
+  const personalizedCached = await personalizeTopics(boostedCached, personalizeId, personalizeAcct)
+  const truncated = applyFilters(personalizedCached.topics, limit, minCoverage, offset, slim)
 
   // 4. Refresh if stale — IN THE BACKGROUND, never blocking the response.
   //
@@ -310,8 +386,16 @@ export async function GET(req: NextRequest) {
     staleMs: stale ? Date.now() - cached.updatedAt : 0,
     cacheTtlMs: CACHE_CONSTANTS.STALE_MS,
     ms: Date.now() - t0,
+    personalized: personalizedCached.personalized,
   })
-  response.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600')
+  // Personalised responses are browser-private (never edge-cached);
+  // shared responses keep the 5-min CDN cache that keeps CPU near zero.
+  response.headers.set(
+    'Cache-Control',
+    personalizedCached.personalized
+      ? 'private, max-age=30'
+      : 'public, s-maxage=300, stale-while-revalidate=600',
+  )
   return response
 }
 

@@ -25,10 +25,16 @@
  */
 
 import { createHash } from 'crypto'
-import { firebaseRead, firebaseWrite, firebasePush } from '@/lib/firebase-server'
+import { firebaseRead, firebaseWrite, firebasePatch, firebasePush } from '@/lib/firebase-server'
 import { callAI } from '@/lib/ai-providers'
 import type { TopicArticle } from '@/lib/news-aggregator'
-import { readCustomFeed } from '@/lib/custom-topics'
+import { readCustomFeed, getCustomTopicDef } from '@/lib/custom-topics'
+import {
+  isSmartPersonalizationOn,
+  readMergedProfile,
+  rankStoriesForProfile,
+  scoreStoryForRanking,
+} from '@/lib/interest-engine'
 
 export interface DigestSubscriber {
   email: string
@@ -171,7 +177,7 @@ export async function digestSweep(
         perSub.push(`${accountId}:no-stories`)
         continue
       }
-      const newsletter = await generateNewsletter(sub.email, stories)
+      const newsletter = await generateNewsletter(sub.email, stories, { accountId })
       if (!newsletter) {
         // generateNewsletter now ALWAYS returns something (the fallback
         // builder below) — kept as a belt-and-braces guard.
@@ -188,6 +194,7 @@ export async function digestSweep(
       // the domain, the next sweep (≤45 min) delivers for real.
       if (result.sent) {
         await markSent(accountId)
+        await recordSentTopics(accountId, stories)
         await firebaseWrite(`digestSubscribers/${accountId}/lastFailure`, null).catch(() => {})
         perSub.push(`${accountId}:sent`)
         sent++
@@ -213,38 +220,119 @@ export async function digestSweep(
   return { due: due.length, sent, outboxed }
 }
 
-/** Gather the stories for one subscriber: their custom topics + core
- * categories, newest-first, capped for the AI prompt. */
+/** Record which stories this send included (Interest Engine v2):
+ * digestSubscribers/<id>/sentTopics/<topicId> = { n, ts, clicked }. The
+ * next gatherStories() drags stories that were emailed-but-never-clicked
+ * (−12 per send, max 3) and gives clicked ones a small +6 — the email
+ * stops repeating itself and starts following the reader. A digest_click
+ * ping (from the email links) flips clicked=true. Pruned to the newest
+ * 60 entries so the node stays tiny. */
+async function recordSentTopics(accountId: string, stories: TopicArticle[]): Promise<void> {
+  try {
+    const path = `digestSubscribers/${accountId}/sentTopics`
+    const existing =
+      (await firebaseRead<Record<string, { n?: number; ts?: number; clicked?: boolean }>>(path)) || {}
+    const now = Date.now()
+    for (const s of stories) {
+      const cur = existing[s.topicId] || {}
+      existing[s.topicId] = { n: (cur.n || 0) + 1, ts: now, clicked: cur.clicked || false }
+    }
+    const entries = Object.entries(existing)
+    const keep = entries.length > 60
+      ? entries.sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0)).slice(0, 60)
+      : entries
+    await firebaseWrite(path, Object.fromEntries(keep))
+  } catch {
+    // bookkeeping only — never block the send path
+  }
+}
+
+/** A story on its way into the digest, with the transient label of the
+ * custom subtopic it came from (drives the "YOUR TOPIC" chip + section
+ * notes in the template). Not persisted — template-only sugar. */
+type DigestStory = TopicArticle & { digestTopicLabel?: string }
+
+/** Gather the stories for one subscriber.
+ *
+ * Interest Engine v2 (flag ON — the default): the candidate pool widens
+ * (their custom subtopic feeds + the five core categories) and is RANKED
+ * by the account's learned interest profile — the same brain the Relevant
+ * feed and notifications use — with:
+ *   • +10 for stories from their subscribed custom topics (an explicit
+ *     taste declaration beats any inference),
+ *   • a −12-per-send drag for stories already emailed but never clicked
+ *     (no more "the same five stories every email"), cleared + reversed
+ *     (+6) once they click through — the click is the loudest signal,
+ *   • the engine's diversity pass (one event can't flood the digest).
+ * Flag OFF: the ORIGINAL path exactly — custom topics first, core cats
+ * newest-first, first 14. The /debug one-click revert. */
 export async function gatherStories(accountId: string): Promise<TopicArticle[]> {
   const account = await firebaseRead<{
     prefs?: { customSubtopics?: string[] }
   }>(`accounts/${accountId}`)
   const customIds = account?.prefs?.customSubtopics || []
 
-  const stories: TopicArticle[] = []
+  const stories: DigestStory[] = []
 
   // Their custom subtopic feeds first (the personalisation promise).
-  for (const id of customIds.slice(0, 4)) {
+  // Labels ride along for the "YOUR TOPIC" chips.
+  const defs = await Promise.all(
+    customIds.slice(0, 4).map((id) => getCustomTopicDef(id).catch(() => null)),
+  )
+  for (let i = 0; i < customIds.slice(0, 4).length; i++) {
+    const id = customIds[i]
     const feed = await readCustomFeed(id).catch(() => null)
-    if (feed?.topics) stories.push(...feed.topics.slice(0, 4))
+    if (feed?.topics) {
+      for (const t of feed.topics.slice(0, 5)) {
+        stories.push({ ...t, digestTopicLabel: defs[i]?.label })
+      }
+    }
   }
 
   // Then the main cached categories (shared, always warm).
   const coreCats = ['top', 'world', 'technology', 'politics', 'business']
   for (const cat of coreCats) {
     const cached = await firebaseRead<{ topics: TopicArticle[] }>(`newsCache/${cat}`).catch(() => null)
-    if (cached?.topics) stories.push(...cached.topics.slice(0, 5))
+    if (cached?.topics) stories.push(...cached.topics.slice(0, 6))
   }
 
-  // Dedup by topicId, newest first, cap.
+  // Dedup by topicId.
   const seen = new Set<string>()
   const unique = stories.filter((t) => {
     if (!t?.topicId || seen.has(t.topicId)) return false
     seen.add(t.topicId)
     return true
   })
-  unique.sort((a, b) => (b.latestSeen || 0) - (a.latestSeen || 0))
-  return unique.slice(0, 14)
+
+  // ── ORIGINAL path (the /debug revert): newest-first, first 14. ──
+  let smart = false
+  try {
+    smart = await isSmartPersonalizationOn()
+  } catch {
+    smart = true
+  }
+  if (!smart) {
+    unique.sort((a, b) => (b.latestSeen || 0) - (a.latestSeen || 0))
+    return unique.slice(0, 14)
+  }
+
+  // ── SMART path: rank by the learned interest profile. ──
+  const [profile, sentTopics] = await Promise.all([
+    readMergedProfile(null, accountId),
+    firebaseRead<Record<string, { n?: number; ts?: number; clicked?: boolean }>>(
+      `digestSubscribers/${accountId}/sentTopics`,
+    ).catch(() => null),
+  ])
+  const sentMap = sentTopics || {}
+  const ranked = rankStoriesForProfile(unique, profile, (s) => {
+    let score = scoreStoryForRanking(s, profile)
+    if (s.digestTopicLabel) score += 10 // an explicit subscription
+    const sent = sentMap[s.topicId]
+    if (sent?.n && !sent.clicked) score -= 12 * Math.min(sent.n, 3) // emailed, never clicked
+    else if (sent?.clicked) score += 6 // emailed AND clicked — more like it
+    return score
+  })
+  return ranked.slice(0, 14).map((r) => r.story)
 }
 
 /** The AI newsletter writer — CONTENT ONLY, rendered through the shared
@@ -264,6 +352,7 @@ export async function gatherStories(accountId: string): Promise<TopicArticle[]> 
 export async function generateNewsletter(
   email: string,
   stories: TopicArticle[],
+  opts: { accountId?: string } = {},
 ): Promise<{ subject: string; html: string } | null> {
   if (stories.length === 0) return null
   const list = stories
@@ -324,30 +413,47 @@ export async function generateNewsletter(
         ? `Your NeutralWire digest — ${stories.length} stories across the spectrum`
         : `Your NeutralWire digest — ${(stories[0]?.title || "today's stories").slice(0, 60)}`
   }
+  const personalized = await isSmartPersonalizationOn().catch(() => false)
   return {
     subject: subject.slice(0, 120),
-    html: renderDigestEmail({ email, note, rows }),
+    html: renderDigestEmail({ email, note, rows, accountId: opts.accountId, personalized }),
   }
 }
 
-// ── The digest email template (the ONE layout, AI or not) ────────────────
+// ── The digest email template — a real newsletter, AI or not ──────────────
 //
-// Design goals (the owner's brief): stories must be visible MULTIPLE AT
-// ONCE — the old one-below-another letter format buried every story below
-// a full-screen block of text. The new layout is a GRID digest:
+// Design goals (the owner's brief): "a multi layout — some bigger, some
+// left, some right… more newsletter-like, not a pasted array"). The
+// layout is an EDITORIAL PYRAMID, the shape every print newspaper uses:
 //
-//   • a slim branded header band + one-line editor's note,
-//   • TWO story cards per row (table cells — the only layout primitive
-//     every email client, Outlook included, renders reliably; CSS
-//     grid/flex are NOT email-safe),
-//   • each card: rank number, headline (linked), 2-sentence summary, an
-//     n-sources line, the site's signature L/C/R bias bar in the same
-//     blue/zinc/red as the site, and a Read-the-full-picture link,
-//   • a footer with the one-click unsubscribe link.
+//   ┌──────────────────────────────────────────────┐
+//   │ HEADER BAND (logo + wordmark + DAILY DIGEST) │
+//   │ greeting · date · editor's note              │
+//   ├──────────────────────────────────────────────┤
+//   │ ██ HERO — the #1 story, full width, 21px     │  ← the lead
+//   │    headline, full summary, wide bias bar     │
+//   ├──────────────────────────────────────────────┤
+//   │ TOP STORIES (section label + amber rule)     │
+//   │ ┌───────────┐  ┌───────────┐                 │  ← the grid
+//   │ │  #2 card  │  │  #3 card  │                 │     (2-col,
+//   │ └───────────┘  └───────────┘                 │      cards)
+//   │      … ranks 2–9, two per row …              │
+//   ├──────────────────────────────────────────────┤
+//   │ QUICK HITS (section label + amber rule)      │
+//   │ #10 headline · L/C/R   #11 headline · L/C/R  │  ← the scan rows
+//   │ #12 headline · L/C/R   #13 headline · L/C/R  │     (2-col,
+//   └──────────────────────────────────────────────┘      compact)
 //
-// Everything inline-styled (email clients strip <style> blocks and many
-// disregard classes), width-capped at 640px, stack-safe on phones (the
-// 50% cells wrap one-per-row naturally on narrow clients).
+//   • every table cell primitive is Outlook-safe (no CSS grid/flex),
+//   • mobile: hero full-width already, grid + quick-hits stack 1-per-row
+//     via the single @media block (WebKit/Blink clients — where phones
+//     read email),
+//   • stories from the subscriber's custom subtopics carry an amber
+//     "YOUR TOPIC — <label>" chip (an explicit taste declaration),
+//   • every link carries src=digest&usr=<accountId> so clicks teach the
+//     Interest Engine (digest_click, +4/term) and clear the
+//     emailed-but-never-clicked drag,
+//   • a footer line notes the personalisation when it's active.
 
 /** Site-matching spectrum colours (blue-500 / zinc-500 / red-500). */
 const BIAS_COLORS = { left: '#3b82f6', center: '#71717a', right: '#ef4444' }
@@ -357,13 +463,19 @@ function escHtml(s: string): string {
 }
 
 interface DigestRow {
-  story: TopicArticle
+  story: TopicArticle & { digestTopicLabel?: string }
   headline: string
   summary: string
 }
 
-function renderDigestEmail(opts: { email: string; note: string; rows: DigestRow[] }): string {
-  const { email, note, rows } = opts
+function renderDigestEmail(opts: {
+  email: string
+  note: string
+  rows: DigestRow[]
+  accountId?: string
+  personalized?: boolean
+}): string {
+  const { email, note, rows, accountId, personalized } = opts
   const greeting = email.split('@')[0] || 'there'
   const dateLine = new Date().toLocaleDateString('en-GB', {
     weekday: 'long',
@@ -373,64 +485,139 @@ function renderDigestEmail(opts: { email: string; note: string; rows: DigestRow[
   })
   const unsub = unsubscribeLink(email)
 
-  // ── One story card (a single-cell table so borders+radius travel well) ──
-  const card = (row: DigestRow, n: number): string => {
-    const s = row.story
+  // Story link — click-through pings back as digest_click (teaches the
+  // Interest Engine + clears the sent-without-click drag).
+  const storyUrl = (topicId: string): string =>
+    `https://neutralwire.org/?topic=${encodeURIComponent(topicId)}${
+      accountId ? `&src=digest&usr=${encodeURIComponent(accountId)}` : ''
+    }`
+
+  const biasPct = (s: TopicArticle) => {
     const total = Math.max(1, s.leanLeft + s.leanCenter + s.leanRight)
     const lPct = Math.round((s.leanLeft / total) * 100)
     const cPct = Math.round((s.leanCenter / total) * 100)
-    const rPct = Math.max(0, 100 - lPct - cPct)
-    const url = `https://neutralwire.org/?topic=${encodeURIComponent(s.topicId)}`
-    // Empty bias segments collapse to a 0-width cell; the row keeps a
-    // 6px height so the bar always reads as a bar.
+    return { lPct, cPct, rPct: Math.max(0, 100 - lPct - cPct) }
+  }
+  const biasBar = (s: TopicArticle, height: number): string => {
+    const { lPct, cPct, rPct } = biasPct(s)
     const seg = (pct: number, color: string) =>
-      `<td width="${Math.max(pct, 0)}%" style="background:${color};font-size:0;line-height:6px;height:6px;">&nbsp;</td>`
+      `<td width="${Math.max(pct, 0)}%" style="background:${color};font-size:0;line-height:${height}px;height:${height}px;">&nbsp;</td>`
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;table-layout:fixed;"><tr>${seg(lPct, BIAS_COLORS.left)}${seg(cPct, BIAS_COLORS.center)}${seg(rPct, BIAS_COLORS.right)}</tr></table>`
+  }
+  const biasLine = (s: TopicArticle): string => {
+    const { lPct, cPct, rPct } = biasPct(s)
+    return `<span style="color:${BIAS_COLORS.left};font-weight:bold;">L ${lPct}%</span> &middot; <span style="color:${BIAS_COLORS.center};font-weight:bold;">C ${cPct}%</span> &middot; <span style="color:${BIAS_COLORS.right};font-weight:bold;">R ${rPct}%</span>`
+  }
+  const yourTopicChip = (label?: string): string =>
+    label
+      ? `<span style="display:inline-block;margin:0 0 0 6px;padding:1px 7px;border-radius:99px;background:#fef3c7;color:#b45309;font-size:9.5px;font-weight:bold;font-family:Arial,Helvetica,sans-serif;letter-spacing:0.5px;">YOUR TOPIC &middot; ${escHtml(label).toUpperCase()}</span>`
+      : ''
+
+  // ── THE HERO: rank #1, full width, the lead story ──
+  const hero = (row: DigestRow): string => {
+    const s = row.story
+    const url = storyUrl(s.topicId)
+    return `
+  <!-- HERO — the lead story -->
+  <tr><td style="padding:14px 16px 4px 16px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;">
+      <tr><td style="border:1px solid #e4e4e7;border-radius:12px;padding:20px 22px 18px 22px;background:#ffffff;">
+        <p style="margin:0 0 7px;font-size:10.5px;letter-spacing:0.4px;color:#a1a1aa;font-family:Arial,Helvetica,sans-serif;font-weight:bold;">
+          <span style="color:#f59e0b;font-size:12px;">#1</span> &nbsp;&middot;&nbsp; ${s.coverage} ${s.coverage === 1 ? 'SOURCE' : 'SOURCES'} &nbsp;&middot;&nbsp; TODAY&rsquo;S LEAD${yourTopicChip(s.digestTopicLabel)}
+        </p>
+        <a href="${url}" style="font-size:21px;line-height:1.3;color:#18181b;font-weight:bold;text-decoration:none;font-family:Georgia,'Times New Roman',serif;">${escHtml(row.headline)}</a>
+        <p style="margin:9px 0 12px;font-size:13.5px;line-height:1.55;color:#3f3f46;font-family:Georgia,'Times New Roman',serif;">${escHtml(row.summary)}</p>
+        ${biasBar(s, 8)}
+        <p style="margin:5px 0 0;font-size:10.5px;color:#a1a1aa;font-family:Arial,Helvetica,sans-serif;">${biasLine(s)}</p>
+        <a href="${url}" style="display:inline-block;margin-top:12px;font-size:13px;font-weight:bold;color:#18181b;text-decoration:none;font-family:Arial,Helvetica,sans-serif;border-bottom:3px solid #f59e0b;padding-bottom:2px;">Read the full picture &rarr;</a>
+      </td></tr>
+    </table>
+  </td></tr>`
+  }
+
+  // ── THE GRID: one story card (ranks 2–9), two per row ──
+  const card = (row: DigestRow, n: number): string => {
+    const s = row.story
+    const url = storyUrl(s.topicId)
     return `
         <td width="50%" valign="top" class="cardcol" style="padding:6px 5px;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;">
             <tr><td style="border:1px solid #e4e4e7;border-radius:10px;padding:13px 14px;background:#ffffff;">
               <p style="margin:0 0 5px;font-size:10.5px;letter-spacing:0.4px;color:#a1a1aa;font-family:Arial,Helvetica,sans-serif;font-weight:bold;">
-                <span style="color:#f59e0b;">#${n}</span> &nbsp;&middot;&nbsp; ${s.coverage} ${s.coverage === 1 ? 'SOURCE' : 'SOURCES'}
+                <span style="color:#f59e0b;">#${n}</span> &nbsp;&middot;&nbsp; ${s.coverage} ${s.coverage === 1 ? 'SOURCE' : 'SOURCES'}${yourTopicChip(s.digestTopicLabel)}
               </p>
               <a href="${url}" style="font-size:15px;line-height:1.35;color:#18181b;font-weight:bold;text-decoration:none;font-family:Georgia,'Times New Roman',serif;">${escHtml(row.headline)}</a>
               <p style="margin:7px 0 10px;font-size:12.5px;line-height:1.5;color:#52525b;font-family:Georgia,'Times New Roman',serif;">${escHtml(row.summary)}</p>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;table-layout:fixed;">
-                <tr>${seg(lPct, BIAS_COLORS.left)}${seg(cPct, BIAS_COLORS.center)}${seg(rPct, BIAS_COLORS.right)}</tr>
-              </table>
-              <p style="margin:4px 0 0;font-size:10px;color:#a1a1aa;font-family:Arial,Helvetica,sans-serif;">
-                <span style="color:${BIAS_COLORS.left};font-weight:bold;">L ${lPct}%</span> &middot;
-                <span style="color:${BIAS_COLORS.center};font-weight:bold;">C ${cPct}%</span> &middot;
-                <span style="color:${BIAS_COLORS.right};font-weight:bold;">R ${rPct}%</span>
-              </p>
+              ${biasBar(s, 6)}
+              <p style="margin:4px 0 0;font-size:10px;color:#a1a1aa;font-family:Arial,Helvetica,sans-serif;">${biasLine(s)}</p>
               <a href="${url}" style="display:inline-block;margin-top:10px;font-size:12px;font-weight:bold;color:#18181b;text-decoration:none;font-family:Arial,Helvetica,sans-serif;border-bottom:2px solid #f59e0b;padding-bottom:1px;">Read the full picture &rarr;</a>
             </td></tr>
           </table>
         </td>`
   }
 
-  // ── Rows of two cards; an odd tail gets a filler cell to keep the table happy ──
-  const gridRows: string[] = []
-  for (let i = 0; i < rows.length; i += 2) {
-    const a = card(rows[i], i + 1)
+  // ── Section label row (small caps + amber rule) ──
+  const sectionLabel = (text: string): string => `
+  <tr><td style="padding:20px 26px 6px 26px;">
+    <p style="margin:0 0 5px;font-size:10.5px;letter-spacing:1.6px;color:#a1a1aa;font-family:Arial,Helvetica,sans-serif;font-weight:bold;">${text}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;"><tr>
+      <td width="34" style="border-top:2px solid #f59e0b;font-size:0;line-height:2px;height:2px;">&nbsp;</td>
+      <td style="border-top:1px solid #f0f0f2;font-size:0;line-height:2px;height:2px;">&nbsp;</td>
+    </tr></table>
+  </td></tr>`
+
+  // ── QUICK HITS: compact scan rows (ranks 10+), two columns ──
+  const quickHit = (row: DigestRow, n: number): string => `
+          <td width="50%" valign="top" class="qhcol" style="padding:2px 5px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+              <tr><td style="padding:8px 2px 9px 2px;border-bottom:1px solid #f0f0f2;">
+                <p style="margin:0 0 2px;font-size:10px;color:#a1a1aa;font-family:Arial,Helvetica,sans-serif;">
+                  <span style="color:#f59e0b;font-weight:bold;">#${n}</span> &middot; ${biasLine(row.story)} &middot; ${row.story.coverage}${row.story.digestTopicLabel ? ' &middot; <span style="color:#b45309;font-weight:bold;">YOUR TOPIC</span>' : ''}
+                </p>
+                <a href="${storyUrl(row.story.topicId)}" style="font-size:13px;line-height:1.4;color:#18181b;font-weight:600;text-decoration:none;font-family:Georgia,'Times New Roman',serif;">${escHtml(row.headline)}</a>
+              </td></tr>
+            </table>
+          </td>`
+
+  // ── Assemble the pyramid ──
+  const [heroRow, ...rest] = rows
+  const gridRows = rest.slice(0, 8) // ranks 2–9
+  const quickRows = rest.slice(8)   // ranks 10+
+
+  const gridHtml: string[] = []
+  for (let i = 0; i < gridRows.length; i += 2) {
+    const a = card(gridRows[i], i + 2)
     const b =
-      i + 1 < rows.length
-        ? card(rows[i + 1], i + 2)
+      i + 1 < gridRows.length
+        ? card(gridRows[i + 1], i + 3)
         : `<td width="50%" class="cardfill" style="padding:6px 5px;">&nbsp;</td>`
-    gridRows.push(`<tr>${a}${b}</tr>`)
+    gridHtml.push(`<tr>${a}${b}</tr>`)
+  }
+
+  const quickHtml: string[] = []
+  for (let i = 0; i < quickRows.length; i += 2) {
+    const a = quickHit(quickRows[i], i + 10)
+    const b =
+      i + 1 < quickRows.length
+        ? quickHit(quickRows[i + 1], i + 11)
+        : `<td width="50%" class="qhfill" style="padding:2px 5px;">&nbsp;</td>`
+    quickHtml.push(`<tr>${a}${b}</tr>`)
   }
 
   // MOBILE STACKING: every modern email client (Gmail, Apple Mail,
   // Outlook web — the WebKit/Blink renderers where ~all phone reading
   // happens) honours a <style> media query; legacy desktop Outlook strips
-  // it and keeps the fixed 2-column table, which is exactly right there
-  // (a desktop window is wide). The .cardcol/.cardfill classes carry no
-  // inline meaning, so clients that ignore the block lose nothing.
+  // it and keeps the fixed 2-column tables, which is exactly right there
+  // (a desktop window is wide). The classes carry no inline meaning, so
+  // clients that ignore the block lose nothing.
   return `<!doctype html>
 <html><head>
 <style type="text/css">
   @media only screen and (max-width:480px) {
     .cardcol { display:block !important; width:100% !important; }
     .cardfill { display:none !important; }
+    .qhcol { display:block !important; width:100% !important; }
+    .qhfill { display:none !important; }
   }
 </style>
 </head>
@@ -461,14 +648,26 @@ function renderDigestEmail(opts: { email: string; note: string; rows: DigestRow[
     <p style="margin:0 0 2px;font-size:11px;color:#a1a1aa;font-family:Arial,Helvetica,sans-serif;letter-spacing:0.3px;">${escHtml(dateLine)} &middot; ${rows.length} ${rows.length === 1 ? 'story' : 'stories'}</p>
     <p style="margin:0 0 10px;font-size:15px;color:#18181b;font-family:Georgia,'Times New Roman',serif;font-weight:bold;">Hello ${escHtml(greeting)}</p>
     <p style="margin:0;font-size:13px;line-height:1.55;color:#3f3f46;font-family:Georgia,'Times New Roman',serif;">${escHtml(note)}</p>
+    ${personalized ? '<p style="margin:7px 0 0;font-size:10.5px;line-height:1.5;color:#a1a1aa;font-family:Arial,Helvetica,sans-serif;">Ranked for what you actually read &mdash; every tap on a story teaches the next digest.</p>' : ''}
   </td></tr>
 
-  <!-- The grid -->
+  ${heroRow ? hero(heroRow) : ''}
+
+  ${gridRows.length > 0 ? sectionLabel('TOP STORIES') : ''}
+  ${gridRows.length > 0 ? `
   <tr><td style="padding:8px 14px 4px 14px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-      ${gridRows.join('\n')}
+      ${gridHtml.join('\n')}
     </table>
-  </td></tr>
+  </td></tr>` : ''}
+
+  ${quickRows.length > 0 ? sectionLabel('QUICK HITS') : ''}
+  ${quickRows.length > 0 ? `
+  <tr><td style="padding:6px 16px 8px 16px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+      ${quickHtml.join('\n')}
+    </table>
+  </td></tr>` : ''}
 
   <!-- Footer -->
   <tr><td style="padding:16px 26px 20px 26px;border-top:1px solid #f4f4f5;">

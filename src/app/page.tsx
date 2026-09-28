@@ -212,6 +212,30 @@ async function getNotifRaiseFix(): Promise<boolean> {
   }
 }
 
+// ── Server-rendered Interest Engine v2 flag (smartPersonalization) ──
+// The master switch for the server-side personalisation brain: ON = the
+// Relevant feed is re-ranked server-side from the learned interest
+// profile, the digest picks stories by taste, notifications score with
+// the engine. OFF = every surface returns to the ORIGINAL behaviour
+// (client-side localStorage boosts, newest-first digest, sector-keyword
+// notification scoring) — the owner's one-click revert from /debug.
+// Learning (tracking pings) continues either way; only CONSUMPTION stops.
+let smartPersonalizationFlagMemo: { value: boolean; ts: number } | null = null
+
+async function getSmartPersonalization(): Promise<boolean> {
+  if (smartPersonalizationFlagMemo && Date.now() - smartPersonalizationFlagMemo.ts < MESH_FLAG_TTL_MS) {
+    return smartPersonalizationFlagMemo.value
+  }
+  try {
+    const stored = await firebaseRead<boolean | string>('featureFlags/smartPersonalization')
+    const value = !(stored === false || stored === 'false')
+    smartPersonalizationFlagMemo = { value, ts: Date.now() }
+    return value
+  } catch {
+    return true
+  }
+}
+
 // ── Server-rendered monetization model flag (subscription vs donation) ──
 // THE MONETIZATION SWITCH, read server-side with the same 5s-memo
 // pattern so the first paint already knows which popup system + gates
@@ -336,6 +360,9 @@ export default async function Page() {
   // Notification raise-fix flag (default ON; switched from /debug).
   const notifRaiseFix = await getNotifRaiseFix()
 
+  // Interest Engine v2 master switch (default ON; the /debug revert).
+  const smartPersonalization = await getSmartPersonalization()
+
   // Monetization model flag — subscription tiers (default) vs the
   // original donation model; switched from /debug.
   const monetizationModel = await getMonetizationModel()
@@ -364,6 +391,7 @@ export default async function Page() {
           meshRelay={meshRelay}
           userCron={userCron}
           notifRaiseFix={notifRaiseFix}
+          smartPersonalization={smartPersonalization}
           monetizationModel={monetizationModel}
         />
       </VideoPreviewProvider>
