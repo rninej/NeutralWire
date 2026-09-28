@@ -64,6 +64,8 @@ import {
   type TopicArticle,
   type FeedArticle,
 } from '@/lib/news-aggregator'
+import { isUsefulSummary, sharesSignificantKeyword } from '@/lib/story-quality'
+import { upgradeToHighRes, upgradeBingThumb } from '@/lib/image-upgrade'
 import { isJunkTitle, isJunkDomain } from '@/lib/junk-filter'
 import { NEWS_SOURCES } from '@/lib/news-sources'
 import { CATALOG_BY_ID } from '@/lib/subtopic-catalog'
@@ -484,7 +486,12 @@ async function fetchBingImages(
             ? img
             : ''
         if (!httpsImg) continue
-        items.push({ title, imageUrl: httpsImg })
+        // THE BLUR FIX: a bare /th?id=…&pid=News URL serves a ~100×100
+        // crop — hopelessly blurry on a ~600px premium-subtopic card.
+        // upgradeBingThumb pins &w=600&h=400 (verified: the endpoint
+        // renders exactly that size), so every donor photo arrives
+        // card-ready.
+        items.push({ title, imageUrl: upgradeBingThumb(httpsImg) })
       }
       BING_CACHE.set(cacheKey, { ts: Date.now(), items })
       return items
@@ -744,7 +751,6 @@ function toTopicArticle(cluster: ClusteredTopic, keywords: string[] = []): Topic
   const leanLeft = arts.filter((a) => a.leaning === 'left').length
   const leanRight = arts.filter((a) => a.leaning === 'right').length
   const leanCenter = arts.length - leanLeft - leanRight
-  const withImage = arts.find((a) => a.imageUrl)
   const latest = Math.max(...arts.map((a) => a.iso || 0))
   const topicId = `ct_${cluster.title
     .toLowerCase()
@@ -757,16 +763,30 @@ function toTopicArticle(cluster: ClusteredTopic, keywords: string[] = []): Topic
   // whose seed was a two-stories-in-one wire roundup used to show that
   // compound mess as the card title.
   const headline = pickClusterTitle(arts, keywords)
-  // Summary: prefer a real RSS description (pool articles carry one);
-  // fall back to the best title (Google/GDELT items have none).
-  const withDescription = arts.find((a) => a.description && a.description.length > 40)
+  // Summary: prefer a real RSS description (pool articles carry one) —
+  // but only a USEFUL one (≥8 real words; the share-card "U.S." guard);
+  // otherwise fall back to the best title (Google/GDELT items have none).
+  const withDescription = arts.find(
+    (a) => a.description && a.description.length > 40 && isUsefulSummary(a.description),
+  )
   const summary =
     (withDescription?.description || arts[0]?.title || '').slice(0, 240)
+  // Image: the FIRST image-bearing article used to win by accident — and
+  // could be an off-topic merged article (the wrong-image bug) or a tiny
+  // thumbnail (the blurry-premium-subtopics bug). Now: prefer the first
+  // image-bearing article whose title is ON-TOPIC (shares a significant
+  // keyword with the headline), always upgraded to high-res; any image-
+  // bearing article is the fallback.
+  const imageCandidates = arts.filter((a) => a.imageUrl)
+  const onTopicImage = imageCandidates.find((a) =>
+    sharesSignificantKeyword(a.title, headline),
+  )
+  const imageSource = onTopicImage || imageCandidates[0]
   return {
     topicId,
     title: headline,
     summary,
-    imageUrl: withImage?.imageUrl || null,
+    imageUrl: imageSource?.imageUrl ? upgradeToHighRes(imageSource.imageUrl) : null,
     coverage: arts.length,
     leanLeft,
     leanCenter,
@@ -841,7 +861,10 @@ async function attachImages(
       if (score >= 0.35 && score > (best?.score || 0)) best = { url: b.imageUrl, score }
     }
     if (best) {
-      t.imageUrl = best.url
+      // Donated Bing thumbs are already card-sized (upgradeBingThumb ran
+      // at collection) — upgradeToHighRes is a no-op safety net for any
+      // non-Bing donor that slipped through.
+      t.imageUrl = upgradeToHighRes(best.url)
       usedDonors.add(best.url)
     }
   }
@@ -867,7 +890,10 @@ async function attachImages(
       }
     }
     if (best?.url) {
-      t.imageUrl = best.url
+      // Pool story thumbnails are RSS thumbnails — often width=140/240.
+      // Upgrade at attach time so premium subtopic cards never render a
+      // tiny thumbnail stretched to card size (the blur complaint).
+      t.imageUrl = upgradeToHighRes(best.url)
       usedDonors.add(best.url)
     } else if (bestMatch?.link) {
       ogPoolCandidates.set(t, bestMatch.link)
@@ -899,7 +925,9 @@ async function attachImages(
         tries += 1
         const og = await fetchOgImage(link)
         if (og) {
-          t.imageUrl = og
+          // og:image can itself be a small variant (BBC /240/, a Bing
+          // 100×100) — upgrade before it lands on a card.
+          t.imageUrl = upgradeToHighRes(og)
           return
         }
       }
@@ -1116,7 +1144,8 @@ export async function refreshCustomTopic(
             description: half,
             pubDate: null,
             iso: a.iso || Date.now(),
-            imageUrl: a.socialimage || null,
+            // GDELT socialimage can be a tiny variant — upgrade at ingestion.
+            imageUrl: a.socialimage ? upgradeToHighRes(a.socialimage) : null,
             sourceId: domain,
             sourceName: domain,
             sourceHomepage: `https://${domain}`,
@@ -1144,7 +1173,8 @@ export async function refreshCustomTopic(
         description: title,
         pubDate: null,
         iso: a.iso || Date.now(),
-        imageUrl: a.socialimage || null,
+        // GDELT socialimage can be a tiny variant — upgrade at ingestion.
+            imageUrl: a.socialimage ? upgradeToHighRes(a.socialimage) : null,
         sourceId: domain,
         sourceName: domain,
         sourceHomepage: `https://${domain}`,

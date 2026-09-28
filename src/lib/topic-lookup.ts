@@ -146,19 +146,25 @@ export async function findTopicAnywhere(
   const missingTs = knownMissing.get(topicId)
   if (missingTs && Date.now() - missingTs < MISSING_TTL_MS) return null
 
-  // 1. Archive (permanent storage — tiny read).
-  if (!archivedKnown.has(topicId)) {
-    try {
-      const archived = await firebaseRead<TopicArticle & { archivedAt?: number }>(
-        `archive/${topicId}`,
-      )
-      if (archived && (archived.topicId || archived.title)) {
-        archivedKnown.add(topicId)
-        return archived
-      }
-    } catch {
-      // silent — continue to live cache
+  // 1. Archive (permanent storage — tiny read, ETag-cached: warm repeats
+  //    are zero-byte 304s).
+  //    ALWAYS read it. The old shape gated the read behind
+  //    `!archivedKnown.has(topicId)` — once a warm instance had resolved
+  //    a topic ONCE, every later lookup SKIPPED the archive and depended
+  //    entirely on the live cache… which rotates. A safely-archived topic
+  //    then 404'd (shared links, story sheets) the moment its room
+  //    refreshed — the exact "broken for most older articles" report.
+  //    With the ETag cache the unconditional read costs ~nothing warm.
+  try {
+    const archived = await firebaseRead<TopicArticle & { archivedAt?: number }>(
+      `archive/${topicId}`,
+    )
+    if (archived && (archived.topicId || archived.title)) {
+      archivedKnown.add(topicId)
+      return archived
     }
+  } catch {
+    // silent — continue to live cache
   }
 
   // 2. Topic index — the O(1) path for every topic cached since the

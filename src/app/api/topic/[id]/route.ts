@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import { repairTopicPresentation } from '@/lib/story-quality'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -72,6 +73,13 @@ export async function GET(
     }
 
     const { archivedAt, ...rest } = topic
+    // ── SERVE-TIME PRESENTATION REPAIR (the asapilf fix, for every topic
+    //    cached before the attribution + summary guards shipped) ──
+    // A topic image attached to an OFF-TOPIC article is re-picked from
+    // the on-topic articles; a junk summary ("U.S.", "Shown because…")
+    // is replaced by the first useful article description or blanked.
+    // Shared with /api/og-image — one implementation, both serve paths.
+    const repaired = repairTopicPresentation(rest)
     const safeTopic: TopicArticle = {
       ...rest,
       articles: Array.isArray(rest.articles) ? rest.articles : [],
@@ -81,8 +89,8 @@ export async function GET(
       coverage: rest.coverage ?? 0,
       firstSeen: rest.firstSeen ?? 0,
       latestSeen: rest.latestSeen ?? 0,
-      imageUrl: rest.imageUrl ?? null,
-      summary: rest.summary ?? '',
+      imageUrl: repaired.imageUrl,
+      summary: repaired.summary,
     }
 
     const res = NextResponse.json({

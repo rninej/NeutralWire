@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { upgradeToHighRes } from '@/lib/image-upgrade'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,6 +55,17 @@ export async function GET(req: NextRequest) {
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .trim()
+
+  // ── High-res upgrade at SERVE time (the "blurry images, once and for
+  //    all" net) ──
+  // Every cached topic URL — main feed, My Country, premium subtopics,
+  // the archive — passes through this proxy, so upgrading HERE repairs
+  // every low-res URL ever stored (width=140, /240/, 100×100 Bing thumbs,
+  // NYT thumbStandard…) without waiting for the cache to rotate. New
+  // topics are also upgraded at build time (aggregator/custom-topics),
+  // but this is the net that catches everything else. Idempotent: an
+  // already-upgraded URL maps to itself.
+  url = upgradeToHighRes(url)
 
   // Validate URL is http/https
   if (!url.startsWith('http://') && !url.startsWith('https://')) {

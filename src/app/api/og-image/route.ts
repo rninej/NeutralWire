@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import { repairTopicPresentation } from '@/lib/story-quality'
 import { BANNER_PNG_BASE64, FALLBACK_JPG_BASE64 } from './overlay-assets'
 import { OG_W, OG_H, BAR, BANNER_REGION, buildBiasBarRegionSvg } from './overlay-geometry'
 
@@ -117,13 +118,23 @@ export async function GET(req: NextRequest) {
       return serveFallbackImage()
     }
 
-    const { imageUrl, leanLeft = 0, leanCenter = 0, leanRight = 0 } = topic
+    // ── SERVE-TIME IMAGE REPAIR (the asapilf fix, for every topic cached
+    //    before the attribution guard shipped) ──
+    // repairTopicPresentation (lib/story-quality.ts, shared with
+    // /api/topic/[id]): a topic image attached to an OFF-TOPIC article is
+    // re-picked from the on-topic articles; everything is upgraded to
+    // high-res so a 100×100 thumbnail can never be upscaled into this
+    // 1200×630 composite. Notification-override topics (articles: [])
+    // come back upgraded-only.
+    const { imageUrl: effectiveImage } = repairTopicPresentation(topic)
+
+    const { leanLeft = 0, leanCenter = 0, leanRight = 0 } = topic
 
     // ── 2. Fetch the article image ──
     let articleImageBuffer: Buffer | null = null
-    if (imageUrl) {
+    if (effectiveImage) {
       try {
-        const imgRes = await fetch(imageUrl, {
+        const imgRes = await fetch(effectiveImage, {
           signal: AbortSignal.timeout(8000),
           headers: {
             'User-Agent': 'Mozilla/5.0 (compatible; NeutralWireBot/1.0; +https://neutralwire.org)',

@@ -1,12 +1,15 @@
 'use client'
 
 /**
- * add-topic-button.tsx — the "+" chip with the golden diamond corner.
+ * add-topic-button.tsx — the "+" chip and the pinned custom-subtopic
+ *   chips for every subtopic-header row (cards / tabs / maxipills /
+ *   sheet / dock / classic variants).
  *
- * The Premium subtopic entry point, appended to every subtopic-header row
- * (cards / tabs / maxipills / sheet / dock / classic variants).
- * Golden diamond sits on the TOP-RIGHT corner of the + chip (per the user
- * spec) so the affordance reads "premium add".
+ * PREMIUM VISUAL LANGUAGE (Sep 2026, owner spec): NO diamond icons on the
+ * header chips — the premium mark is the GOLDEN GRADIENT TEXT itself
+ * (amber→yellow→amber, clipped to the glyphs), and the + button is a
+ * plain golden + (a real SVG gradient stroke) with NO corner badge.
+ * One idea everywhere: golden text = premium.
  *
  * • FREE-DISCOVERY (teaser) model: EVERYONE gets the picker — all 550+
  *   subtopics render for free visitors, so discovery costs nothing;
@@ -30,21 +33,54 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { PremiumDiamond } from '@/components/premium-ui'
 import {
   getCustomTopics,
   CUSTOM_TOPICS_EVENT,
   type CustomTopicRef,
 } from '@/lib/custom-topics-client'
 
+/** The golden gradient text classes shared by every premium chip label.
+ *  bg-clip-text + text-transparent clips the amber gradient to the glyphs;
+ *  the span sets its OWN color (transparent), so it wins over any
+ *  button-level text-color (active pill fills, hover states) — the golden
+ *  text survives every variant's active styling. */
+const GOLDEN_TEXT =
+  'bg-gradient-to-r from-amber-600 via-yellow-500 to-amber-600 bg-clip-text text-transparent dark:from-amber-400 dark:via-yellow-300 dark:to-amber-400'
+
+/** A Plus glyph stroked with a REAL SVG linear gradient (amber→yellow→
+ *  amber) — lucide's currentColor stroke can't take a CSS gradient, so
+ *  this is a hand-rolled 24×24 plus with a gradient stroke. Unique id per
+ *  instance (React.useId) so multiple + buttons never share a <defs> id. */
+function GoldenPlus({ className }: { className?: string }) {
+  const rawId = React.useId()
+  const gid = `nw-gold-${rawId.replace(/[^a-zA-Z0-9-]/g, '')}`
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      className={className}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2.6}
+    >
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#d97706" />
+          <stop offset="45%" stopColor="#facc15" />
+          <stop offset="100%" stopColor="#d97706" />
+        </linearGradient>
+      </defs>
+      <path d="M12 5v14M5 12h14" stroke={`url(#${gid})`} />
+    </svg>
+  )
+}
+
 export interface AddTopicChipProps {
   /** Complete sizing/shape for the chip — height, padding, font-size,
    *  radius, shrink — so it matches the variant's own chips. */
   chipClassName: string
-  /** Diamond corner-badge size (defaults to the cards-variant 14px). */
-  diamondClassName?: string
   /** Plus icon size (defaults to 17px). */
   iconClassName?: string
   /** Chip label — shown ≥sm only by default (mobile stays icon-only to
@@ -56,7 +92,6 @@ export interface AddTopicChipProps {
 
 export function AddTopicChip({
   chipClassName,
-  diamondClassName = 'h-[14px] w-[14px]',
   iconClassName = 'h-[17px] w-[17px]',
   label = 'Topics',
   labelClassName = 'hidden sm:inline',
@@ -82,6 +117,10 @@ export function AddTopicChip({
 
   return (
     <>
+      {/* The golden + button — NO corner badge (owner spec: "only golden +
+          button"); the gradient stroke on the glyph IS the premium
+          affordance. Same amber-tinted chip skin as before so it reads as
+          one family with the golden-text chips. */}
       <motion.button
         type="button"
         whileTap={{ scale: 0.94 }}
@@ -90,21 +129,14 @@ export function AddTopicChip({
         aria-label="Add a subtopic (Premium)"
         title="Add custom subtopics"
         className={cn(
-          'relative inline-flex items-center gap-1.5 whitespace-nowrap border border-amber-500/50 bg-amber-500/10 font-semibold text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400',
+          'relative inline-flex items-center gap-1.5 whitespace-nowrap border border-amber-500/50 bg-amber-500/10 font-semibold transition-colors hover:bg-amber-500/20',
           chipClassName,
         )}
       >
-        <Plus className={cn('shrink-0', iconClassName)} />
-        {label !== '' && <span className={labelClassName}>{label}</span>}
-        {/* The golden diamond, pinned to the chip's top-right corner */}
-        <span
-          className={cn(
-            'absolute -right-1 -top-1 flex items-center justify-center rounded-full bg-background',
-            diamondClassName,
-          )}
-        >
-          <PremiumDiamond className="h-full w-full" />
-        </span>
+        <GoldenPlus className={cn('shrink-0 drop-shadow-[0_0_1px_rgba(245,158,11,0.45)]', iconClassName)} />
+        {label !== '' && (
+          <span className={cn('text-amber-600 dark:text-amber-400', labelClassName)}>{label}</span>
+        )}
       </motion.button>
 
       {mounted &&
@@ -124,8 +156,9 @@ export function AddTopicChip({
 
 /**
  * Custom topic chips for a header row: the user's pinned custom
- * subtopics, rendered like category chips (Gem icon + label, active pill
- * when selected). Re-renders live when topics are added/removed.
+ * subtopics, rendered like category chips — with the label as GOLDEN
+ * GRADIENT TEXT (the premium mark, no diamond icon; owner spec Sep
+ * 2026). Re-renders live when topics are added/removed.
  *
  * Sizing comes ENTIRELY from `chipClassName` (each variant passes its own
  * chip geometry) — no hardcoded heights/fonts, so the chips blend into
@@ -137,7 +170,6 @@ export function CustomTopicChips({
   onSelect,
   chipClassName,
   activeChipClassName,
-  iconClassName = 'h-[15px] w-[15px]',
   truncate = false,
   rowClassName,
   trailing,
@@ -146,7 +178,6 @@ export function CustomTopicChips({
   onSelect: (category: string) => void
   chipClassName?: string
   activeChipClassName?: string
-  iconClassName?: string
   /** Clamp chip width + ellipsize the label (tight wrapping rows). */
   truncate?: boolean
   /** When set, chips render inside this wrapper row (used by maxipills:
@@ -154,10 +185,10 @@ export function CustomTopicChips({
      two adaptive rows). Rendered only while topics exist. */
   rowClassName?: string
   /** A node (typically the AddTopicChip) GLUED to the LAST chip — they
-   * wrap together in wrapping layouts, so the + button can never end up
-   * alone on a trailing row (the Pixel 8 Pro "3rd row with just +"
-   * layout bug). With no pinned topics the trailing node renders alone,
-   * exactly where the + used to sit. */
+     wrap together in wrapping layouts, so the + button can never end up
+     alone on a trailing row (the Pixel 8 Pro "3rd row with just +"
+     layout bug). With no pinned topics the trailing node renders alone,
+     exactly where the + used to sit. */
   trailing?: React.ReactNode
 }) {
   const [topics, setTopics] = React.useState<CustomTopicRef[]>([])
@@ -189,11 +220,23 @@ export function CustomTopicChips({
           'relative inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full font-semibold transition-colors',
           chipClassName,
           truncate && 'min-w-0 max-w-[104px] px-1.5',
-          active ? activeChipClassName : 'text-foreground/75 hover:bg-muted hover:text-foreground',
+          active
+            ? activeChipClassName || 'bg-amber-500/15 ring-1 ring-inset ring-amber-500/40'
+            : 'text-foreground/75 hover:bg-amber-500/10',
         )}
       >
-        <PremiumDiamond className={cn('shrink-0 opacity-80', iconClassName)} />
-        <span className={truncate ? 'min-w-0 truncate' : 'max-w-full truncate'}>{t.label}</span>
+        {/* Golden gradient text — the label IS the premium mark. The span
+            sets its own transparent color, so it stays golden on top of
+            every variant's active pill fill. */}
+        <span
+          className={cn(
+            GOLDEN_TEXT,
+            'font-bold',
+            truncate ? 'min-w-0 truncate' : 'max-w-full truncate',
+          )}
+        >
+          {t.label}
+        </span>
       </motion.button>
     )
   }

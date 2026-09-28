@@ -15,6 +15,19 @@ import {
 import { callAI, callVisionAI } from '@/lib/ai-providers'
 import { firebaseRead, firebasePatch } from '@/lib/firebase-server'
 import { isJunkTitle } from '@/lib/junk-filter'
+import { upgradeToHighRes } from '@/lib/image-upgrade'
+import {
+  sharesSignificantKeyword,
+  isUsefulSummary,
+  significantKeywordSet,
+} from '@/lib/story-quality'
+
+// Re-export for callers that historically imported them from here — ONE
+// implementation lives in the dependency-free lib/story-quality.ts (shared
+// with page.tsx generateMetadata and the OG-image route) and
+// lib/image-upgrade.ts (shared with the /api/img proxy, /api/og-image,
+// gdelt-aggregator and custom-topics).
+export { upgradeToHighRes, sharesSignificantKeyword, isUsefulSummary }
 
 // ---------- Types ----------
 export interface FeedArticle {
@@ -127,6 +140,24 @@ function titleKeywords(t: string): Set<string> {
   }
   return out
 }
+
+// ---------- Significant keywords + summary quality (the wrong-image /
+// wrong-merge / "U.S." share-card fixes) ----------
+// The implementations live in the dependency-free lib/story-quality.ts
+// (imported + re-exported above) so page.tsx generateMetadata and the
+// OG-image route can gate with the EXACT same rules without importing
+// this heavy module:
+//   • sharesSignificantKeyword — a merge (or an image pick) needs at
+//     least one story-IDENTIFYING shared word, never generic filler
+//     (first/time/record…). This is what kept "Andy Burnham's
+//     first-time buyer scheme" (shared: first, time → Jaccard 0.154)
+//     inside the SpaceX Starship cluster — with its housing photo as
+//     the topic image (the asapilf bug).
+//   • isUsefulSummary — a summary shown as a description must have ≥8
+//     real words and not be an internal note (GDELT's "Shown because…")
+//     or a bare section word ("U.S." — the shared-link card bug).
+//   • significantKeywordSet — the per-title significant keyword set used
+//     by the clustering gates below.
 
 function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0
@@ -357,6 +388,10 @@ function mergeNearDuplicateTopics(topics: TopicArticle[]): TopicArticle[] {
   if (topics.length < 2) return topics
 
   const kwSets = topics.map((t) => titleKeywords(t.title))
+  // Significant-keyword sets — the same anti-wrong-merge gate as
+  // clusterTopics: a merge needs at least one story-IDENTIFYING shared
+  // word, not just high-frequency filler (first/time/record…).
+  const sigSets = topics.map((t) => significantKeywordSet(t.title))
   const merged = new Array(topics.length).fill(false)
   const result: TopicArticle[] = []
 
@@ -377,10 +412,19 @@ function mergeNearDuplicateTopics(topics: TopicArticle[]): TopicArticle[] {
       for (const w of kwSets[j]) {
         if (kwSets[i].has(w)) shared++
       }
+      // …and at least one NON-generic shared keyword (the asapilf guard)
+      let sigShared = false
+      for (const w of sigSets[j]) {
+        if (sigSets[i].has(w)) {
+          sigShared = true
+          break
+        }
+      }
 
-      // Merge ONLY if BOTH conditions hold:
-      //   - Jaccard >= 0.12  (was 0.15 — lowered to catch more same-event stories)
-      //   - shared significant keywords >= 3  (at least 3 event-specific words in common)
+      // Merge ONLY if ALL conditions hold:
+      //   - Jaccard >= 0.12
+      //   - shared significant keywords >= 3
+      //   - at least one shared keyword is NON-generic (story-identifying)
       //
       // This is STRICTER than the previous OR-based threshold (Jaccard >= 0.12
       // OR shared >= 2), which caused false-positive merges between unrelated
@@ -389,7 +433,7 @@ function mergeNearDuplicateTopics(topics: TopicArticle[]): TopicArticle[] {
       // With AND, both titles must share 3+ significant keywords AND have a
       // Jaccard similarity >= 0.12. This catches genuine same-event stories
       // with different wording while rejecting unrelated stories.
-      if (sim >= 0.12 && shared >= 3) {
+      if (sim >= 0.12 && shared >= 3 && sigShared) {
         mergeIndices.push(j)
         merged[j] = true
       }
@@ -419,15 +463,36 @@ function mergeNearDuplicateTopics(topics: TopicArticle[]): TopicArticle[] {
       }
     }
     const bestTitle = topics[bestTitleIdx].title
-    const bestSummary = topics[bestTitleIdx].summary
+    // Summary: prefer the title-bearing topic's summary when it is
+    // actually USEFUL (≥8 real words — not "U.S."/"tk"/"Shown because…");
+    // otherwise take the first useful one from the merged cluster.
+    let bestSummary = topics[bestTitleIdx].summary
+    if (!isUsefulSummary(bestSummary)) {
+      const useful = cluster.find((t) => isUsefulSummary(t.summary))
+      if (useful) bestSummary = useful.summary
+    }
 
-    // Pick the best image (highest score)
-    let bestImage = cluster[0].imageUrl
+    // Pick the best image (highest score) — ATTRIBUTION-GATED: a topic's
+    // image may only represent the merged headline when that topic's own
+    // title shares a significant keyword with it. An off-topic member's
+    // high-scoring photo stays a last-resort fallback only.
+    let bestImage: string | null = null
+    let bestScore = -1
+    let fallbackImage: string | null = null
+    let fallbackScore = -1
     for (const t of cluster) {
-      if (t.imageUrl && (!bestImage || scoreImageUrl(t.imageUrl) > scoreImageUrl(bestImage))) {
+      if (!t.imageUrl) continue
+      const s = scoreImageUrl(t.imageUrl)
+      if (s > fallbackScore) {
+        fallbackImage = t.imageUrl
+        fallbackScore = s
+      }
+      if (s > bestScore && sharesSignificantKeyword(t.title, bestTitle)) {
         bestImage = t.imageUrl
+        bestScore = s
       }
     }
+    bestImage = bestImage || fallbackImage
 
     // Recompute lean counts from deduped articles
     let leanLeft = 0, leanCenter = 0, leanRight = 0
@@ -1950,61 +2015,12 @@ async function validateImageUrl(url: string): Promise<boolean> {
 }
 
 /**
- * Upgrade a low-resolution RSS thumbnail URL to a higher-resolution variant
- * for known publisher URL patterns. Returns the upgraded URL (or the
- * original if no upgrade applies).
- *
- * RSS feeds often include small thumbnails (240px, 140px, 96px). Many
- * publishers use predictable URL patterns where a dimension appears in
- * the path/query — we can swap it for a larger dimension to get a
- * full-resolution image suitable for cards (≥600px).
- *
- * Examples:
- *   BBC:      /ace/standard/240/...  →  /ace/standard/800/...
- *   Guardian: ?width=140             →  ?width=1200
- *   NYT:      -mediumSquareAt3X      →  -articleLarge (or keep, it's 3x)
- *   Independent: /width=1200 (already large, leave alone)
- *   France24: /w:1280/ (already large, leave alone)
- *   Telegraph: keep
- *   CNBC:     ?v=...&w=1920 (already large, leave alone)
+ * Upgrade a low-resolution image URL to its high-resolution variant —
+ * MOVED to the shared, dependency-free lib/image-upgrade.ts (imported and
+ * re-exported above) so every pipeline AND the /api/img proxy and the
+ * /api/og-image composite use the SAME rules. A low-res URL can no longer
+ * reach a pixel from any door.
  */
-function upgradeToHighRes(url: string): string {
-  if (!url) return url
-  try {
-    // BBC: /ace/standard/<N>/cpsprodpb/... → bump N to 800
-    // Also /ace/ic/<N>/ and /${N}x${N}/ variants
-    if (/ichef\.bbci\.co\.uk\//.test(url)) {
-      return url
-        .replace(/\/ace\/(?:standard|ic)\/\d+\//, '/ace/standard/800/')
-    }
-    // Guardian: width=NNN → width=1200
-    if (/i\.guim\.co\.uk\//.test(url)) {
-      return url.replace(/([?&])width=\d+/, '$1width=1200')
-    }
-    // NYT: -mediumSquareAt3X.jpg is 3x (good), but -thumbStandard / -small
-    // variants are tiny. Upgrade known small variants to -articleLarge.
-    if (/static\d?\.nyt\.com\//.test(url)) {
-      return url
-        .replace(/-thumbStandard\./, '-articleLarge.')
-        .replace(/-thumbLarge\./, '-articleLarge.')
-        .replace(/-small\./, '-articleLarge.')
-        .replace(/-mediumSquareAt3X\./, '-jumbo.') // jumbo is larger than mediumSquareAt3X
-    }
-    // Al Jazeera: /640/ or /240/ → /1280/
-    if (/www\.aljazeera\.com\//.test(url)) {
-      return url.replace(/\/(?:240|360|480|640)\//, '/1280/')
-    }
-    // HuffPost: resize as query param
-    if (/media\.cldnry\.s-nbcnews\.com\//.test(url)) {
-      return url.replace(/t_nbcnews-fp-\d+x\d+/, 't_nbcnews-fp-1200x630')
-    }
-    // Japan Times: keep /uploads/ images as-is (already full-res)
-    // Reuters/Independent/FT: already large in RSS
-    return url
-  } catch {
-    return url
-  }
-}
 
 /**
  * Score an image URL by likely resolution quality (higher = better).
@@ -2266,7 +2282,17 @@ export async function findImageForTopic(
   // Fetch OG from up to maxAttempts articles. RSS images we already have
   // (no fetch needed) — collect from the topic + all articles, then
   // upgrade each to a high-res variant.
-  const ogFetchPromises = sorted.slice(0, maxAttempts).map(async (a) => {
+  //
+  // ATTRIBUTION GATE (the asapilf fix): OG is only fetched from articles
+  // whose title shares a significant keyword with the topic headline, and
+  // an RSS image is only taken from an on-topic article (the topic's own
+  // imageUrl passes by definition). An unrelated cluster member's photo —
+  // e.g. the Independent's housing stock photo merged into the Starship
+  // story — can never enter the candidate list at all. The VLM check
+  // below stays as the second line of defence for subtle mismatches.
+  const onTopic = (title: string) => sharesSignificantKeyword(title, topic.title)
+  const ogTargets = sorted.filter((a) => onTopic(a.title))
+  const ogFetchPromises = ogTargets.slice(0, maxAttempts).map(async (a) => {
     try {
       return await fetchOgImage(a.link)
     } catch {
@@ -2277,7 +2303,7 @@ export async function findImageForTopic(
   const rssCandidates: string[] = []
   if (topic.imageUrl) rssCandidates.push(topic.imageUrl)
   for (const a of topic.articles) {
-    if (a.imageUrl) rssCandidates.push(a.imageUrl)
+    if (a.imageUrl && onTopic(a.title)) rssCandidates.push(a.imageUrl)
   }
   // Upgrade each RSS candidate to high-res + dedup
   const upgradedRss = Array.from(
@@ -2368,6 +2394,11 @@ function clusterTopics(
   const kwSets = articles.map((a) => titleKeywords(a.title))
   // Pre-compute as arrays for the "shared keyword count" check.
   const kwArrays = kwSets.map((s) => Array.from(s))
+  // SIGNIFICANT keywords per article (generic filler excluded) — the
+  // anti-wrong-merge gate: a cluster member must share at least one
+  // story-IDENTIFYING word (spacex, burnham, pride…), not just
+  // high-frequency filler (first, time, record…).
+  const sigSets = articles.map((a) => significantKeywordSet(a.title))
 
   const order = articles
     .map((_, i) => i)
@@ -2389,8 +2420,21 @@ function clusterTopics(
       if (assigned[j]) continue
       if (Math.abs(articles[i].iso - articles[j].iso) > TIME_WINDOW_MS) continue
 
+      // SIGNIFICANT-keyword gate — computed once per candidate pair.
+      // Without it, "X … for the first time" + "Y … first-time buyers"
+      // share {first, time} and Jaccard 0.154 → the unrelated Y story
+      // merges into X's cluster (the asapilf Starship/housing bug).
+      let sigShared = 0
+      const sigI = sigSets[i]
+      for (const w of sigSets[j]) {
+        if (sigI.has(w)) {
+          sigShared = 1
+          break
+        }
+      }
+
       const sim = jaccard(kwSets[i], kwSets[j])
-      if (sim >= JACCARD_THRESHOLD) {
+      if (sim >= JACCARD_THRESHOLD && sigShared > 0) {
         clusterIdx.push(j)
         assigned[j] = true
         continue
@@ -2408,7 +2452,7 @@ function clusterTopics(
           if (shared >= SHARED_KW_THRESHOLD) break
         }
       }
-      if (shared >= SHARED_KW_THRESHOLD) {
+      if (shared >= SHARED_KW_THRESHOLD && sigShared > 0) {
         clusterIdx.push(j)
         assigned[j] = true
       }
@@ -2428,6 +2472,13 @@ function clusterTopics(
     const seenLocalSourceIds = new Set<string>()
 
     const clusterArticles: FeedArticle[] = []
+    // Image candidates carry their SOURCE ARTICLE's title so the
+    // attribution guard (below) can check the photo's story against the
+    // final headline — a photo may only win if its own article is
+    // on-topic. Prevents an unrelated merged article's high-scoring
+    // stock photo (the Independent's housing photo on the Starship
+    // story) from ever becoming the topic image.
+    const imageCandidates: Array<{ url: string; title: string }> = []
     for (const idx of clusterIdx) {
       const a = articles[idx]
       const isLocal = localSourceIds.has(a.sourceId)
@@ -2447,16 +2498,11 @@ function clusterTopics(
         localCoverage++
       }
 
-      // Pick the HIGHEST-QUALITY image across all articles in the cluster
+      // Collect the HIGHEST-QUALITY image across all articles in the
+      // cluster (upgraded to high-res) — final pick happens after the
+      // headline is chosen, gated by attribution.
       if (a.imageUrl) {
-        const upgraded = upgradeToHighRes(a.imageUrl)
-        if (!bestImage) {
-          bestImage = upgraded
-        } else {
-          if (scoreImageUrl(upgraded) > scoreImageUrl(bestImage)) {
-            bestImage = upgraded
-          }
-        }
+        imageCandidates.push({ url: upgradeToHighRes(a.imageUrl), title: a.title })
       }
       if (a.iso < firstSeen) firstSeen = a.iso
       if (a.iso > latestSeen) latestSeen = a.iso
@@ -2504,6 +2550,40 @@ function clusterTopics(
           // Step 4: fallback — bestTitle already set to first article's title
         }
       }
+    }
+
+    // ── Summary quality: the title-bearing article's description can be
+    //    junk — a bare section word ("U.S."), a two-word quip ("tk"), or
+    //    GDELT's internal "Shown because…" note. Scan the cluster for
+    //    the first USEFUL description (≥8 real words) before accepting
+    //    it as the topic summary — share cards and snippets read this.
+    if (!isUsefulSummary(bestSummary)) {
+      const useful = clusterArticles.find((a) => isUsefulSummary(a.description))
+      if (useful) bestSummary = useful.description
+    }
+
+    // ── Image pick: the highest-scoring candidate whose OWN article is
+    //    on-topic — its title must share a significant keyword with the
+    //    final headline. An unrelated merged article's photo (however
+    //    high its width score) can no longer become the topic image; it
+    //    only wins as a last-resort fallback when nothing is on-topic.
+    {
+      let pick: string | null = null
+      let pickScore = -1
+      let fallback: string | null = null
+      let fallbackScore = -1
+      for (const c of imageCandidates) {
+        const s = scoreImageUrl(c.url)
+        if (s > fallbackScore) {
+          fallback = c.url
+          fallbackScore = s
+        }
+        if (s > pickScore && sharesSignificantKeyword(c.title, bestTitle)) {
+          pick = c.url
+          pickScore = s
+        }
+      }
+      bestImage = pick || fallback
     }
 
     const coverage = clusterArticles.length

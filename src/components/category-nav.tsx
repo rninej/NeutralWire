@@ -257,15 +257,14 @@ export function CategoryNav({
           )
         })}
 
-        {/* ── Premium custom subtopic chips (golden diamond mark) ── */}
+        {/* ── Premium custom subtopic chips (golden gradient text) ── */}
         <CustomTopicChips
           activeCategory={category}
           onSelect={(c) => onSelect(c as FeedCategory)}
           chipClassName={ADD_CHIP_CARDS}
-          iconClassName="h-[15px] w-[15px]"
         />
 
-        {/* ── The + button with the golden diamond corner (Premium) ── */}
+        {/* ── The golden + button (Premium) ── */}
         <AddTopicChip chipClassName={ADD_CHIP_CARDS} />
       </div>
 

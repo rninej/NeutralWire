@@ -3470,9 +3470,9 @@ function ClassicSubtopicBar({
         />
       ))}
 
-      {/* Premium custom subtopics + the golden-diamond add button —
-          classic-pill geometry INHERITING the adaptive font (no fixed
-          mobile text size) so they wrap like any other pill. The + is
+      {/* Premium custom subtopics (golden gradient text) + the golden
+          + button — classic-pill geometry INHERITING the adaptive font (no
+          fixed mobile text size) so they wrap like any other pill. The + is
           GLUED to the last chip (trailing) so it can never wrap onto a
           row of its own; a third row only appears when the visitor
           actually pins premium topics, and it carries a real chip. */}
@@ -3480,12 +3480,10 @@ function ClassicSubtopicBar({
         activeCategory={category}
         onSelect={(c) => onSelect(c as FeedCategory)}
         chipClassName="rounded-md px-2 py-1.5 sm:px-3 sm:py-1.5 sm:text-xs"
-        iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
         activeChipClassName="bg-foreground text-background shadow-sm"
         trailing={
           <AddTopicChip
             chipClassName="rounded-md px-2 py-1.5 sm:px-3 sm:py-1.5 sm:text-xs"
-            diamondClassName="h-[10px] w-[10px] sm:h-3 sm:w-3"
             iconClassName="h-3 w-3 sm:h-3.5 sm:w-3.5"
             label=""
           />

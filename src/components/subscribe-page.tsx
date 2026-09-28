@@ -32,6 +32,7 @@ import {
   PremiumDiamond,
   TierCard3,
   KofiCheckoutPanel,
+  CurrentPlanFeatures,
   FREE_FEATURES,
   PREMIUM_FEATURES,
   ULTRA_FEATURES,
@@ -446,6 +447,12 @@ function SubscribePageInner() {
                 </div>
               </div>
             </div>
+
+            {/* What the CURRENT plan actually includes (owner request):
+                a subscriber clicking their subscriptions surface sees their
+                plan's features, not just the badge + renewal + switch
+                buttons. */}
+            <CurrentPlanFeatures />
 
             {cancelNotice ? (
               <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">

@@ -44,8 +44,10 @@
 
 import type { Leaning } from '@/lib/news-sources'
 import type { TopicArticle, FeedArticle } from '@/lib/news-aggregator'
+import { isUsefulSummary, sharesSignificantKeyword } from '@/lib/story-quality'
 import { callAI } from '@/lib/ai-providers'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { upgradeToHighRes } from '@/lib/image-upgrade'
 
 const GDELT_API_URL = 'https://api.gdeltproject.org/api/v2/doc/doc'
 
@@ -918,6 +920,12 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : inter / union
 }
 
+// Significant-keyword gate (shared semantics with news-aggregator — see
+// sharesSignificantKeyword there): a merge needs at least one story-
+// IDENTIFYING shared word, not just generic filler (first/time/record…).
+// The same guard that keeps an unrelated housing story out of a SpaceX
+// cluster in the main feed applies to My Country topics.
+
 // ---------- Date parsing ----------
 // GDELT format: "20260728T151500Z"
 function parseGdeltDate(s: string): number {
@@ -941,31 +949,10 @@ function hashId(s: string): string {
   return 'g' + (h >>> 0).toString(36) // 'g' prefix = GDELT-sourced
 }
 
-// ---------- Image URL scoring + upgrade (mirrors news-aggregator.ts) ----------
-function upgradeToHighRes(url: string): string {
-  if (!url) return url
-  try {
-    if (/ichef\.bbci\.co\.uk\//.test(url)) {
-      return url.replace(/\/ace\/(?:standard|ic)\/\d+\//, '/ace/standard/800/')
-    }
-    if (/i\.guim\.co\.uk\//.test(url)) {
-      return url.replace(/([?&])width=\d+/, '$1width=1200')
-    }
-    if (/static\d?\.nyt\.com\//.test(url)) {
-      return url
-        .replace(/-thumbStandard\./, '-articleLarge.')
-        .replace(/-thumbLarge\./, '-articleLarge.')
-        .replace(/-small\./, '-articleLarge.')
-        .replace(/-mediumSquareAt3X\./, '-jumbo.')
-    }
-    if (/www\.aljazeera\.com\//.test(url)) {
-      return url.replace(/\/(?:240|360|480|640)\//, '/1280/')
-    }
-    return url
-  } catch {
-    return url
-  }
-}
+// ---------- Image URL upgrade ----------
+// MOVED to the shared lib/image-upgrade.ts (one implementation for the
+// aggregator, the GDELT pipeline, custom topics, /api/img and the OG
+// composite) — imported above.
 
 function scoreImageUrl(url: string): number {
   if (!url) return 0
@@ -1038,7 +1025,7 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
       if (assigned[j]) continue
       if (Math.abs(articles[i].iso - articles[j].iso) > TIME_WINDOW_MS) continue
       const sim = jaccard(kwSets[i], kwSets[j])
-      if (sim >= JACCARD_THRESHOLD) {
+      if (sim >= JACCARD_THRESHOLD && sharesSignificantKeyword(articles[i].title, articles[j].title)) {
         clusterIdx.push(j)
         assigned[j] = true
         continue
@@ -1051,7 +1038,7 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
           if (shared >= SHARED_KW_THRESHOLD) break
         }
       }
-      if (shared >= SHARED_KW_THRESHOLD) {
+      if (shared >= SHARED_KW_THRESHOLD && sharesSignificantKeyword(articles[i].title, articles[j].title)) {
         clusterIdx.push(j)
         assigned[j] = true
       }
@@ -1060,7 +1047,11 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
     // Build the topic from the cluster
     let bestTitle = articles[clusterIdx[0]].title
     let bestSummary = articles[clusterIdx[0]].description
+    // Image candidates carry their source article's title — the final
+    // pick (below the title selection) is attribution-gated so an
+    // off-topic merged article's photo can never become the topic image.
     let bestImage = articles[clusterIdx[0]].imageUrl
+    const imageCandidates: Array<{ url: string; title: string }> = []
     let firstSeen = articles[clusterIdx[0]].iso
     let latestSeen = articles[clusterIdx[0]].iso
     let leanLeft = 0, leanCenter = 0, leanRight = 0
@@ -1076,10 +1067,7 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
       }
       clusterArticles.push(a)
       if (a.imageUrl) {
-        const upgraded = upgradeToHighRes(a.imageUrl)
-        if (!bestImage || scoreImageUrl(upgraded) > scoreImageUrl(bestImage)) {
-          bestImage = upgraded
-        }
+        imageCandidates.push({ url: upgradeToHighRes(a.imageUrl), title: a.title })
       }
       if (a.iso < firstSeen) firstSeen = a.iso
       if (a.iso > latestSeen) latestSeen = a.iso
@@ -1121,6 +1109,39 @@ function clusterGdeltArticles(articles: FeedArticle[]): TopicArticle[] {
           }
         }
       }
+    }
+
+    // ── Summary quality: GDELT article descriptions are "Shown because…"
+    // diagnostics (never user-facing copy) and clusters can also carry
+    // bare section words. A non-useful summary becomes EMPTY — cards show
+    // no blurb and share cards fall back to the branded description,
+    // instead of leaking internal notes ("Shown because headline mentions
+    // japan") into the feed and og:description.
+    if (!isUsefulSummary(bestSummary)) {
+      const useful = clusterArticles.find((a) => isUsefulSummary(a.description))
+      bestSummary = useful ? useful.description : ''
+    }
+
+    // ── Image pick: highest-scoring candidate whose OWN article is
+    // on-topic (shares a significant keyword with the final headline);
+    // off-topic photos only win as a last-resort fallback.
+    {
+      let pick: string | null = null
+      let pickScore = -1
+      let fallback: string | null = null
+      let fallbackScore = -1
+      for (const c of imageCandidates) {
+        const s = scoreImageUrl(c.url)
+        if (s > fallbackScore) {
+          fallback = c.url
+          fallbackScore = s
+        }
+        if (s > pickScore && sharesSignificantKeyword(c.title, bestTitle)) {
+          pick = c.url
+          pickScore = s
+        }
+      }
+      bestImage = pick || fallback
     }
 
     topics.push({

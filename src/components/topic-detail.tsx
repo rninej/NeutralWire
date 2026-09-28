@@ -161,6 +161,17 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
   // not after the entire summary card has passed.
   const [askAiSticky, setAskAiSticky] = React.useState(false)
   const askAiButtonRef = React.useRef<HTMLButtonElement | null>(null)
+  // ── Compact-bar mode (owner request, Sep 2026) ──
+  // The sticky Ask AI used to collapse to icon-only and fold the Share
+  // label away on EVERY phone. For NON-ultra visitors the bar has plenty
+  // of room (no Export button renders — it is an Ultra-only surface), so
+  // both buttons keep their FULL form (wordmarks + all) — "you can take
+  // up the space, it's fine". Ultra (and the donation model, where
+  // everything is unlocked) still compacts on phones: the Export button
+  // joins the bar and a 360px row genuinely needs the elbow room.
+  const sub = useSubscription()
+  const exportInBar = sub.model === 'donation' || sub.entitlements.articleExport
+  const compactBar = exportInBar
   // The story dialog element itself. MUST be a ref, NOT
   // document.querySelector('[role="dialog"]') — other overlays can carry
   // the dialog role too (the cookie-consent banner renders EARLIER in the
@@ -739,22 +750,30 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
             bar. When the sticky Ask AI button appears (on scroll), it
             slides in to the LEFT of the like/share group — the group
             shifts left just enough to make room, not all the way left.
-            MOBILE OVERFLOW FIX (user-reported: the Export button glitched
-            when scrolling because the incoming Ask AI pushed the group
-            past the viewport): min-w-0 + flex-shrink on the group, the
-            sticky Ask AI is ICON-ONLY below sm (max-w-9 ≈ 36px instead of
-            128px), and the Share label folds away while askAiSticky is
-            true on phones — the bar now fits Close + AskAI + like/share +
-            Export on a 360px screen without squeezing anything. */}
+            MOBILE OVERFLOW FIX (historical): min-w-0 + flex-shrink on the
+            group; the sticky Ask AI is ICON-ONLY below sm (max-w-9 ≈ 36px
+            instead of 128px) and the Share label folds away while
+            askAiSticky is true on phones — the bar then fits Close +
+            AskAI + like/share + Export on a 360px screen without
+            squeezing anything.
+            NON-ULTRA (owner request): the Export button never renders, so
+            there is room to spare — the Ask AI wordmark stays and the
+            Share label NEVER folds. Compacting only applies to
+            Ultra/donation (see compactBar above). */}
         <div className="ml-auto flex min-w-0 items-center gap-2">
           {/* ── Sticky Ask AI button ──
               Sits to the LEFT of like/share (inside the right group).
               Appears ONLY when the user scrolls past the original Ask AI
               button. Fades + slides in from the right. Icon-only on phones
-              (the wordmark joins from sm up) so it costs 36px, not 128px. */}
+              (the wordmark joins from sm up) so it costs 36px, not 128px
+              — in compactBar mode only; non-ultra keeps the full label. */}
           <div
             className={`overflow-hidden transition-all duration-300 flex-shrink-0 ${
-              askAiSticky ? 'max-w-9 sm:max-w-32 opacity-100' : 'max-w-0 opacity-0'
+              askAiSticky
+                ? compactBar
+                  ? 'max-w-9 sm:max-w-32 opacity-100'
+                  : 'max-w-32 opacity-100'
+                : 'max-w-0 opacity-0'
             }`}
           >
             <button
@@ -765,7 +784,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
             >
               <span className="flex items-center gap-1.5 rounded-full bg-background px-2 sm:px-3 py-1.5 text-xs font-semibold">
                 <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
-                <span className="hidden sm:inline">Ask AI</span>
+                <span className={compactBar ? 'hidden sm:inline' : ''}>Ask AI</span>
               </span>
             </button>
           </div>
@@ -836,11 +855,11 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
                     className="flex items-center gap-1.5"
                   >
                     <Share2 className="h-3.5 w-3.5 text-orange-500" />
-                    {/* "Share" wordmark on all viewports EXCEPT phones
-                        while the sticky Ask AI is showing (the mobile
-                        overflow fix — the label folds to reclaim ~50px
-                        exactly when the bar is at its fullest). */}
-                    <span className={askAiSticky ? 'hidden sm:inline' : ''}>Share</span>
+                    {/* "Share" wordmark on all viewports EXCEPT phones in
+                        compactBar mode (Ultra/donation — the mobile overflow
+                        fix, the label folds exactly when the bar is at its
+                        fullest). Non-ultra keeps the label everywhere. */}
+                    <span className={compactBar && askAiSticky ? 'hidden sm:inline' : ''}>Share</span>
                   </motion.span>
                 )}
               </AnimatePresence>

@@ -3,6 +3,7 @@ import { cache } from 'react'
 import { notFound } from 'next/navigation'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import { isUsefulSummary } from '@/lib/story-quality'
 import { firebaseRead } from '@/lib/firebase-server'
 import { plainSummaryText, isTemplateSummary } from '@/lib/summary-sections'
 import { generateStorySummaryBounded } from '@/lib/summary-generate'
@@ -136,9 +137,13 @@ export async function generateMetadata({
   const { topic, storedSummary } = story
 
   const canonical = `/story/${encodeURIComponent(id)}`
-  // Prefer the real neutral summary (markup stripped) for snippets.
+  // Prefer the real neutral summary (markup stripped) for snippets —
+  // QUALITY-GATED (the share-card "U.S." bug): a junk stored summary
+  // (bare section word, GDELT "Shown because…" note) falls through to
+  // the branded description instead of leaking onto the share card.
+  const candidateSummary = plainSummaryText(storedSummary || topic.summary || '')
   const description =
-    plainSummaryText(storedSummary || topic.summary || '').slice(0, 200) ||
+    (isUsefulSummary(candidateSummary) ? candidateSummary : '').slice(0, 200) ||
     `How ${topic.articles.length || 'multiple'} outlets across the political spectrum cover this story.`
   // THE NOTIFICATION IMAGE (user request, Sep 2026): the /api/og-image
   // composite — the story's photo with the NEUTRALWIRE banner + the

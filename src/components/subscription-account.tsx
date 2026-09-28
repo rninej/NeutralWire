@@ -22,7 +22,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
-import { PremiumDiamond, PremiumBadge, TierComparisonGrid } from '@/components/premium-ui'
+import { PremiumDiamond, PremiumBadge, TierComparisonGrid, CurrentPlanFeatures } from '@/components/premium-ui'
 import {
   useSubscription,
   openUpgradeDialog,
@@ -197,6 +197,13 @@ export function SubscriptionAccountSection() {
               </span>
             ) : null}
           </div>
+
+          {/* ── The current plan's features (owner request): ON a plan, the
+              card shows WHAT the tier includes — not just the tier +
+              renewal + the 3-tier comparison grid. */}
+          {sub.model === 'subscription' && sub.tier !== 'free' ? (
+            <CurrentPlanFeatures />
+          ) : null}
 
           {/* ── The 3-tier comparison (Free / Premium / Ultra) — always
               visible in the subscription model so the whole system reads

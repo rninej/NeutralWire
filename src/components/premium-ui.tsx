@@ -1110,6 +1110,57 @@ export function TierComparisonGrid() {
   )
 }
 
+// ── "Your plan includes" (the my-subscription features card) ────────────
+// Owner request (Sep 2026): clicking the subscriptions surface while ON a
+// plan used to show only the tier badge + renewal date + switch/cancel —
+// never WHAT the plan actually includes. This card lists the CURRENT
+// tier's features with checkmarks (Premium: the premium list + the free
+// baseline; Ultra: the ultra list, which already carries "Everything in
+// Premium"), so a subscriber sees exactly what they're paying for.
+// Rendered on /subscribe (the header Premium button's destination) and
+// in the Account page's subscription card.
+export function CurrentPlanFeatures({ className }: { className?: string }) {
+  const sub = useSubscription()
+  if (sub.model !== 'subscription') return null
+  if (sub.tier === 'free') return null
+
+  const isUltra = sub.tier === 'ultra'
+  const features = isUltra ? ULTRA_FEATURES : PREMIUM_FEATURES
+  return (
+    <div
+      className={cn(
+        'rounded-xl border border-amber-500/40 bg-amber-500/5 p-3.5',
+        className,
+      )}
+    >
+      <div className="flex items-center gap-2">
+        {isUltra ? (
+          <MeteorShower className="h-4 w-4 shrink-0" />
+        ) : (
+          <PremiumDiamond className="h-4 w-4 shrink-0" />
+        )}
+        <span className="text-sm font-bold">
+          Your {isUltra ? 'Ultra' : 'Premium'} plan includes
+        </span>
+      </div>
+      <ul className="mt-2 grid grid-cols-1 gap-y-1.5 sm:grid-cols-2 sm:gap-x-4">
+        {features.map((f) => (
+          <li key={f} className="flex items-start gap-1.5 text-xs leading-snug">
+            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <span className="min-w-0 text-foreground/80">{f}</span>
+          </li>
+        ))}
+      </ul>
+      {!isUltra ? (
+        <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">
+          …plus everything in Free: every story, the bias bar, all sources, the
+          PWA and all 11 subtopic feeds.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 // ── Tiny brand glyphs (no external icon deps) ───────────────────────────
 function GoogleG({ className }: { className?: string }) {
   return (

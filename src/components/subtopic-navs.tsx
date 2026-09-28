@@ -158,19 +158,18 @@ export function SubtopicTabs({
           )
         })}
 
-        {/* Premium custom subtopics + the golden-diamond add button —
-            same height/padding as the tabs so the row reads as one bar */}
+        {/* Premium custom subtopics (golden gradient text) + the golden
+            + button — same height/padding as the tabs so the row reads as
+            one bar */}
         <CustomTopicChips
           activeCategory={category}
           onSelect={(c) => onSelect(c as FeedCategory)}
           chipClassName="h-11 sm:h-10 px-3.5 text-sm sm:text-[15px]"
-          iconClassName="h-4 w-4"
           activeChipClassName="text-foreground"
         />
         <div className="flex shrink-0 items-center pl-1">
           <AddTopicChip
             chipClassName="h-11 sm:h-10 rounded-full px-3.5 text-sm sm:text-[15px]"
-            diamondClassName="h-3 w-3"
             iconClassName="h-4 w-4"
             label=""
           />
@@ -287,13 +286,10 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
   //
   // MEASUREMENT: compare each row's FLOW children (pills, divider, the
   // + chip) against the row's right edge via getBoundingClientRect —
-  // NOT row.scrollWidth. scrollWidth also counts the + chip's
-  // absolutely-positioned golden-diamond corner badge, which pokes ~4px
-  // past the row's right edge BY DESIGN at every font size — the old
-  // scrollWidth check read that overhang as permanent overflow and
-  // floored the stepper at 8px ("the subtopics went mini"). Flow-rect
-  // measurement is immune to any badge/hint overhang and measures only
-  // real pill content.
+  // NOT row.scrollWidth. (Historical note from the diamond-badge era:
+  // scrollWidth also counted the + chip's absolutely-positioned corner
+  // badge overhang; the badge is gone but flow-rect measurement is kept —
+  // it measures only real pill content and is immune to any overhang.)
   const adapt = React.useCallback(
     (step: number) => {
       if (wide) return
@@ -426,18 +422,16 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
             {renderPill(cat)}
           </React.Fragment>
         ))}
-        {/* Premium custom subtopics + the golden-diamond add button —
-            pill geometry (h-7, wide font) so they match this row */}
+        {/* Premium custom subtopics (golden gradient text) + the golden
+            + button — pill geometry (h-7, wide font) so they match this row */}
         <CustomTopicChips
           activeCategory={category}
           onSelect={(c) => onSelect(c as FeedCategory)}
           chipClassName="h-7 px-3 text-[13px]"
-          iconClassName="h-3.5 w-3.5"
           activeChipClassName="bg-foreground text-background shadow-sm"
         />
         <AddTopicChip
           chipClassName="h-7 rounded-full px-2.5 text-[13px]"
-          diamondClassName="h-3 w-3"
           iconClassName="h-3.5 w-3.5"
           label="Add"
         />
@@ -464,12 +458,11 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
       </div>
       <div ref={row2Ref} className="flex w-full items-center gap-1">
         {ALL_CATS.slice(6).map(renderPill)}
-        {/* The golden-diamond + button — pill-height, icon-only (~26px),
+        {/* The golden + button — pill-height, icon-only (~26px),
             INHERITING the adaptive font. The old fixed-size chip forced
             the stepper to shrink every pill. */}
         <AddTopicChip
           chipClassName="h-6 rounded-md px-1.5"
-          diamondClassName="h-2.5 w-2.5"
           iconClassName="h-3 w-3"
           label=""
         />
@@ -487,7 +480,6 @@ export function SubtopicMaxiPills({ category, onSelect, country }: SubtopicNavPr
         onSelect={(c) => onSelect(c as FeedCategory)}
         rowClassName="no-scrollbar -mx-1 flex w-full items-center gap-1 overflow-x-auto px-1 py-0.5"
         chipClassName="h-7 rounded-md px-2 text-[12px]"
-        iconClassName="h-3.5 w-3.5"
         activeChipClassName="bg-foreground text-background shadow-sm"
       />
     </div>
@@ -644,8 +636,9 @@ function CategorySheet({
                     )
                   })}
 
-                  {/* Premium custom subtopics + the golden-diamond add
-                      button — 56px tile geometry so they match the sheet. */}
+                  {/* Premium custom subtopics (golden gradient text) +
+                      the golden + button — 56px tile geometry so they
+                      match the sheet. */}
                   <CustomTopicChips
                     activeCategory={category}
                     onSelect={(c) => {
@@ -653,13 +646,11 @@ function CategorySheet({
                       onClose()
                     }}
                     chipClassName="h-14 border rounded-xl px-3.5 text-sm"
-                    iconClassName="h-4 w-4"
                     activeChipClassName="border-foreground bg-foreground text-background shadow-sm"
                   />
                   <div className="flex items-center">
                     <AddTopicChip
                       chipClassName="h-14 rounded-xl px-3.5 text-sm"
-                      diamondClassName="h-3.5 w-3.5"
                       label="Add"
                       labelClassName=""
                     />
@@ -805,19 +796,18 @@ export function SubtopicHeaderDock({ category, onSelect, country }: SubtopicNavP
             </button>
           )
         })}
-        {/* Premium custom subtopics + the golden-diamond add button —
-            dock-tile styling so they read as first-class dock items. */}
+        {/* Premium custom subtopics (golden gradient text) + the golden
+            + button — dock-tile styling so they read as first-class dock
+            items. */}
         <CustomTopicChips
           activeCategory={category}
           onSelect={(c) => onSelect(c as FeedCategory)}
           chipClassName="h-[52px] w-[72px] flex-col justify-center gap-1 rounded-xl text-[10px] px-1"
-          iconClassName="h-[15px] w-[15px]"
           activeChipClassName="bg-foreground text-background shadow-sm"
         />
         <div className="flex shrink-0 items-center px-1">
           <AddTopicChip
             chipClassName="h-[52px] w-[72px] flex-col justify-center gap-1 rounded-xl px-1 text-[10px]"
-            diamondClassName="h-3 w-3"
             iconClassName="h-5 w-5"
             label="Add"
             labelClassName=""

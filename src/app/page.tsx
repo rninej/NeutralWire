@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { cookies } from 'next/headers'
 import { firebaseRead } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
+import { isUsefulSummary } from '@/lib/story-quality'
 import {
   normalizePopupMode,
   type PopupMode,
@@ -308,19 +309,29 @@ export async function generateMetadata({
       // renders in WhatsApp/Twitter/etc (even if the article image is
       // stale or blocked). The NW logo + bias bar are overlaid on top.
       const ogImage = `/api/og-image?topicId=${encodeURIComponent(topicId)}`
+      // Description — QUALITY-GATED (the share-card "U.S." bug): a topic's
+      // stored summary can be a bare section word ("U.S."), a two-word
+      // quip, or a GDELT "Shown because…" note. isUsefulSummary (shared
+      // with the aggregator, so the rules never drift) rejects those; the
+      // fallback describes what a share of NeutralWire actually IS instead
+      // of repeating the headline or leaking a fragment.
+      const goodSummary = isUsefulSummary(topic.summary)
+      const description = goodSummary
+        ? (topic.summary || '').slice(0, 200)
+        : 'Compare how left, right and center outlets cover this story — side by side on NeutralWire.'
       return {
         title: `${topic.title} — NeutralWire`,
-        description: topic.summary?.slice(0, 200) || topic.title,
+        description,
         openGraph: {
           title: topic.title,
-          description: topic.summary?.slice(0, 200) || 'Read this story on NeutralWire',
+          description,
           type: 'article',
           images: [{ url: ogImage, width: 1200, height: 630 }],
         },
         twitter: {
           card: 'summary_large_image',
           title: topic.title,
-          description: topic.summary?.slice(0, 200) || '',
+          description,
           images: [ogImage],
         },
       }
