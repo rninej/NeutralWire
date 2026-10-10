@@ -7,6 +7,9 @@ import { refreshCategory } from '@/lib/news-cache'
 import { sourcesForCountry } from '@/lib/country-detect'
 import { consumeLease, jobRecentlyRan, markJobRun, CRON_JOB_INTERVALS } from '@/lib/mesh/lease-server'
 import { preGenerateSummaries } from '@/lib/summary-generate'
+import { firebaseWrite, firebasePatch } from '@/lib/firebase-server'
+import { trimTopicForArchive, snapshotArchived, markSnapshotArchived } from '@/lib/topic-archive'
+import { buildSearchIndexEntry } from '@/lib/search-index'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -160,6 +163,58 @@ export async function GET(req: NextRequest) {
 
   const allDone = Promise.allSettled(refreshes.map((r) => r.done))
 
+  // ── THE ARCHIVE PASS (Oct 2026 — the GSC 404 fix) ──
+  // Google Search Console showed ~500 /story/<id> URLs as "not indexed:
+  // 404". Root cause: THIS cron (not the visitor-triggered /api/refresh)
+  // refreshes relevant__GB/top/rotated/mycountry — the rooms the news
+  // sitemap lists — but never ARCHIVED anything. Archiving relied on a
+  // visitor happening to open the same category later (rate-limit-willing)
+  // or the client-side archiver. On quiet rotations topics left the live
+  // cache with NO archive copy → their /story URLs 404'd forever.
+  // Now: every topic in every room this cron refreshes is archived in the
+  // SAME tick that surfaces it (idempotent PUTs, snapshot markers per
+  // instance, batches of 8) + indexed into searchIndex. A story that ever
+  // enters a sitemap-listed room can never 404 again.
+  const archivePass = allDone.then(async () => {
+    for (const r of refreshes) {
+      try {
+        const room = r.label.replace('relevant/GB', 'relevant__GB').replace('mycountry/GB', 'mycountry__GB')
+        const payload = await r.raw
+        const snapshotAt = payload?.updatedAt || 0
+        if (!payload?.topics?.length) continue
+        if (snapshotArchived(room, snapshotAt)) continue
+
+        const toArchive = payload.topics.filter((t) => t?.topicId)
+        const batchSize = 8
+        for (let i = 0; i < toArchive.length; i += batchSize) {
+          const batch = toArchive.slice(i, i + batchSize)
+          // Archive the trimmed permanent copy …
+          await Promise.allSettled(
+            batch.map((topic) =>
+              firebaseWrite(`archive/${topic.topicId}`, {
+                ...trimTopicForArchive(topic),
+                archivedAt: Date.now(),
+              }),
+            ),
+          )
+          // … and make it searchable in the same write burst (compact
+          // index entries — one PATCH per batch, not per topic).
+          const indexPatch: Record<string, ReturnType<typeof buildSearchIndexEntry>> = {}
+          for (const topic of batch) {
+            indexPatch[topic.topicId] = buildSearchIndexEntry(topic)
+          }
+          await firebasePatch('searchIndex', indexPatch).catch(() => {})
+        }
+        markSnapshotArchived(room, snapshotAt)
+        console.log(
+          `[cron/refresh-all] archived ${toArchive.length} topics from ${room}`,
+        )
+      } catch (err) {
+        console.warn(`[cron/refresh-all] archive pass for '${r.label}' failed:`, err)
+      }
+    }
+  })
+
   // ── Respond FAST; slow refreshes finish post-response ──
   // Wait at most SYNC_WAIT_MS for quick refreshes. Whether or not they
   // all finish in that window, we respond — cron-job.org gets its 200 in
@@ -179,66 +234,66 @@ export async function GET(req: NextRequest) {
     ),
   ])
 
+  // ── CUSTOM SUBTOPIC PASS — starts NOW, concurrent with the still-running
+  // main refreshes, so a slow RSS room can never starve it (the old
+  // `await allDone` + 45s gate skipped premium refreshes on ~every heavy
+  // tick — part of why subtopics felt stale). Cadence itself lives in
+  // customTopicsDueForRefresh: 8h per topic (owner spec: slower than the
+  // 30min normal rooms, visibly alive).
+  const customTopicPass = (async () => {
+    try {
+      const { customTopicsDueForRefresh, fillCustomTopic } = await import('@/lib/custom-topics')
+      const due = await customTopicsDueForRefresh(4)
+      for (const topicId of due) {
+        try {
+          // Adaptive per-topic budget: split what's left of the tick
+          // (60s maxDuration) across the due topics so one heavy fill
+          // can never eat the whole tick — and never START a fresh fill
+          // when the tick is nearly spent.
+          const remaining = 52_000 - (Date.now() - t0)
+          if (remaining < 5000) {
+            console.log(`[cron/refresh-all] custom topics: tick nearly spent, deferring ${due.length - due.indexOf(topicId)} topic(s) to the next tick`)
+            break
+          }
+          const perTopic = Math.max(6000, Math.floor(remaining / Math.max(1, due.length)))
+          const feed = await fillCustomTopic(topicId, {
+            aiFilter: true,
+            mode: 'background',
+            budgetMs: perTopic,
+          })
+          console.log(
+            `[cron/refresh-all] custom topic '${topicId}' refreshed: ${feed?.topics?.length || 0} topics, ${feed?.articleCount || 0} articles (${Date.now() - t0}ms into the tick)`,
+          )
+        } catch (err) {
+          console.warn(`[cron/refresh-all] custom topic '${topicId}' refresh failed:`, err)
+        }
+      }
+    } catch (err) {
+      console.warn('[cron/refresh-all] custom-topic refresh pass failed:', err)
+    }
+  })()
+
   // Belt-and-suspenders: registering the pending work with `after()` keeps
   // the function alive until every refresh settles (even the ones that
   // outlive the response), up to maxDuration. Without this, a recycled
   // instance could drop an unfinished refresh.
   after(async () => {
-    await allDone
+    await Promise.allSettled([allDone, archivePass, customTopicPass])
     console.log(
       `[cron/refresh-all] all refreshes settled after ${Date.now() - t0}ms (response went out earlier)`,
     )
-
-    // ── CUSTOM SUBTOPIC REFRESH (Premium, low-load tail) ──
-    // The user spec: "if something is wrong during the refresh rss cron job
-    // when there is less load from others a request is sent to ai api with
-    // news articles and the ai properly filters it". Runs AFTER the main
-    // refreshes settle (this tail), only when the tick has budget left,
-    // rotating a few subscribed topics per tick (hour-bucketed spread —
-    // each topic refreshes ~daily, the AI filter runs here where load is
-    // low). Topics nobody subscribes to cost zero.
-    try {
-      const elapsed = Date.now() - t0
-      if (elapsed < 45_000) {
-        const { customTopicsDueForRefresh, fillCustomTopic } = await import('@/lib/custom-topics')
-        const due = await customTopicsDueForRefresh(3)
-        for (const topicId of due) {
-          try {
-            // Adaptive per-topic budget: the tick has (60s maxDuration -
-            // elapsed - the digest tail's share) left; split it across the
-            // due topics so one heavy fill can never eat the whole tick.
-            const perTopic = Math.max(5000, Math.floor((55_000 - (Date.now() - t0)) / Math.max(1, due.length)))
-            const feed = await fillCustomTopic(topicId, {
-              aiFilter: true,
-              mode: 'background',
-              budgetMs: perTopic,
-            })
-            console.log(
-              `[cron/refresh-all] custom topic '${topicId}' refreshed: ${feed?.topics?.length || 0} topics, ${feed?.articleCount || 0} articles (${Date.now() - t0}ms into the tick)`,
-            )
-          } catch (err) {
-            console.warn(`[cron/refresh-all] custom topic '${topicId}' refresh failed:`, err)
-          }
-        }
-      } else {
-        console.log(
-          `[cron/refresh-all] skipping custom-topic refresh — tick already at ${elapsed}ms`,
-        )
-      }
-    } catch (err) {
-      console.warn('[cron/refresh-all] custom-topic refresh pass failed:', err)
-    }
 
     // ── DIGEST EMAIL TAIL (the offline-user guarantee) ──
     // The user spec: "if users aren't online the system uses the refresh
     // rss cron job to send the email using resend". After the feeds are
     // fresh, one catch-up sweep delivers the newsletters of subscribers
     // whose last send is staler than their frequency interval — nobody
-    // needs a browser open anywhere. Runs LAST in the tail (fresh feeds →
-    // better newsletters) and only while the tick still has budget.
+    // needs a browser open anywhere. Runs after the archive + custom
+    // passes settle (fresh feeds → better newsletters) and only while
+    // the tick still has budget.
     try {
       const elapsed = Date.now() - t0
-      if (elapsed < 50_000) {
+      if (elapsed < 55_000) {
         const { digestSweep } = await import('@/lib/digest')
         const result = await digestSweep({ catchup: true, cap: 8, trigger: 'refresh-all-tail' })
         console.log(
@@ -264,7 +319,7 @@ export async function GET(req: NextRequest) {
     // already deep into its maxDuration budget. Best-effort by design.
     try {
       const elapsed = Date.now() - t0
-      if (elapsed < 40_000) {
+      if (elapsed < 55_000) {
         const settled = await Promise.allSettled(refreshes.map((r) => r.raw))
         const freshTopics = settled.flatMap((s) =>
           s.status === 'fulfilled' && s.value?.topics ? s.value.topics : [],

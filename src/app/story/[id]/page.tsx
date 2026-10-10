@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { cache } from 'react'
 import { notFound } from 'next/navigation'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
-import type { TopicArticle } from '@/lib/news-aggregator'
+import type { TopicArticle, FeedArticle } from '@/lib/news-aggregator'
 import { isUsefulSummary } from '@/lib/story-quality'
 import { firebaseRead } from '@/lib/firebase-server'
 import { plainSummaryText, isTemplateSummary } from '@/lib/summary-sections'
@@ -13,6 +13,7 @@ import {
   SITE_URL,
   SITE_NAME,
   SITE_LOGO_URL,
+  SITE_TAGLINE,
   ogImageForTopic,
   heroImageForUrl,
 } from '@/lib/site'
@@ -35,6 +36,12 @@ import {
  *                        raw HTML always ships complete), dates,
  *                        left/centre/right coverage panel (real outlet
  *                        links), NewsArticle JSON-LD, canonical + OG.
+ *
+ * ── REDESIGN (Oct 2026, "the story page is disgusting") ──
+ * Full visual overhaul: real NW logo in the header (owner request),
+ * branded coverage hero, bias-percentage chips, lean-coloured article
+ * cards with outlet avatars, brand-gradient CTA. All metadata, JSON-LD,
+ * ISR and data paths are UNCHANGED — purely presentational.
  *
  * ── Bandwidth safety (the 6.2 GB rule) ──
  * The topic lookup goes through findTopicAnywhere → archive/<id> first
@@ -247,11 +254,55 @@ function newsArticleJsonLd(
 
 const LEAN_META: Record<
   'left' | 'center' | 'right',
-  { label: string; dot: string; text: string }
+  {
+    label: string
+    short: string
+    dot: string
+    text: string
+    accent: string
+    avatar: string
+    chip: string
+  }
 > = {
-  left: { label: 'Left-leaning outlets', dot: 'bg-blue-500', text: 'text-blue-600 dark:text-blue-400' },
-  center: { label: 'Centre outlets', dot: 'bg-zinc-500', text: 'text-zinc-600 dark:text-zinc-400' },
-  right: { label: 'Right-leaning outlets', dot: 'bg-red-500', text: 'text-red-600 dark:text-red-400' },
+  left: {
+    label: 'Left-leaning outlets',
+    short: 'LEFT',
+    dot: 'bg-blue-500',
+    text: 'text-blue-600 dark:text-blue-400',
+    accent: 'border-l-blue-500 dark:border-l-blue-400',
+    avatar: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 ring-blue-500/30',
+    chip: 'bg-blue-500/10 text-blue-700 dark:text-blue-300 ring-blue-500/30',
+  },
+  center: {
+    label: 'Centre outlets',
+    short: 'CENTRE',
+    dot: 'bg-zinc-500',
+    text: 'text-zinc-600 dark:text-zinc-400',
+    accent: 'border-l-zinc-400 dark:border-l-zinc-500',
+    avatar: 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 ring-zinc-500/30',
+    chip: 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-300 ring-zinc-500/30',
+  },
+  right: {
+    label: 'Right-leaning outlets',
+    short: 'RIGHT',
+    dot: 'bg-red-500',
+    text: 'text-red-600 dark:text-red-400',
+    accent: 'border-l-red-500 dark:border-l-red-400',
+    avatar: 'bg-red-500/10 text-red-600 dark:text-red-400 ring-red-500/30',
+    chip: 'bg-red-500/10 text-red-700 dark:text-red-300 ring-red-500/30',
+  },
+}
+
+/** The first letter of an outlet's name, for the avatar bubble. */
+function outletInitial(name: string): string {
+  const clean = (name || '').replace(/^(the)\s+/i, '').trim()
+  return (clean[0] || '?').toUpperCase()
+}
+
+function articleHref(a: FeedArticle): string {
+  // Google News RSS links are redirects; they still work as hrefs —
+  // keep the outlet's own link verbatim.
+  return a.link || '#'
 }
 
 // ---------- page ----------
@@ -276,135 +327,231 @@ export default async function StoryPage({ params }: StoryProps) {
   for (const a of topic.articles || []) {
     if (a?.leaning && a.leaning in byLean) byLean[a.leaning].push(a)
   }
+  const leanTotal =
+    (topic.leanLeft || 0) + (topic.leanCenter || 0) + (topic.leanRight || 0)
+  const pct = (n: number) =>
+    leanTotal > 0 ? Math.round((n / leanTotal) * 100) : 0
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Minimal top bar — a quiet way back into the live app */}
-      <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-2.5">
-          <a href="/" className="flex items-center gap-2" aria-label="NeutralWire home">
-            <span className="flex h-5 w-5 items-center justify-center rounded-sm bg-gradient-to-b from-blue-500 via-zinc-400 to-red-500" />
-            <span className="text-sm font-bold tracking-tight">{SITE_NAME}</span>
+      {/* ── Branded header — the real NW logo (owner request) + a quiet
+          way back into the live app ── */}
+      <header className="sticky top-0 z-10 border-b border-border bg-background/90 backdrop-blur-md">
+        <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-3">
+          <a href="/" className="flex items-center gap-2.5" aria-label="NeutralWire home">
+            {/* The NW mark — the same Z-in-a-rounded-square used across
+                the app, favicons and the OG banner. */}
+            { }
+            <img
+              src="/logo.svg"
+              alt=""
+              width={30}
+              height={30}
+              className="h-[30px] w-[30px] rounded-md ring-1 ring-black/10 dark:ring-white/20"
+            />
+            <span className="flex flex-col leading-none">
+              <span className="text-base font-extrabold tracking-tight">{SITE_NAME}</span>
+              <span className="mt-0.5 hidden text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground sm:block">
+                Left · Centre · Right
+              </span>
+            </span>
           </a>
           <a
             href={`/?topic=${encodeURIComponent(id)}`}
-            className="rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            className="shrink-0 rounded-full bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm transition-transform hover:scale-[1.03] active:scale-95"
           >
-            Compare live in the app →
+            Compare live →
           </a>
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl px-4 pb-16">
-        {/* Hero — the notification image: the story photo composited
-            with the NEUTRALWIRE banner + the L/C/R bias bar (1200×630,
-            rendered by /api/og-image and CDN-cached 7 days). */}
-        <img
-          src={composite}
-          alt={topic.title}
-          className="mt-4 aspect-[1200/630] w-full rounded-xl border border-border bg-muted object-cover"
-          loading="eager"
-          fetchPriority="high"
-        />
+      <main className="mx-auto max-w-3xl px-4 pb-20 pt-6">
+        {/* ── Coverage eyebrow ── */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+            <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
+            <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+            {topic.articles?.length || 0} outlets · one story
+          </span>
+          {firstSeen ? (
+            <time
+              dateTime={iso(firstSeen)}
+              className="text-xs font-medium text-muted-foreground"
+            >
+              {utcDate(firstSeen)}
+            </time>
+          ) : null}
+        </div>
 
-        {/* Headline block */}
-        <h1 className={`text-2xl font-bold leading-tight tracking-tight mt-6 md:text-3xl`}>
+        {/* ── Hero — the notification image: the story photo composited
+            with the NEUTRALWIRE banner + the L/C/R bias bar (1200×630,
+            rendered by /api/og-image and CDN-cached 7 days). ── */}
+        <div className="mt-4 overflow-hidden rounded-2xl border border-border shadow-lg shadow-black/5 dark:shadow-black/25">
+          { }
+          <img
+            src={composite}
+            alt={topic.title}
+            className="aspect-[1200/630] w-full bg-muted object-cover"
+            loading="eager"
+            fetchPriority="high"
+          />
+        </div>
+
+        {/* ── Headline block ── */}
+        <h1 className="mt-6 text-[1.75rem] font-extrabold leading-[1.15] tracking-tight md:text-4xl">
           {topic.title}
         </h1>
 
-        {/* THE Neutral Summary — the exact card the app renders. The
-            summary is generated DURING the render when missing (see
-            getStoryData), so the raw HTML normally ships the complete
-            LLM summary — what Googlebot indexes. The client-side
-            upgrade below remains only as the rare fallback for when the
-            render-time generation failed (e.g. a provider outage). */}
-        <StorySummaryLive
-          topicId={id}
-          title={topic.title}
-          articles={(topic.articles || []).slice(0, 12).map((a) => ({
-            title: a.title,
-            description: a.description || '',
-            sourceName: a.sourceName,
-            leaning: a.leaning || '',
-          }))}
-          initialSummary={storedSummary || topic.summary || ''}
-          hasStoredSummary={Boolean(storedSummary)}
-        />
-
-        {/* Visible dates + coverage + lean distribution (E-E-A-T: dates
-            must be human-visible, not just in JSON-LD) */}
-        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          {firstSeen && (
+        {/* ── Story meta: dates + outlet count ── */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {firstSeen ? (
             <time dateTime={iso(firstSeen)}>
               Published {utcDate(firstSeen)}, {utcTime(firstSeen)} UTC
             </time>
-          )}
-          {latestSeen && latestSeen !== firstSeen && (
+          ) : null}
+          {latestSeen && latestSeen !== firstSeen ? (
             <time dateTime={iso(latestSeen)}>· updated {utcDate(latestSeen)}</time>
-          )}
-          <span>· {topic.articles?.length || 0} outlets</span>
+          ) : null}
+          <span>· {topic.articles?.length || 0} sources</span>
         </div>
 
-        <div className="mt-5">
+        {/* ── THE Neutral Summary — the exact card the app renders. The
+            summary is generated DURING the render when missing (see
+            getStoryData), so the raw HTML normally ships the complete
+            LLM summary — what Googlebot indexes. ── */}
+        <div className="mt-6">
+          <StorySummaryLive
+            topicId={id}
+            title={topic.title}
+            articles={(topic.articles || []).slice(0, 12).map((a) => ({
+              title: a.title,
+              description: a.description || '',
+              sourceName: a.sourceName,
+              leaning: a.leaning || '',
+            }))}
+            initialSummary={storedSummary || topic.summary || ''}
+            hasStoredSummary={Boolean(storedSummary)}
+          />
+        </div>
+
+        {/* ── Bias breakdown: the bar + percentage chips (the at-a-glance
+            answer to "how split is the coverage?") ── */}
+        <section className="mt-8 rounded-2xl border border-border bg-muted/30 p-5">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">
+              How the spectrum splits
+            </h2>
+            <div className="flex items-center gap-1.5">
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ring-1 ${LEAN_META.left.chip}`}>
+                L {pct(topic.leanLeft || 0)}%
+              </span>
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ring-1 ${LEAN_META.center.chip}`}>
+                C {pct(topic.leanCenter || 0)}%
+              </span>
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ring-1 ${LEAN_META.right.chip}`}>
+                R {pct(topic.leanRight || 0)}%
+              </span>
+            </div>
+          </div>
           <BiasBar
             left={topic.leanLeft}
             center={topic.leanCenter}
             right={topic.leanRight}
             showLabels
           />
-        </div>
-
-        {/* Coverage panel — the NeutralWire core value: same story,
-            three framings, real links to every outlet. */}
-        <section className="mt-10 space-y-8">
-          {(['left', 'center', 'right'] as const).map((lean) => {
-            const arts = byLean[lean]
-            if (!arts.length) return null
-            const meta = LEAN_META[lean]
-            return (
-              <div key={lean}>
-                <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
-                  <span className={`h-2 w-2 rounded-full ${meta.dot}`} aria-hidden />
-                  <span className={meta.text}>{meta.label}</span>
-                  <span className="font-normal text-muted-foreground">({arts.length})</span>
-                </h2>
-                <ul className="space-y-3">
-                  {arts.map((a) => (
-                    <li key={a.id || a.link} className="rounded-lg border border-border p-3">
-                      <a
-                        href={a.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block text-sm font-medium leading-snug hover:underline"
-                      >
-                        {a.title}
-                      </a>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-                        <span className="font-medium">{a.sourceName}</span>
-                        {a.iso ? <span>· {utcDate(a.iso)}</span> : null}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )
-          })}
         </section>
 
-        {/* CTA into the interactive app (deep link opens this exact story) */}
-        <section className="mt-12 rounded-xl border border-border bg-muted/40 p-6 text-center">
-          <p className="text-sm font-medium">
-            See how these outlets frame every story — side by side, updated live.
-          </p>
-          <a
-            href={`/?topic=${encodeURIComponent(id)}`}
-            className="mt-4 inline-flex items-center justify-center rounded-full bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-transform hover:scale-[1.02]"
-          >
-            Open in {SITE_NAME}
-          </a>
-          <p className="mt-3 text-xs text-muted-foreground">
-            Free · no paywalls · left, centre &amp; right on every story
-          </p>
+        {/* ── Coverage panel — the NeutralWire core value: same story,
+            three framings, real links to every outlet. ── */}
+        <section className="mt-10">
+          <div className="mb-5 flex items-baseline justify-between">
+            <h2 className="text-lg font-extrabold tracking-tight">
+              How each side frames it
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              {topic.articles?.length || 0} reports
+            </span>
+          </div>
+
+          <div className="space-y-8">
+            {(['left', 'center', 'right'] as const).map((lean) => {
+              const arts = byLean[lean]
+              if (!arts.length) return null
+              const meta = LEAN_META[lean]
+              return (
+                <div key={lean}>
+                  <h3 className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em]">
+                    <span className={`h-2 w-2 rounded-full ${meta.dot}`} aria-hidden />
+                    <span className={meta.text}>{meta.label}</span>
+                    <span className="font-medium text-muted-foreground">
+                      {arts.length}
+                    </span>
+                  </h3>
+                  <ul className="space-y-2.5">
+                    {arts.map((a) => (
+                      <li
+                        key={a.id || a.link}
+                        className={`rounded-xl border border-border border-l-[3px] ${meta.accent} bg-card/60 p-4 transition-shadow hover:shadow-md hover:shadow-black/5 dark:hover:shadow-black/20`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ring-1 ${meta.avatar}`}
+                            aria-hidden
+                          >
+                            {outletInitial(a.sourceName)}
+                          </span>
+                          <span className="truncate text-xs font-semibold">
+                            {a.sourceName || 'Outlet'}
+                          </span>
+                          {a.iso ? (
+                            <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                              {utcDate(a.iso)}
+                            </span>
+                          ) : null}
+                        </div>
+                        <a
+                          href={articleHref(a)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-2.5 block text-sm font-semibold leading-snug hover:underline"
+                        >
+                          {a.title}
+                        </a>
+                        {a.description ? (
+                          <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                            {a.description}
+                          </p>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+
+        {/* ── CTA into the interactive app — the brand gradient (blue →
+            zinc → red, the same spectrum the whole page speaks) ── */}
+        <section className="mt-12 overflow-hidden rounded-2xl border border-border">
+          <div className="bg-gradient-to-r from-blue-600/90 via-zinc-500/90 to-red-600/90 px-6 py-8 text-center text-white">
+            <p className="text-base font-bold leading-snug">
+              See how these outlets frame every story — side by side, updated live.
+            </p>
+            <p className="mt-1 text-xs font-medium text-white/80">
+              {SITE_TAGLINE}
+            </p>
+            <a
+              href={`/?topic=${encodeURIComponent(id)}`}
+              className="mt-5 inline-flex items-center justify-center rounded-full bg-white px-7 py-2.5 text-sm font-bold text-zinc-900 shadow-md transition-transform hover:scale-[1.03] active:scale-95"
+            >
+              Open in {SITE_NAME}
+            </a>
+            <p className="mt-3 text-[11px] font-medium text-white/75">
+              Free · no paywalls · left, centre &amp; right on every story
+            </p>
+          </div>
         </section>
 
         {/* NewsArticle structured data */}
@@ -416,15 +563,28 @@ export default async function StoryPage({ params }: StoryProps) {
         />
       </main>
 
-      <footer className="border-t border-border py-6 text-center text-xs text-muted-foreground">
-        <a href="/" className="hover:underline">{SITE_NAME}</a>
-        {' · '}
-        <a href="/privacy" className="hover:underline">Privacy policy</a>
-        {' · '}
-        <span>
-          Aggregated from {(topic.articles?.length || 0)}{' '}
-          {(topic.articles?.length || 0) === 1 ? 'outlet' : 'outlets'} across the political spectrum
-        </span>
+      <footer className="border-t border-border bg-muted/30 py-8">
+        <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 px-4 text-center">
+          { }
+          <img
+            src="/logo.svg"
+            alt="NeutralWire logo"
+            width={34}
+            height={34}
+            className="h-[34px] w-[34px] rounded-md ring-1 ring-black/10 dark:ring-white/20"
+          />
+          <p className="text-sm font-bold tracking-tight">{SITE_NAME}</p>
+          <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
+            Aggregated from {topic.articles?.length || 0}{' '}
+            {(topic.articles?.length || 0) === 1 ? 'outlet' : 'outlets'} across
+            the political spectrum. Headlines stay the property of their
+            publishers — links go straight to the source.
+          </p>
+          <nav className="flex items-center gap-4 text-xs text-muted-foreground">
+            <a href="/" className="font-medium hover:underline">Today&apos;s top stories</a>
+            <a href="/privacy" className="hover:underline">Privacy policy</a>
+          </nav>
+        </div>
       </footer>
     </div>
   )

@@ -87,12 +87,14 @@ export async function readSearchIndex(): Promise<Record<string, SearchIndexEntry
 
 /** Build the compact index entry from a full topic. Kept SMALL on
  *  purpose — the whole index node is read per (cold) search; a few bytes
- *  saved per entry × tens of thousands of archived topics matters. */
+ *  saved per entry × tens of thousands of archived topics matters.
+ *  `at` carries 12 outlet headlines × 120 chars — cross-source search
+ *  (paste another outlet's headline → find this story) lives on these. */
 export function buildSearchIndexEntry(topic: TopicArticle): SearchIndexEntry {
   const articleTitles = (topic.articles || [])
-    .map((a) => (a.title || '').trim().slice(0, 80))
+    .map((a) => (a.title || '').trim().slice(0, 120))
     .filter(Boolean)
-    .slice(0, 6)
+    .slice(0, 12)
   return {
     t: (topic.title || '').slice(0, 120),
     s: (topic.summary || '').slice(0, 150),

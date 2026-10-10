@@ -1,6 +1,11 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v30: 404 PASS-THROUGH — the navigation handler treated non-ok server
+//      responses (404s) as network failures and served the "Waiting for
+//      connection…" offline page for DEAD story URLs, hiding the branded
+//      story-not-found page in installed PWAs. A 404 is a real server
+//      answer: pass it through (never cached). Cache-name bump v29 → v30.
 // v28: PUSH DISPLAY URL ABSOLUTIZATION — icon, badge, image and action
 //      button icons in the push payload are now resolved to ABSOLUTE URLs
 //      (new URL(u, self.location.origin)) before showNotification(). Some
@@ -120,9 +125,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v29'
-const API_CACHE = 'neutralwire-api-v29'
-const IMG_CACHE = 'neutralwire-img-v29'
+const SHELL_CACHE = 'neutralwire-shell-v30'
+const API_CACHE = 'neutralwire-api-v30'
+const IMG_CACHE = 'neutralwire-img-v30'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
@@ -349,8 +354,13 @@ self.addEventListener('fetch', (event) => {
         } catch {
           networkRes = null
         }
-        if (networkRes && networkRes.ok) {
-          putWithEviction(SHELL_CACHE, req, networkRes.clone(), 5)
+        if (networkRes && (networkRes.ok || networkRes.status === 404)) {
+          // v27: a 404 is a REAL server answer (the branded story-not-found
+          // page) — pass it through instead of treating it as a network
+          // failure. Dead /story/<id> links in installed PWAs were showing
+          // the "Waiting for connection…" offline page, hiding the helpful
+          // 404 UI (top-stories CTA). Only ok responses are cached.
+          if (networkRes.ok) putWithEviction(SHELL_CACHE, req, networkRes.clone(), 5)
           return networkRes
         }
         // Network failed, timed out, or errored → cached HTML.
@@ -383,8 +393,8 @@ self.addEventListener('fetch', (event) => {
         } catch {
           networkRes = null
         }
-        if (networkRes && networkRes.ok) {
-          putWithEviction(SHELL_CACHE, req, networkRes.clone(), 5)
+        if (networkRes && (networkRes.ok || networkRes.status === 404)) {
+          if (networkRes.ok) putWithEviction(SHELL_CACHE, req, networkRes.clone(), 5)
           return networkRes
         }
         // The network genuinely failed (offline / origin down) — return

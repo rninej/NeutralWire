@@ -1360,16 +1360,30 @@ async function withBudget<T>(p: Promise<T>, ms: number): Promise<T | null> {
  * Subscription tracking: `customSubscriptions/<topicId> = { count, updatedAt }`
  * — incremented when a user adds the topic, decremented when removed, so
  * we never spend CPU on topics nobody follows.
- *
- * Rotation: hash(topicId) % 24 === current UTC hour → refreshes every ~24h
- * per topic, spread across the day; at most MAX_PER_TICK per tick.
  */
-export async function customTopicsDueForRefresh(maxPerTick = 3): Promise<string[]> {
+/**
+ * Which custom (premium) subtopics are due for a refresh this hour?
+ *
+ * OWNER SPEC (Oct 2026): the RSS refresh cron must ALSO refresh premium
+ * custom subtopics — but at a SLOWER rate than normal subtopics. Normal
+ * rooms rotate every 30 min (relevant/top/mycountry) to ~7h (weekly
+ * category rotation). Premium topics run on an 8-HOUR cadence: each
+ * topic is due when `hashCode(id) % 8 === hour % 8`, i.e. exactly one
+ * hour-slot every 8 hours (3 refreshes/day/topic), permanently spread
+ * across the day so no tick ever fills more than a few topics.
+ *
+ * (Was a 24h cycle — `hashCode(id) % 24 === hour` — which in practice
+ * read as "my subtopic never refreshes" whenever its bucket was missed
+ * by the 45s tail gate. 8h keeps it clearly slower than the normal
+ * rooms while staying visibly alive.)
+ */
+export async function customTopicsDueForRefresh(maxPerTick = 4): Promise<string[]> {
   const subs = await firebaseRead<Record<string, { count?: number }>>('customSubscriptions')
   if (!subs) return []
   const hour = new Date().getUTCHours()
+  const slot = hour % 8
   const due = Object.entries(subs)
-    .filter(([id, v]) => (v?.count || 0) > 0 && hashCode(id) % 24 === hour)
+    .filter(([id, v]) => (v?.count || 0) > 0 && hashCode(id) % 8 === slot)
     .map(([id]) => id)
   return due.slice(0, maxPerTick)
 }

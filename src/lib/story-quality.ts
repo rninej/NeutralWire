@@ -43,8 +43,10 @@ const GENERIC_WORDS = new Set([
 ])
 
 /** Base stopwords for keyword extraction (kept local so this module
- *  stays dependency-free — mirrors the aggregator's STOPWORDS). */
-const STOPWORDS = new Set([
+ *  stays dependency-free — mirrors the aggregator's STOPWORDS).
+ *  Exported for search-match.ts (query tokenization uses the same list
+ *  so "significant" means one thing across the whole pipeline). */
+export const STOPWORDS = new Set([
   'a','an','the','and','or','but','if','then','else','for','of','to','in','on','at','by','with','from','as','is','are','was','were','be','been','being','this','that','these','those','it','its','they','them','their','there','here','we','us','our','you','your','he','she','his','her','my','me','not','no','yes','do','does','did','done','have','has','had','will','would','can','could','should','may','might','must','shall','about','after','before','between','during','through','over','under','up','down','out','off','again','more','most','some','such','only','own','same','so','than','too','very','just','also','new','one','two','three','said','says','say','saying','news','report','reports','reported','amid','amidst','while','because','since','until','without','within','against','above','below','into','onto','upon','who','what','when','where','why','how','which','whom','whose','whether','either','neither','both','each','other','another','via','am','pm','gmt','utc',
 ])
 

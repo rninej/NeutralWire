@@ -5,6 +5,7 @@ import {
   readSearchIndex,
   type SearchIndexEntry,
 } from '@/lib/search-index'
+import { queryTokens, scoreCandidate, snippetAroundTokens } from '@/lib/search-match'
 import { getRequesterTier } from '@/lib/subscriptions'
 import type { CategoryCachePayload, TopicArticle, FeedArticle } from '@/lib/news-aggregator'
 
@@ -46,12 +47,21 @@ interface SearchResponse {
 /**
  * Server-side search across EVERY NeutralWire article ever.
  *
- * Two layers, both case-insensitive (query + text are lowercased):
+ * Two layers, both scored by lib/search-match.ts (token-overlap):
  *   1. LIVE cache — every category node under newsCache/ (the last ~48h).
  *   2. PERMANENT ARCHIVE — the searchIndex over archive/<topicId> (every
  *      story ever archived, as old as the site). The index is backfilled
  *      lazily here, so the first few searches after deploy converge the
  *      historical backlog.
+ *
+ * MATCHING (Oct 2026 — the cross-source upgrade): pure substring search
+ * could never find a NeutralWire story from ANOTHER outlet's headline
+ * (different phrasing on every wire). Now the query is tokenized and
+ * scored against the topic title, the summary, EVERY outlet headline in
+ * the cluster, and article descriptions — so pasting e.g. the BBC's own
+ * headline surfaces the NeutralWire story that used the BBC article.
+ * Exact substring matches still rank first (score bonus), and
+ * single-word queries behave exactly as before.
  *
  * This is what the client falls back to when the in-page client-side
  * search (which only filters currently-displayed topics) yields no
@@ -60,8 +70,10 @@ interface SearchResponse {
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams
-  const q = (sp.get('q') || '').trim().toLowerCase()
+  const qRaw = (sp.get('q') || '').trim()
+  const q = qRaw.toLowerCase()
   const maxHits = Math.min(60, Math.max(5, Number(sp.get('limit') || '20')))
+  const tokens = queryTokens(qRaw)
 
   const t0 = Date.now()
 
@@ -130,56 +142,61 @@ export async function GET(req: NextRequest) {
     if (seenTopicIds.has(topic.topicId)) return
     // Null-safe: GDELT/AI-filled topics can carry missing titles — a bare
     // .toLowerCase() on those 500'd the whole search endpoint.
-    const titleMatch = (topic.title || '').toLowerCase().includes(q)
-    const summaryMatch = (topic.summary || '').toLowerCase().includes(q)
-    if (!titleMatch && !summaryMatch) {
-      // Search articles within the topic
-      if (topic.articles) {
-        for (const article of topic.articles) {
-          const artTitleMatch = (article.title || '').toLowerCase().includes(q)
-          const artDescMatch = (article.description || '').toLowerCase().includes(q)
-          const sourceMatch = (article.sourceName || '').toLowerCase().includes(q)
-          if (artTitleMatch || artDescMatch || sourceMatch) {
-            seenTopicIds.add(topic.topicId)
-            hits.push({
-              topic: { ...topic, articles: [] },
-              article,
-              matchedField: artTitleMatch ? 'title' : sourceMatch ? 'source' : 'summary',
-              snippet: artTitleMatch
-                ? article.title
-                : sourceMatch
-                  ? article.sourceName
-                  : makeSnippet(article.description || '', q),
-              fromArchive: false,
-            })
-            return
-          }
-        }
-      }
-      return
-    }
+    const articles = topic.articles || []
+    const m = scoreCandidate(tokens, qRaw, {
+      title: topic.title || '',
+      summary: topic.summary || '',
+      articleTitles: articles.map((a) => a.title || ''),
+      descriptions: articles.map((a) => a.description || ''),
+    })
+    if (!m) return
     seenTopicIds.add(topic.topicId)
+
+    // Which article matched best? (the cross-source path: the pasted
+    // headline belongs to ONE outlet — surface that outlet's link.)
+    let bestArticle: FeedArticle | null = null
+    let bestArticleHits = -1
+    for (const article of articles) {
+      let hitsN = 0
+      for (const tok of tokens) {
+        if ((article.title || '').toLowerCase().includes(tok)) hitsN++
+      }
+      if (hitsN > bestArticleHits) {
+        bestArticleHits = hitsN
+        bestArticle = article
+      }
+    }
+
     hits.push({
       topic: { ...topic, articles: [] },
-      article: {
-        id: topic.topicId,
-        title: topic.title,
-        link: '',
-        description: topic.summary || '',
-        pubDate: null,
-        iso: topic.latestSeen || 0,
-        imageUrl: topic.imageUrl,
-        sourceId: '',
-        sourceName: '',
-        sourceHomepage: '',
-        leaning: 'center',
-        country: '',
-        category: catKey,
-      },
-      matchedField: titleMatch ? 'title' : 'summary',
-      snippet: titleMatch ? topic.title : makeSnippet(topic.summary || '', q),
+      article:
+        bestArticle ||
+        {
+          id: topic.topicId,
+          title: topic.title,
+          link: '',
+          description: topic.summary || '',
+          pubDate: null,
+          iso: topic.latestSeen || 0,
+          imageUrl: topic.imageUrl,
+          sourceId: '',
+          sourceName: '',
+          sourceHomepage: '',
+          leaning: 'center',
+          country: '',
+          category: catKey,
+        },
+      matchedField: m.titleMatched > 0 || m.articleMatched > 0 ? 'title' : 'summary',
+      snippet:
+        m.titleMatched > 0
+          ? topic.title || ''
+          : bestArticle && bestArticleHits > 0
+            ? bestArticle.title
+            : snippetAroundTokens(topic.summary || bestArticle?.description || '', tokens),
       fromArchive: false,
-    })
+      // score rides along for the final sort (stripped before responding)
+      ...(m as object),
+    } as SearchHit)
   }
 
   // ── Layer 2: permanent archive (every story EVER) ──
@@ -194,14 +211,13 @@ export async function GET(req: NextRequest) {
         if (!entry || !entry.t) continue // tombstones / junk
         archiveSearched++
         if (seenTopicIds.has(topicId)) continue // already found live
-        const t = entry.t.toLowerCase()
-        const s = (entry.s || '').toLowerCase()
         const articleTitles = entry.at || []
-        const titleMatch = t.includes(q)
-        const summaryMatch = s.includes(q)
-        const articleTitleMatch = !titleMatch && !summaryMatch &&
-          articleTitles.some((at) => at.toLowerCase().includes(q))
-        if (!titleMatch && !summaryMatch && !articleTitleMatch) continue
+        const m = scoreCandidate(tokens, qRaw, {
+          title: entry.t,
+          summary: entry.s || '',
+          articleTitles,
+        })
+        if (!m) continue
 
         seenTopicIds.add(topicId)
         const archiveTopic: TopicArticle = {
@@ -216,6 +232,20 @@ export async function GET(req: NextRequest) {
           firstSeen: entry.d || 0,
           latestSeen: entry.d || 0,
           articles: [],
+        }
+        // The pasted headline usually belongs to one archived outlet —
+        // surface that outlet's own headline as the snippet.
+        let bestAt = ''
+        let bestAtHits = -1
+        for (const at of articleTitles) {
+          let hitsN = 0
+          for (const tok of tokens) {
+            if (at.toLowerCase().includes(tok)) hitsN++
+          }
+          if (hitsN > bestAtHits) {
+            bestAtHits = hitsN
+            bestAt = at
+          }
         }
         hits.push({
           topic: archiveTopic,
@@ -234,35 +264,56 @@ export async function GET(req: NextRequest) {
             country: '',
             category: 'archive',
           },
-          matchedField: titleMatch || articleTitleMatch ? 'title' : 'summary',
-          snippet: titleMatch
-            ? entry.t
-            : articleTitleMatch
-              ? articleTitles.find((at) => at.toLowerCase().includes(q)) || entry.t
-              : makeSnippet(entry.s || '', q),
+          matchedField: m.titleMatched > 0 || m.articleMatched > 0 ? 'title' : 'summary',
+          snippet:
+            m.titleMatched > 0
+              ? entry.t
+              : bestAtHits > 0
+                ? bestAt
+                : snippetAroundTokens(entry.s || '', tokens),
           fromArchive: true,
-        })
+          ...(m as object),
+        } as SearchHit)
         if (hits.length >= maxHits) break
     }
   } catch {
     // archive layer is best-effort — live results still return
   }
 
-  // Sort: title matches first, then by recency.
+  // Sort: relevance score first (exact substring + token coverage), then
+  // title-matched over summary-matched, then recency.
   hits.sort((a, b) => {
+    const sa = (a as SearchHit & { score?: number }).score || 0
+    const sb = (b as SearchHit & { score?: number }).score || 0
+    if (sa !== sb) return sb - sa
     if (a.matchedField === 'title' && b.matchedField !== 'title') return -1
     if (b.matchedField === 'title' && a.matchedField !== 'title') return 1
     return b.article.iso - a.article.iso
   })
 
-  // Stamp the premium lock AFTER sorting so it can't change ranking.
-  for (const hit of hits) {
-    hit.premiumLocked = lockIfOld(hit.article.iso || hit.topic.latestSeen || 0, hit.fromArchive === true)
-  }
+  // Stamp the premium lock AFTER sorting so it can't change ranking —
+  // and strip the private score fields from the payload.
+  const cleanHits = hits.slice(0, maxHits).map((hit) => {
+    const { coverage, matched, total, titleMatched, articleMatched, exact, score, ...clean } =
+      hit as SearchHit & {
+        coverage?: number
+        matched?: number
+        total?: number
+        titleMatched?: number
+        articleMatched?: number
+        exact?: boolean
+        score?: number
+      }
+    clean.premiumLocked = lockIfOld(
+      clean.article.iso || clean.topic.latestSeen || 0,
+      clean.fromArchive === true,
+    )
+    return clean
+  })
 
   return NextResponse.json({
     query: q,
-    hits: hits.slice(0, maxHits),
+    hits: cleanHits,
     total: hits.length,
     categoriesSearched,
     archiveSearched,
@@ -270,14 +321,4 @@ export async function GET(req: NextRequest) {
     premiumTier: requester.tier,
     ms: Date.now() - t0,
   } satisfies SearchResponse)
-}
-
-function makeSnippet(text: string, q: string): string {
-  if (!text) return ''
-  const lower = text.toLowerCase()
-  const idx = lower.indexOf(q)
-  if (idx < 0) return text.slice(0, 160)
-  const start = Math.max(0, idx - 60)
-  const end = Math.min(text.length, idx + q.length + 80)
-  return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '')
 }
