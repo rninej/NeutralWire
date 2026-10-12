@@ -119,6 +119,19 @@ function orderKeys(keys: string[]): string[] {
 }
 
 /**
+ * Which room did this topic ONCE live in? (topicIndex pointer — one
+ * ~30-byte read, ETag-cached.) Distinguishes the GSC-404 classes:
+ * a story whose topicIndex entry exists ONCE EXISTED (its cluster
+ * rotated out of the live cache before the archive-everything fix) →
+ * the story page permanently redirects it to the live feed; an id with
+ * no pointer never existed → honest branded 404.
+ */
+export async function topicRoomPointer(topicId: string): Promise<string | null> {
+  if (!topicId) return null
+  return roomForTopic(topicId)
+}
+
+/**
  * Find a topic by id ANYWHERE it can exist — CHEAPLY:
  *   1. archive/<topicId>          (permanent — check first, it's tiny)
  *   2. topicIndex/<topicId>       (~30B pointer to the live room)
@@ -134,10 +147,22 @@ function orderKeys(keys: string[]): string[] {
  * @param opts.alsoArchive  default true — write found topics to archive/.
  * @param opts.hint         optional key hint (e.g. "relevant__GB" or
  *                          "world") checked before the full search.
+ * @param opts.fullScan     default true — legacy fallback that scans
+ *                          EVERY live room (~53 reads, up to ~6.4MB on a
+ *                          cold instance). Callers on hot bot paths
+ *                          (story pages, og-image) pass false: the archive
+ *                          + topicIndex now cover every live topic
+ *                          (writeTopicIndex runs on every room write and
+ *                          the cron archives each refresh), so archive →
+ *          topicIndex → pointed-room is a complete lookup for anything
+ *          alive, and a miss there means DEAD — no point paying seconds
+ *          + Firebase bytes to re-confirm it. Keeps the ~6.2GB/month
+ *          bandwidth rule intact when Googlebot re-crawls the old
+ *          not-found URLs (now 308s).
  */
 export async function findTopicAnywhere(
   topicId: string,
-  opts: { alsoArchive?: boolean; hint?: string } = {},
+  opts: { alsoArchive?: boolean; hint?: string; fullScan?: boolean } = {},
 ): Promise<(TopicArticle & { archivedAt?: number }) | null> {
   if (!topicId) return null
   const alsoArchive = opts.alsoArchive !== false
@@ -192,14 +217,18 @@ export async function findTopicAnywhere(
 
   // 4. Full live search over EVERY key (legacy fallback — rare once the
   //    index is warm; every room it reads gets its topics indexed so the
-  //    NEXT lookup for any of them takes the O(1) path).
-  const keys = orderKeys(await listCacheKeys())
-  for (const key of keys) {
-    if (key === hint || key === indexedRoom) continue // already searched
-    const found = await searchKey(key, topicId)
-    if (found) {
-      if (alsoArchive) void archiveTopic(found)
-      return found
+  //    NEXT lookup for any of them takes the O(1) path). Skippable on hot
+  //    bot paths (see opts.fullScan) — a miss in steps 1-2 means the topic
+  //    is dead-dead for every post-index id.
+  if (opts.fullScan !== false) {
+    const keys = orderKeys(await listCacheKeys())
+    for (const key of keys) {
+      if (key === hint || key === indexedRoom) continue // already searched
+      const found = await searchKey(key, topicId)
+      if (found) {
+        if (alsoArchive) void archiveTopic(found)
+        return found
+      }
     }
   }
 

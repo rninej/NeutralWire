@@ -1,6 +1,21 @@
 // NeutralWire Service Worker
 // PWA install, offline support, push notifications, click tracking.
 //
+// v31: REDIRECT PASS-THROUGH + NAV HARD TIMEOUT 20s → 45s.
+//      ① Navigation requests carry redirect:'manual', so fetch(req) on a
+//      redirecting URL (the new 308s that dead /story/<id> links emit)
+//      resolves to an OPAQUEREDIRECT response — status 0, not ok, not
+//      404 — which the old pass-through check classified as a network
+//      FAILURE and replaced with the "Waiting for connection…" offline
+//      page while fully online. Opaque-redirect (and any real 3xx) is
+//      now passed through untouched so the BROWSER follows it natively
+//      (address bar lands on the redirect target).
+//      ② The v26 "slow-but-alive must land the app" logic kept a 20s
+//      ceiling; a cold first render of a story page (dead-id lookup +
+//      neutral-summary generation on a cold instance) can legitimately
+//      exceed it — same misclassification. A genuinely-offline fetch
+//      still rejects in milliseconds, so the higher ceiling adds no real
+//      wait. Cache-name bump v30 → v31.
 // v30: 404 PASS-THROUGH — the navigation handler treated non-ok server
 //      responses (404s) as network failures and served the "Waiting for
 //      connection…" offline page for DEAD story URLs, hiding the branded
@@ -125,9 +140,9 @@
 // v18: minimal offline page only. /api/summary + /api/topic SWR caching.
 // v17: removed branded loading splash. v16: branded loading screen.
 // v15: offline PWA support. v14: force SW update. v13: removed Interested.
-const SHELL_CACHE = 'neutralwire-shell-v30'
-const API_CACHE = 'neutralwire-api-v30'
-const IMG_CACHE = 'neutralwire-img-v30'
+const SHELL_CACHE = 'neutralwire-shell-v31'
+const API_CACHE = 'neutralwire-api-v31'
+const IMG_CACHE = 'neutralwire-img-v31'
 // ALL caches from previous versions are purged on activate (any name
 // starting with 'neutralwire-' that isn't one of the three current names).
 const CURRENT_CACHES = new Set([SHELL_CACHE, API_CACHE, IMG_CACHE])
@@ -341,8 +356,18 @@ self.addEventListener('fetch', (event) => {
       (async () => {
         // Kick off the network fetch, raced against a hard timeout.
         const NAV_TIMEOUT_MS = 2500
-        const NAV_HARD_TIMEOUT_MS = 20000
+        // v31: 45s — cold story renders (dead-id lookup paths + summary
+        // generation) can exceed 20s; offline fetches still reject in ms.
+        const NAV_HARD_TIMEOUT_MS = 45000
         const networkPromise = fetch(req, { cache: 'no-store' })
+        // v31: a response worth handing to the browser: ok, a REAL 404
+        // (branded not-found page), or a REDIRECT (navigation requests are
+        // manual-redirect, so a 308 shows up as an opaque-redirect response
+        // with status 0 — the browser follows it natively when returned).
+        // Never cached — only ok responses are.
+        const isPassable = (r) =>
+          r && (r.ok || r.status === 404 || r.type === 'opaqueredirect' ||
+                (r.status >= 300 && r.status < 400))
         let networkRes = null
         try {
           networkRes = await Promise.race([
@@ -354,12 +379,14 @@ self.addEventListener('fetch', (event) => {
         } catch {
           networkRes = null
         }
-        if (networkRes && (networkRes.ok || networkRes.status === 404)) {
+        if (isPassable(networkRes)) {
           // v27: a 404 is a REAL server answer (the branded story-not-found
           // page) — pass it through instead of treating it as a network
           // failure. Dead /story/<id> links in installed PWAs were showing
           // the "Waiting for connection…" offline page, hiding the helpful
           // 404 UI (top-stories CTA). Only ok responses are cached.
+          // v31: redirects (incl. opaque-redirect) pass through the same
+          // way — the browser follows them, never the SW.
           if (networkRes.ok) putWithEviction(SHELL_CACHE, req, networkRes.clone(), 5)
           return networkRes
         }
@@ -393,7 +420,7 @@ self.addEventListener('fetch', (event) => {
         } catch {
           networkRes = null
         }
-        if (networkRes && (networkRes.ok || networkRes.status === 404)) {
+        if (isPassable(networkRes)) {
           if (networkRes.ok) putWithEviction(SHELL_CACHE, req, networkRes.clone(), 5)
           return networkRes
         }

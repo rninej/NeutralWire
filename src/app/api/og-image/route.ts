@@ -94,7 +94,11 @@ export async function GET(req: NextRequest) {
     let topic: (TopicArticle & { archivedAt?: number }) | null = null
 
     if (!hasOverrides) {
-      topic = await findTopicAnywhere(topicId)
+      // fullScan:false — share-card bots re-scraping OLD links (dead
+      // topics) must not trigger the ~53-room legacy scan; the archive +
+      // topicIndex cover every live topic, and a miss there serves the
+      // branded fallback image fast.
+      topic = await findTopicAnywhere(topicId, { fullScan: false })
     } // end if (!hasOverrides)
 
     // If overrides were provided, construct a minimal topic object

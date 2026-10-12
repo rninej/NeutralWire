@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { cache } from 'react'
-import { notFound } from 'next/navigation'
-import { findTopicAnywhere } from '@/lib/topic-lookup'
+import { notFound, permanentRedirect } from 'next/navigation'
+import { findTopicAnywhere, topicRoomPointer } from '@/lib/topic-lookup'
 import type { TopicArticle, FeedArticle } from '@/lib/news-aggregator'
 import { isUsefulSummary } from '@/lib/story-quality'
 import { firebaseRead } from '@/lib/firebase-server'
@@ -38,7 +38,7 @@ import {
  *                        links), NewsArticle JSON-LD, canonical + OG.
  *
  * ── REDESIGN (Oct 2026, "the story page is disgusting") ──
- * Full visual overhaul: real NW logo in the header (owner request),
+ * Full visual overhaul: real NW monogram in the header (owner request),
  * branded coverage hero, bias-percentage chips, lean-coloured article
  * cards with outlet avatars, brand-gradient CTA. All metadata, JSON-LD,
  * ISR and data paths are UNCHANGED — purely presentational.
@@ -77,7 +77,11 @@ const getStoryData = cache(
     topic: TopicArticle & { archivedAt?: number }
     storedSummary: string | null
   } | null> => {
-    const topic = await findTopicAnywhere(id)
+    // fullScan:false — the archive + topicIndex cover every live topic, so
+    // the legacy every-room scan only costs seconds + Firebase bytes for
+    // ids that are already dead (the 616 GSC URLs Googlebot re-crawls as
+    // 308s). See topic-lookup.ts for the safety argument.
+    const topic = await findTopicAnywhere(id, { fullScan: false })
     if (!topic) return null
 
     // The REAL neutral summary ("The Big Picture / Why It Matters / …")
@@ -310,7 +314,22 @@ function articleHref(a: FeedArticle): string {
 export default async function StoryPage({ params }: StoryProps) {
   const { id } = await params
   const story = await getStoryData(id)
-  if (!story || !story.topic.title) notFound()
+  if (!story || !story.topic.title) {
+    // ── THE GSC-404 ENDGAME (Oct 2026) ──
+    // 616+ Search-Console "Not found" URLs (and ~22k more) are stories
+    // that existed, were crawled/indexed from the ISR edge cache, then
+    // rotated out of the live rooms BEFORE anything archived them — the
+    // content is unrecoverable (checked archive/searchIndex/summaries/
+    // title-rewrites; Wayback unreachable for this site). A real 404
+    // kept them dead-ending forever. Instead: a topicIndex pointer proves
+    // the story ONCE existed → 308 to the live feed. Google consolidates
+    // the signals and de-indexes them as "moved" (the Not-found report
+    // empties); humans land on today's stories. Ids that never existed
+    // anywhere keep the honest branded 404 below.
+    const room = await topicRoomPointer(id)
+    if (room) permanentRedirect('/')
+    notFound()
+  }
   const { topic, storedSummary } = story
 
   // The VISIBLE hero image is the notification composite (photo + NW
@@ -339,9 +358,9 @@ export default async function StoryPage({ params }: StoryProps) {
       <header className="sticky top-0 z-10 border-b border-border bg-background/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-3">
           <a href="/" className="flex items-center gap-2.5" aria-label="NeutralWire home">
-            {/* The NW mark — the same Z-in-a-rounded-square used across
-                the app, favicons and the OG banner. */}
-            { }
+            {/* The NW monogram — vector-traced from icon-512.png, the same
+                mark the app header, PWA icons and JSON-LD publisher logo
+                use. (Was the scaffold's z.ai "Z" glyph — owner report.) */}
             <img
               src="/logo.svg"
               alt=""
@@ -388,7 +407,6 @@ export default async function StoryPage({ params }: StoryProps) {
             with the NEUTRALWIRE banner + the L/C/R bias bar (1200×630,
             rendered by /api/og-image and CDN-cached 7 days). ── */}
         <div className="mt-4 overflow-hidden rounded-2xl border border-border shadow-lg shadow-black/5 dark:shadow-black/25">
-          { }
           <img
             src={composite}
             alt={topic.title}
@@ -565,7 +583,7 @@ export default async function StoryPage({ params }: StoryProps) {
 
       <footer className="border-t border-border bg-muted/30 py-8">
         <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 px-4 text-center">
-          { }
+          {/* The NW monogram (see header). */}
           <img
             src="/logo.svg"
             alt="NeutralWire logo"
