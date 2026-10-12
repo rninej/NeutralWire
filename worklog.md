@@ -817,3 +817,23 @@ Stage Summary:
 - The 616 GSC not-found URLs are answered with permanent redirects to the live feed (fast: ~1.2s, near-zero Firebase bytes) instead of slow branded 404s; they will drain out of Search Console as "Page with redirect". Future stories remain structurally safe (cron archive pass verified live + growing).
 - Installed PWAs follow the redirects correctly now (SW v31 opaque-redirect pass-through — a latent bug that would have bitten every redirected navigation).
 - Owner action: paste a GitHub PAT to deploy aaf6b2f (then Vercel auto-deploys; prod spot-check follows). Rotate the PAT after use.
+
+---
+Task ID: session55
+Agent: main (Super Z)
+Task: Deploy session54 with the owner's fresh PAT (both reported bugs were fixed but unpushed — "push pending PAT"), then triage the new report "in preview it says could not load news".
+
+Work Log:
+- Read worklog: session54 (NW monogram + 616-GSC 308s + SW v31) committed locally (aaf6b2f + worklog 197e45a), push blocked on PAT; a container auto-commit (fb6dfe8, UUID message) holds the quarantined z.ai scaffold files in .quarantine-s54/ — deliberately EXCLUDED from the push.
+- "Could not load news" triage: string lives only in page-client.tsx's feed error card (fetch of /api/news rejects or !res.ok). Reproduced nothing locally: dev server up, /api/news 200 (83KB real data), agent-browser full load — feed, images, SW takeover, zero console errors, zero error cards. The client fetch has NO timeout, but the dev preview cold-compiles API routes on first hit (took 8.6s for / alone) and the preview proxy times out long requests → transient error card. Production uses pre-compiled Vercel functions — not applicable. Verdict: preview-only cold-start artifact, no code change needed (matches owner's "i dont know if this is relevant").
+- Pre-push gates re-run on this container: bunx tsc --noEmit 0 errors; live story /story/a1kpstoy renders NW logo in header+footer; dead id a1v8tzss → 308 → /; never-existed id → branded 404 (note: a8v1a6e from an article object was an ARTICLE id, not topicId — honest 404 is correct).
+- PUSHED with owner PAT (inline URL, never persisted): `git push <pat>@github.com/rninej/NeutralWire.git 197e45a:main` — f898a0b..197e45a. The quarantine commit stays local-only (container scaffold files never touch the production repo).
+- Deploy watched via GitHub commit-status API: pending → success (3rd poll, ~60s).
+- PRODUCTION SPOT-CHECKS: a1v8tzss / a3dvs7t / alv08ij / a1xz85td / a1hp6yxh ALL 308 → https://neutralwire.org/ (the 616 GSC list); /logo.svg 200 image/svg+xml 722B; live story 200 with /logo.svg in header+footer+preload, ZERO z.ai/zai remnants in HTML; home 200; /api/news 200; sw.js serving neutralwire-shell-v31; /api/og-image 200 1200x630 JPEG 68KB. VLM screenshot check of the prod story header: "an 'NW' monogram… black squircle, white letters… NOT a Z letterform".
+- Screenshot evidence: download/verify/s55-prod-story-header.png (untracked).
+
+Stage Summary:
+- Both owner-reported bugs are FIXED LIVE: /story top-left is the NW monogram (VLM-verified), and every once-existed story URL — the 616 GSC not-found set and all future rotated ids — permanently 308s to the live feed. GSC's Not-found report should drain as Google recrawls and re-attributes the 301/308s; new stories can't 404 structurally (session53 cron archive pass).
+- Preview "could not load news" = cold dev-server compile in the container preview, not a production defect; nothing to fix.
+- SECURITY: owner sent a fresh PAT in chat (used for this one push, never written to disk or git). Remind owner to ROTATE/revoke it (and the earlier PAT if not already rotated).
+- Known backlog: Google index SSR, sitemap optimization, /story OG images, notification icon, subtopic scroll prefetch, synonym dedup, bias bar image version.
