@@ -95,6 +95,43 @@ export function sharesSignificantKeyword(a: string, b: string): boolean {
   return false
 }
 
+/** True when text reads like a multi-story EDITION ROUNDUP (a daily
+ * briefing / newsletter deck) rather than coverage of a single story.
+ * Never use such text as a topic summary, a summary-generation context,
+ * or a newsletter item blurb -- it describes OTHER stories. */
+export function isEditionRoundupText(s: string | null | undefined): boolean {
+  if (!s) return false
+  for (const re of EDITION_ROUNUP_PATTERNS) {
+    if (re.test(s)) return true
+  }
+  return false
+}
+
+// -- Edition-roundup detection (Oct 2026, the Anthropic/a1nxd874 bug) --
+// France 24 (and FT / Axios / The Week / Business Insider) publish daily
+// BRIEFING RSS items whose description covers the WHOLE edition, not one
+// story: "US artificial intelligence giant Anthropic files public
+// regulatory paperwork... Also in this edition: France plans a special
+// disaster fund..., and Apple's new folding iPhone screen shows some
+// unwanted lines of its own." When such an item clusters into a topic
+// (its lead story IS the topic), the longest-description summary picker
+// promoted the EDITION text to the topic's summary -- and every surface
+// downstream (feed blurb, share card, digest AI context, the no-articles
+// summary fallback) then described OTHER stories under this story's
+// headline. These markers catch the roundup phrasings a single-story
+// description never uses.
+const EDITION_ROUNUP_PATTERNS: RegExp[] = [
+  /\balso in (?:this|the|today'?s) edition\b/i,
+  /\bin (?:this|today'?s) edition\b/i,
+  /\bedition highlights\s*:/i,
+  /\balso today\s*:/i,
+  /\balso in the news\b/i,
+  /\bin other news\s*:/i,
+  /\{beacon\}/i, // Business Insider newsletter artifact
+  /^\s*plus\s*:/i, // newsletter deck subtitle ("Plus: ...")
+  /\s[\u2014\u2013-]\s?plus\s*:/i, // "Presented by X -- Plus: Y"
+]
+
 // ── Summary quality ──────────────────────────────────────────────────────
 /** Is a summary good enough to show as a story description (share cards,
  *  snippets, feed cards)? Rejects: empty, tiny fragments ("U.S.", "tk"),
@@ -111,6 +148,8 @@ export function isUsefulSummary(s: string | null | undefined): boolean {
   // Category/section fragments some feeds put in <description> ("U.S.",
   // "World", "Politics"…)
   if (/^[a-z. ]+$/i.test(t) && words.length < 12) return false
+  // A daily-briefing roundup describes the WHOLE edition, not this story.
+  if (isEditionRoundupText(t)) return false
   return true
 }
 

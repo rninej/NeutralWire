@@ -23,6 +23,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { PremiumDiamond } from '@/components/premium-ui'
 import { useSubscription } from '@/lib/subscription-client'
+import { isTemplateSummary } from '@/lib/summary-sections'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { BiasBar } from '@/components/bias-bar'
@@ -497,6 +498,21 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
         if (cancelled) return
         if (!res.ok || data.error) {
           throw new Error(data.error || 'Failed to generate summary')
+        }
+        // Quality gate (the Oct 2026 junk-display bug): a fallback /
+        // template "summary" is NOT the real neutral summary -- showing
+        // it is how the fabricated four-section filler ("Why It Matters:
+        // This story was covered by NeutralWire...") ever reached a
+        // screen. Same policy as the /story page's StorySummaryLive:
+        // reject it and hide the card instead.
+        if (
+          !data.summary ||
+          data.fallback ||
+          isTemplateSummary(data.summary)
+        ) {
+          setSummary(null)
+          setSummaryLoading(false)
+          return
         }
         setSummary(data.summary)
       } catch (err) {

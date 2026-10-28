@@ -27,6 +27,7 @@
 import { createHash } from 'crypto'
 import { firebaseRead, firebaseWrite, firebasePatch, firebasePush } from '@/lib/firebase-server'
 import { callAI } from '@/lib/ai-providers'
+import { isUsefulSummary } from '@/lib/story-quality'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { readCustomFeed, getCustomTopicDef } from '@/lib/custom-topics'
 import {
@@ -335,6 +336,20 @@ export async function gatherStories(accountId: string): Promise<TopicArticle[]> 
   return ranked.slice(0, 14).map((r) => r.story)
 }
 
+/** Word-boundary trim for newsletter item text. The owner banned
+ * mid-sentence truncation (Oct 2026): the old `.slice(0, 220)` chopped
+ * the AI's two-sentence summaries mid-word with no ellipsis. The AI
+ * writes ~250-320 chars, so a 600-char ceiling only ever engages on a
+ * runaway reply -- and when it does, it cuts cleanly at a word boundary
+ * with a real ellipsis. */
+function cleanDigestText(s: string, maxLen = 600): string {
+  const t = (s || '').replace(/\s+/g, ' ').trim()
+  if (t.length <= maxLen) return t
+  const cut = t.slice(0, maxLen)
+  const lastSpace = cut.lastIndexOf(' ')
+  return (lastSpace > maxLen * 0.8 ? cut.slice(0, lastSpace) : cut).replace(/[,;:]$/, '') + '\u2026'
+}
+
 /** The AI newsletter writer — CONTENT ONLY, rendered through the shared
  * grid template.
  *
@@ -355,11 +370,15 @@ export async function generateNewsletter(
   opts: { accountId?: string } = {},
 ): Promise<{ subject: string; html: string } | null> {
   if (stories.length === 0) return null
+  // Context line per story: title + a bounded summary SNIPPET -- but only
+  // a USEFUL summary. isUsefulSummary now rejects edition roundups
+  // (France 24 "Also in this edition..." briefings) and system junk, so
+  // the AI can never echo OTHER stories' text into this story's item.
   const list = stories
-    .map(
-      (s, i) =>
-        `${i + 1}. ${s.title}${s.summary ? ` — ${s.summary.slice(0, 160)}` : ''} [${s.coverage} sources; bias L${s.leanLeft}/C${s.leanCenter}/R${s.leanRight}]`,
-    )
+    .map((s, i) => {
+      const snip = isUsefulSummary(s.summary) ? ` — ${s.summary.slice(0, 160)}` : ''
+      return `${i + 1}. ${s.title}${snip} [${s.coverage} sources; bias L${s.leanLeft}/C${s.leanCenter}/R${s.leanRight}]`
+    })
     .join('\n')
 
   const raw = await callAI({
@@ -399,11 +418,18 @@ export async function generateNewsletter(
       typeof aiItem.headline === 'string' && aiItem.headline.trim().length >= 8
         ? aiItem.headline.trim().slice(0, 140)
         : s.title
+    // FULL text beneath each news (owner request, Oct 2026): the old
+    // hard slice(0, 220) chopped the AI's two-sentence summaries
+    // mid-sentence. cleanDigestText keeps the whole text (600-char
+    // runaway ceiling, word-boundary + ellipsis). The fallback uses the
+    // story's own summary ONLY when useful (roundups/junk rejected) --
+    // otherwise the honest coverage line.
     const summary =
       typeof aiItem.summary === 'string' && aiItem.summary.trim().length >= 20
-        ? aiItem.summary.trim().slice(0, 220)
-        : s.summary?.slice(0, 200) ||
-          `Covered by ${s.coverage} ${s.coverage === 1 ? 'outlet' : 'outlets'} — open the story to compare how each side frames it.`
+        ? cleanDigestText(aiItem.summary)
+        : isUsefulSummary(s.summary)
+          ? cleanDigestText(s.summary)
+          : `Covered by ${s.coverage} ${s.coverage === 1 ? 'outlet' : 'outlets'} — open the story to compare how each side frames it.`
     return { story: s, headline, summary }
   })
 

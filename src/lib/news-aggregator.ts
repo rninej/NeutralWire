@@ -468,8 +468,13 @@ function mergeNearDuplicateTopics(topics: TopicArticle[]): TopicArticle[] {
     // otherwise take the first useful one from the merged cluster.
     let bestSummary = topics[bestTitleIdx].summary
     if (!isUsefulSummary(bestSummary)) {
+      // isUsefulSummary rejects multi-story edition roundups too -- a
+      // France 24 "Also in this edition..." briefing as the topic
+      // summary describes OTHER stories (the a1nxd874 bug). No clean
+      // replacement in the cluster -> blank (honest) rather than keep
+      // the polluted text.
       const useful = cluster.find((t) => isUsefulSummary(t.summary))
-      if (useful) bestSummary = useful.summary
+      bestSummary = useful?.summary || ''
     }
 
     // Pick the best image (highest score) — ATTRIBUTION-GATED: a topic's
@@ -2558,8 +2563,13 @@ function clusterTopics(
     //    the first USEFUL description (≥8 real words) before accepting
     //    it as the topic summary — share cards and snippets read this.
     if (!isUsefulSummary(bestSummary)) {
+      // Edition roundups are rejected here too: when the title-bearing
+      // article's description is a France 24 daily-briefing deck
+      // ("...Also in this edition: France plans... Apple's..."), fall to
+      // the first CLEAN useful description; blank if none -- never keep
+      // a summary that describes other stories.
       const useful = clusterArticles.find((a) => isUsefulSummary(a.description))
-      if (useful) bestSummary = useful.description
+      bestSummary = useful?.description || ''
     }
 
     // ── Image pick: the highest-scoring candidate whose OWN article is

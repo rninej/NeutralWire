@@ -33,6 +33,7 @@ import { after } from 'next/server'
 import { callAI } from '@/lib/ai-providers'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import type { TopicArticle } from '@/lib/news-aggregator'
+import { isEditionRoundupText } from '@/lib/story-quality'
 
 // In-process cache for summaries (fastest, but per-instance).
 export const SUMMARY_CACHE = new Map<string, { ts: number; summary: string }>()
@@ -338,10 +339,15 @@ async function generateLlmSummary(body: SummaryRequest): Promise<string | null> 
           `[${i + 1}] (${a.leaning}) ${a.sourceName}: ${a.title}\n${a.description || ''}`,
       )
       .join('\n\n')
-  } else if (body.topicSummary) {
+  } else if (body.topicSummary && !isEditionRoundupText(body.topicSummary)) {
     // No articles — use the topic's summary as the sole context.
     // This happens when the topic was loaded from the archive without
-    // the full articles array.
+    // the full articles array. EDITION ROUNDUPS are refused: a France 24
+    // daily-briefing description ("...Also in this edition: France plans
+    // ... Apple's...") describes the WHOLE edition, so the LLM would
+    // write a multi-story "summary" of other stories and PERSIST it
+    // under this topic (the a1nxd874 Anthropic bug). Better no summary
+    // than a summary of the wrong stories.
     articleContext = `Topic summary: ${body.topicSummary}`
   } else {
     return null
@@ -425,39 +431,46 @@ function generateExtractiveSummary(body: SummaryRequest): string {
   const { title } = body
   const articles = Array.isArray(body.articles) ? body.articles : []
 
-  // If we have NO articles AND no topicSummary, we can't generate anything
-  // meaningful. Return '' to signal the caller to show the error.
-  if (articles.length === 0 && !body.topicSummary) {
+  // No articles + no (usable) topicSummary: there is nothing real to
+  // summarise. Return '' -- the caller treats it as "no summary" and
+  // hides the card. (The old code fabricated four sections of filler
+  // around a possibly-edition-roundup topicSummary -- "Why It Matters:
+  // This story was covered by NeutralWire. The summary above provides
+  // the key facts." -- exactly the junk the owner banned on Oct 2026.
+  // A missing summary is honest; a fabricated one is not.)
+  if (articles.length === 0) {
     return ''
   }
 
-  // If we have no articles but DO have a topicSummary, use it as the
-  // core facts. This happens for archived topics without the full
-  // articles array.
-  if (articles.length === 0 && body.topicSummary) {
-    const sections: string[] = []
-    sections.push(`**The Big Picture**\n\n${truncateClean(body.topicSummary, 300)}`)
-    sections.push(`**Why It Matters**\n\nThis story was covered by NeutralWire. The summary above provides the key facts.`)
-    sections.push(`**How Different Outlets Are Covering It**\n\nSource details are no longer available for this archived story.`)
-    sections.push(`**What Happens Next**\n\nFor the latest developments, check the original sources linked below.`)
-    return sections.join('\n\n')
-  }
+  // Sort articles by description length (longest first) to find the most
+  // informative. EDITION-ROUNDUP descriptions (France 24 daily briefings,
+  // "{beacon}" newsletter decks, "Plus:" subtitles) are EXCLUDED: they are
+  // the longest descriptions in any cluster exactly BECAUSE they cover the
+  // whole edition's other stories -- letting one win here is how the
+  // a1nxd874 Anthropic topic ended up summarising France and Apple.
+  const sorted = [...articles]
+    .filter((a) => !isEditionRoundupText(a?.description))
+    .sort((a, b) => (b.description?.length || 0) - (a.description?.length || 0))
 
-  // Sort articles by description length (longest first) to find the most informative.
-  const sorted = [...articles].sort(
-    (a, b) => (b.description?.length || 0) - (a.description?.length || 0),
-  )
-
-  // Paragraph 1: Core facts — use the longest description, truncated cleanly.
-  // If ALL descriptions are empty, fall back to the topicSummary, then to
-  // the first article's title. This prevents the summary from being just
-  // the topic title repeated.
+  // Paragraph 1: Core facts — use the longest CLEAN description, truncated
+  // cleanly. If ALL descriptions are empty, fall back to the topicSummary
+  // (never an edition roundup), then to the first article's title. This
+  // prevents the summary from being just the topic title repeated.
   const coreArticle = sorted[0]
-  const coreText = coreArticle?.description || body.topicSummary || coreArticle?.title || title
+  const coreText =
+    coreArticle?.description ||
+    (body.topicSummary && !isEditionRoundupText(body.topicSummary)
+      ? body.topicSummary
+      : '') ||
+    coreArticle?.title ||
+    title
   const coreFacts = truncateClean(coreText, 300)
 
-  // Paragraph 2: Additional context from center-leaning sources.
-  const centerArticles = articles.filter((a) => a.leaning === 'center')
+  // Paragraph 2: Additional context from center-leaning sources
+  // (edition roundups excluded -- same reason as the core pick).
+  const centerArticles = articles.filter(
+    (a) => a.leaning === 'center' && !isEditionRoundupText(a?.description),
+  )
   const contextArticle = centerArticles
     .sort((a, b) => (b.description?.length || 0) - (a.description?.length || 0))[0]
   const context = contextArticle && contextArticle.description

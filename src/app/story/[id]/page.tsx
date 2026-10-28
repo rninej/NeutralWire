@@ -3,7 +3,7 @@ import { cache } from 'react'
 import { notFound, permanentRedirect } from 'next/navigation'
 import { findTopicAnywhere, topicRoomPointer } from '@/lib/topic-lookup'
 import type { TopicArticle, FeedArticle } from '@/lib/news-aggregator'
-import { isUsefulSummary } from '@/lib/story-quality'
+import { isUsefulSummary, isEditionRoundupText } from '@/lib/story-quality'
 import { firebaseRead } from '@/lib/firebase-server'
 import { plainSummaryText, isTemplateSummary } from '@/lib/summary-sections'
 import { generateStorySummaryBounded } from '@/lib/summary-generate'
@@ -448,7 +448,13 @@ export default async function StoryPage({ params }: StoryProps) {
               sourceName: a.sourceName,
               leaning: a.leaning || '',
             }))}
-            initialSummary={storedSummary || topic.summary || ''}
+            // isUsefulSummary rejects multi-story edition roundups (the France 24
+            // "Also in this edition..." bug) -- a polluted wire snippet must
+            // never render under the Neutral Summary heading, not even for
+            // the seconds before the real summary generates.
+            initialSummary={
+              storedSummary || (isUsefulSummary(topic.summary) ? topic.summary : '')
+            }
             hasStoredSummary={Boolean(storedSummary)}
           />
         </div>
@@ -536,7 +542,11 @@ export default async function StoryPage({ params }: StoryProps) {
                         >
                           {a.title}
                         </a>
-                        {a.description ? (
+                        {/* Edition roundups hidden: a France 24 daily
+                            briefing's description lists OTHER stories
+                            ("Also in this edition: ...") -- confusing under
+                            this story's source link. */}
+                        {a.description && !isEditionRoundupText(a.description) ? (
                           <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                             {a.description}
                           </p>
