@@ -104,14 +104,20 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // ── If no articles AND no topicSummary, look up the topic from Firebase ──
-    // This happens when the topic was loaded from a slim=1 feed (articles
-    // stripped for size). The client sends topicId + title but no article
-    // content. Instead of returning 400, we fetch the full topic from
-    // Firebase (archive first, then cache categories) and use its articles.
-    if (!body.articles?.length && !body.topicSummary) {
-      console.log(`[api/summary] No articles + no topicSummary for ${body.topicId} — fetching from Firebase...`)
-      const fetchedTopic = await findTopicAnywhere(body.topicId)
+    // ── If no articles were sent, look up the topic from Firebase ──
+    // The app's slim feed strips the articles array, so the client sends
+    // topicId + title + topicSummary but NO article content. Without the
+    // articles, generation is LLM-only — and when every AI provider is
+    // rate-limited the extractive fallback has nothing real to build
+    // from, so the topic 422'd and NO summary ever loaded (the Nov 2026
+    // "not a single summary is loading" outage). Backfilling the real
+    // articles lets the extractive fallback produce genuine content for
+    // every live topic even during a total provider outage.
+    // fullScan:false — this is a hot path (every topic open); the archive
+    // + topicIndex cover every live topic, same as /story and og-image.
+    if (!body.articles?.length) {
+      console.log(`[api/summary] No articles for ${body.topicId} — fetching from Firebase...`)
+      const fetchedTopic = await findTopicAnywhere(body.topicId, { fullScan: false })
       if (fetchedTopic) {
         body.articles = (fetchedTopic.articles || []).slice(0, 12).map((a) => ({
           title: a.title,
@@ -119,7 +125,9 @@ export async function POST(req: NextRequest) {
           sourceName: a.sourceName,
           leaning: a.leaning,
         }))
-        body.topicSummary = fetchedTopic.summary || ''
+        if (!body.topicSummary) {
+          body.topicSummary = fetchedTopic.summary || ''
+        }
         console.log(`[api/summary] Found topic in Firebase: ${body.articles.length} articles, topicSummary: ${body.topicSummary ? 'yes' : 'no'}`)
       }
       // If still no articles + no topicSummary after Firebase lookup,

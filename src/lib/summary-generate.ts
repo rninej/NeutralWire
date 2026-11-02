@@ -466,14 +466,19 @@ function generateExtractiveSummary(body: SummaryRequest): string {
     title
   const coreFacts = truncateClean(coreText, 300)
 
-  // Paragraph 2: Additional context from center-leaning sources
-  // (edition roundups excluded -- same reason as the core pick).
-  const centerArticles = articles.filter(
-    (a) => a.leaning === 'center' && !isEditionRoundupText(a?.description),
+  // Paragraph 2: Additional context — prefer a center-leaning source
+  // (edition roundups excluded), else ANY other article with a real
+  // description. When nothing real exists the section is SKIPPED —
+  // never padded with filler text.
+  const contextPool = articles.filter(
+    (a) =>
+      a !== coreArticle &&
+      !isEditionRoundupText(a?.description) &&
+      (a?.description || '').trim().length > 80,
   )
-  const contextArticle = centerArticles
-    .sort((a, b) => (b.description?.length || 0) - (a.description?.length || 0))[0]
-  const context = contextArticle && contextArticle.description
+  const contextArticle =
+    contextPool.filter((a) => a.leaning === 'center')[0] || contextPool[0]
+  const context = contextArticle?.description
     ? truncateClean(contextArticle.description, 300)
     : ''
 
@@ -498,33 +503,40 @@ function generateExtractiveSummary(body: SummaryRequest): string {
     )
   }
 
-  // Assemble the summary with the same 4-section format as the AI summary:
-  // **The Big Picture**, **Why It Matters**, **How Different Outlets Are Covering It**, **What Happens Next**
   const leftCount = articles.filter((a) => a.leaning === 'left').length
   const centerCount = articles.filter((a) => a.leaning === 'center').length
   const rightCount = articles.filter((a) => a.leaning === 'right').length
 
+  // Assemble the summary with the same 4-section format as the AI summary.
+  // Sections with no REAL content are omitted entirely — a shorter honest
+  // summary beats one padded with filler. CRITICAL: the text below must
+  // NEVER contain the isTemplateSummary marker phrases ("indicating
+  // significant public interest", "The breadth of coverage suggests",
+  // "Source details are no longer available…") — the extractive fallback
+  // is served to users as a temporary summary when every AI provider is
+  // down, and those markers would make every consumer (client gates,
+  // readStoredSummary, /story) treat it as junk and hide it — the exact
+  // "not a single summary is loading" outage of Nov 2026.
   const sections: string[] = []
 
   // Section 1: The Big Picture
   sections.push(`**The Big Picture**\n\n${coreFacts}`)
 
-  // Section 2: Why It Matters (additional context)
+  // Section 2: Why It Matters — only when there is real context text.
   if (context && context !== coreFacts) {
     sections.push(`**Why It Matters**\n\n${context}`)
-  } else {
-    sections.push(`**Why It Matters**\n\nThis story is being covered by ${articles.length} sources across the political spectrum, indicating significant public interest.`)
   }
 
-  // Section 3: How Different Outlets Are Covering It
+  // Section 3: How Different Outlets Are Covering It — real headlines when
+  // we have them; the lean split is already shown by the bias bar above.
   if (perspectives.length > 0) {
     sections.push(`**How Different Outlets Are Covering It**\n\n${perspectives.join(' ')}`)
-  } else {
-    sections.push(`**How Different Outlets Are Covering It**\n\n${leftCount} left-leaning, ${centerCount} center, and ${rightCount} right-leaning outlets are covering this story.`)
   }
 
-  // Section 4: What Happens Next
-  sections.push(`**What Happens Next**\n\nThis story is being covered by ${articles.length} sources across the political spectrum: ${leftCount} left-leaning, ${centerCount} center, and ${rightCount} right-leaning outlets. The breadth of coverage suggests this is a significant developing story.`)
+  // Section 4: What Happens Next — honest breadth line, NO marker phrases.
+  sections.push(
+    `**What Happens Next**\n\n${articles.length} outlets are following this story — ${leftCount} leaning left, ${centerCount} center and ${rightCount} leaning right — so expect more detail as reactions and follow-up reporting come in.`,
+  )
 
   return sections.join('\n\n')
 }

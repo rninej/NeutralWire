@@ -25,10 +25,14 @@ import {
  *    neutral summary right in the HTML — what Googlebot indexes).
  *  - When none exists yet: renders the best fallback text immediately,
  *    then POSTs /api/summary on mount — the SAME route the app uses —
- *    and swaps in the real LLM summary when it arrives (persisted by
- *    the route, so the NEXT server render has it in the raw HTML).
- *    Generation failures keep the fallback (or hide the card when there
- *    was no fallback at all — same policy as the in-app topic detail).
+ *    and swaps in the generated summary when it arrives (persisted by
+ *    the route when it is a real LLM summary, so the NEXT server render
+ *    has it in the raw HTML). During a total AI-provider outage the
+ *    POST returns the extractive summary built from the story's real
+ *    articles — also swapped in, so the card is never left empty.
+ *    Only a genuinely empty/template response keeps the fallback (or
+ *    hides the card when there was no fallback at all — same policy
+ *    as the in-app topic detail).
  */
 
 interface StorySummaryLiveProps {
@@ -85,13 +89,14 @@ export function StorySummaryLive({
           fallback?: boolean
         }
         if (cancelled) return
-        // Extractive/template fallbacks are not the real neutral summary —
-        // keep the fallback text instead of showing the template.
-        if (
-          !data.summary ||
-          data.fallback ||
-          isTemplateSummary(data.summary)
-        ) {
+        // Empty or TEMPLATE junk (the banned filler) is never shown.
+        // `fallback: true` — the extractive summary built from the
+        // story's REAL articles — IS swapped in: it is genuine content
+        // and richer than the wire snippet, and it is what keeps the
+        // summary card populated during a total AI-provider outage.
+        // It is never persisted server-side, so the next visitor's
+        // POST still retries the LLM and upgrades to the real summary.
+        if (!data.summary || isTemplateSummary(data.summary)) {
           setStatus('failed')
           return
         }

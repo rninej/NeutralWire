@@ -499,17 +499,16 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
         if (!res.ok || data.error) {
           throw new Error(data.error || 'Failed to generate summary')
         }
-        // Quality gate (the Oct 2026 junk-display bug): a fallback /
-        // template "summary" is NOT the real neutral summary -- showing
-        // it is how the fabricated four-section filler ("Why It Matters:
-        // This story was covered by NeutralWire...") ever reached a
-        // screen. Same policy as the /story page's StorySummaryLive:
-        // reject it and hide the card instead.
-        if (
-          !data.summary ||
-          data.fallback ||
-          isTemplateSummary(data.summary)
-        ) {
+        // Quality gate: empty or TEMPLATE junk (the banned "Why It Matters:
+        // This story was covered by NeutralWire…" filler / old marker
+        // phrases) is never shown — hide the card instead.
+        // `fallback: true` (the extractive summary built from the topic's
+        // REAL articles) IS shown: it is genuine content assembled from
+        // the actual coverage, not fabricated filler, and it is exactly
+        // what keeps every summary loading during a total AI-provider
+        // outage. It is never persisted server-side, so the next caller
+        // still retries the LLM and upgrades to the real summary.
+        if (!data.summary || isTemplateSummary(data.summary)) {
           setSummary(null)
           setSummaryLoading(false)
           return
