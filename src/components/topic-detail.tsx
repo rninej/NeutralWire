@@ -24,6 +24,8 @@ import { Button } from '@/components/ui/button'
 import { PremiumDiamond } from '@/components/premium-ui'
 import { useSubscription } from '@/lib/subscription-client'
 import { isTemplateSummary } from '@/lib/summary-sections'
+import { isUsefulSummary } from '@/lib/story-quality'
+import { SummarySkeleton } from '@/components/summary-skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { BiasBar } from '@/components/bias-bar'
@@ -450,8 +452,26 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
   // Flow:
   //   1. GET /api/summary?topicId=xxx → if 200, use it (cached, offline-capable)
   //   2. If 404 (not generated yet), POST to generate it (online only)
-  //   3. If POST also fails (offline + never cached), show error
+  //   3. If POST also fails, the card keeps the interim wire snippet
+  //      (see render below) — it is only hidden when there was never
+  //      any text to show.
+  //
+  // NO RE-FETCH CHURN (Nov 2026): this effect also re-runs when the
+  // articles array identity changes (the /api/topic backfill landing
+  // for deep-link opens). That used to restart the whole GET→POST cycle
+  // and tear a just-displayed summary back down to the skeleton while
+  // the POST re-ran — the "it keeps trying to generate and never gives
+  // me a summary" report. One fetch cycle per topic per mount is
+  // enough: the server backfills articles itself (session57), so the
+  // slim first request already generates from the real coverage.
+  const summaryStartedForRef = React.useRef<string | null>(null)
   React.useEffect(() => {
+    // Already fetched (or fetching) for THIS topic? Nothing to redo.
+    if (summaryStartedForRef.current === topic.topicId) {
+      setSummaryLoading(false)
+      return
+    }
+    summaryStartedForRef.current = topic.topicId
     let cancelled = false
     setSummaryLoading(true)
     setSummaryError(null)
@@ -647,7 +667,13 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     // found nothing — displayTopic is null when fetch completed with no
     // results OR when articles were already present)
     const hasArticles = leftArticles.length + centerArticles.length + rightArticles.length > 0
-    const hasSummary = !summaryError && summary && summary.length > 20
+    // Interim wire snippet counts as content too (Nov 2026): a topic
+    // showing its snippet while/after summary generation is NOT broken —
+    // auto-closing the sheet over live text was the "glitches out" half
+    // of the a1j3lowc report.
+    const hasSummary =
+      (!summaryError && !!summary && summary.length > 20) ||
+      (!!topic.summary && isUsefulSummary(topic.summary))
     if (!hasArticles && !hasSummary) {
       // Both failed — report broken after a short delay (lets the user
       // see the error state briefly before the detail closes)
@@ -1048,54 +1074,67 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           </div>
         </div>
 
-        {/* Neutral in-depth summary — hidden entirely if generation fails.
-            Previously showed "Could not generate summary. Showing original
-            descriptions below." — now we just hide the card so the user
-            sees the article descriptions directly without an error message. */}
-        {summaryLoading ? (
-          <Card className="mb-6 gap-0 p-5 md:p-6">
-            <div className="mb-3 flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-muted-foreground" />
-              <h2 className="text-base font-bold">Neutral Summary</h2>
-              <button
-                ref={askAiButtonRef}
-                onClick={() => setAskAiOpen(true)}
-                className="ml-auto flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity"
-              >
-                <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
-                  <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
-                  Ask AI
-                </span>
-              </button>
-            </div>
-            <SummarySkeleton />
-          </Card>
-        ) : summary && !summaryError ? (
-          <Card className="mb-6 gap-0 p-5 md:p-6">
-            <div className="mb-3 flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-muted-foreground" />
-              <h2 className="text-base font-bold">Neutral Summary</h2>
-              <button
-                ref={askAiButtonRef}
-                onClick={() => setAskAiOpen(true)}
-                className="ml-auto flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity"
-              >
-                <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
-                  <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
-                  Ask AI
-                </span>
-              </button>
-            </div>
-            <motion.div
-              // [&>*:first-child]:!mt-0 — the sub-headings (h3) carry mt-5
-              // for spacing BETWEEN sections of the summary; on the FIRST
-              // element that stacked with the header's mb-3 into a ~36px
-              // void between "Neutral Summary" and its text (the gap the
-              // users reported). Zero out the first child's top margin.
-              className="space-y-4 text-base leading-relaxed text-foreground/90 md:text-[17px] md:leading-[1.7]"
-              initial="hidden"
-              animate="show"
-              variants={{
+        {/* Neutral in-depth summary.
+            UX (Nov 2026, the a1j3lowc report): the card is NEVER a dead
+            skeleton-only wait and NEVER blanks out on a generation
+            failure. While the real summary generates, the topic's own
+            wire snippet (topic.summary — already in memory, so it paints
+            instantly) is shown as interim text with a quiet "writing…"
+            chip; when generation fails the interim text simply STAYS
+            (a wire-snippet summary beats a vanished card). The skeleton
+            only appears when there is no interim text at all, and the
+            card is only hidden when there is nothing to show, period. */}
+        {(() => {
+          // Interim text: the topic's wire snippet, quality-gated so
+          // edition-roundup junk / category fragments never display.
+          const interim =
+            !summary && topic.summary && isUsefulSummary(topic.summary)
+              ? topic.summary
+              : null
+          const showCard = summaryLoading || !!summary || !!interim
+          if (!showCard) return null
+          const showInterim = !summary && !!interim
+          return (
+            <Card className="mb-6 gap-0 p-5 md:p-6">
+              <div className="mb-3 flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-muted-foreground" />
+                <h2 className="text-base font-bold">Neutral Summary</h2>
+                {summaryLoading && (
+                  <span
+                    className="ml-auto flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground"
+                    aria-live="polite"
+                  >
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
+                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+                    </span>
+                    Writing the full summary…
+                  </span>
+                )}
+                {!summaryLoading && (
+                  <button
+                    ref={askAiButtonRef}
+                    onClick={() => setAskAiOpen(true)}
+                    className="ml-auto flex items-center gap-1.5 rounded-full p-[2px] bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-400 hover:opacity-90 transition-opacity"
+                  >
+                    <span className="flex items-center gap-1.5 rounded-full bg-background px-4 py-1.5 text-xs font-semibold">
+                      <MessageCircle className="h-3.5 w-3.5 text-purple-500" />
+                      Ask AI
+                    </span>
+                  </button>
+                )}
+              </div>
+              {summary ? (
+                <motion.div
+                  // [&>*:first-child]:!mt-0 — the sub-headings (h3) carry mt-5
+                  // for spacing BETWEEN sections of the summary; on the FIRST
+                  // element that stacked with the header's mb-3 into a ~36px
+                  // void between "Neutral Summary" and its text (the gap the
+                  // users reported). Zero out the first child's top margin.
+                  className="space-y-4 text-base leading-relaxed text-foreground/90 md:text-[17px] md:leading-[1.7]"
+                  initial="hidden"
+                  animate="show"
+                  variants={{
                 hidden: {},
                 show: { transition: { staggerChildren: 0.07, delayChildren: 0.04 } },
               }}
@@ -1186,9 +1225,20 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
 
                 return elements
               })()}
-            </motion.div>
-          </Card>
-        ) : null}
+                </motion.div>
+              ) : showInterim ? (
+                /* Interim: the wire snippet paints instantly (it is already
+                   in memory) while the real summary generates — and STAYS
+                   if generation fails. No dead wait, no vanished card. */
+                <p className="text-base leading-relaxed text-foreground/90 md:text-[17px] md:leading-[1.7]">
+                  {interim}
+                </p>
+              ) : summaryLoading ? (
+                <SummarySkeleton />
+              ) : null}
+            </Card>
+          )
+        })()}
 
         {/* Sources grouped by leaning */}
         <div id="all-sources" className="space-y-4 scroll-mt-20">
@@ -1720,47 +1770,6 @@ function SourceNameWithRating({
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
-  )
-}
-
-// ── Skeleton loader for the neutral summary ──
-// Uses the .shimmer class (gradient sweep, defined in globals.css) for a
-// more premium loading effect than the flat animate-pulse opacity flicker.
-// The shimmer runs on top of bg-muted so the lines have a base color, and
-// the gradient sweep adds a subtle "data is loading" sheen.
-function SummarySkeleton() {
-  return (
-    <div className="space-y-4">
-      {/* Fake heading */}
-      <div className="space-y-2">
-        <div className="h-4 w-32 shimmer rounded bg-muted" />
-      </div>
-      {/* Fake paragraph */}
-      <div className="space-y-2">
-        <div className="h-3 w-full shimmer rounded bg-muted" />
-        <div className="h-3 w-full shimmer rounded bg-muted" />
-        <div className="h-3 w-4/5 shimmer rounded bg-muted" />
-      </div>
-      {/* Fake heading */}
-      <div className="space-y-2 pt-2">
-        <div className="h-4 w-28 shimmer rounded bg-muted" />
-      </div>
-      {/* Fake paragraph */}
-      <div className="space-y-2">
-        <div className="h-3 w-full shimmer rounded bg-muted" />
-        <div className="h-3 w-full shimmer rounded bg-muted" />
-        <div className="h-3 w-3/4 shimmer rounded bg-muted" />
-      </div>
-      {/* Fake heading */}
-      <div className="space-y-2 pt-2">
-        <div className="h-4 w-36 shimmer rounded bg-muted" />
-      </div>
-      {/* Fake paragraph */}
-      <div className="space-y-2">
-        <div className="h-3 w-full shimmer rounded bg-muted" />
-        <div className="h-3 w-5/6 shimmer rounded bg-muted" />
-      </div>
     </div>
   )
 }

@@ -4,6 +4,7 @@ import * as React from 'react'
 import { motion } from 'framer-motion'
 import { TrendingUp } from 'lucide-react'
 import { Card } from '@/components/ui/card'
+import { SummarySkeleton } from '@/components/summary-skeleton'
 import {
   parseSummarySections,
   isTemplateSummary,
@@ -143,13 +144,10 @@ export function StorySummaryLive({
       </div>
 
       {sections.length === 0 ? (
-        // No text at all yet — skeleton while the first summary generates.
-        <div className="space-y-3" aria-hidden>
-          <div className="h-4 w-1/4 animate-pulse rounded bg-muted" />
-          <div className="h-4 w-full animate-pulse rounded bg-muted" />
-          <div className="h-4 w-11/12 animate-pulse rounded bg-muted" />
-          <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
-        </div>
+        // No text at all yet — the polished shared skeleton (mirrors the
+        // real summary's heading+paragraph rhythm, desktop-tuned) while
+        // the first summary generates.
+        <SummarySkeleton />
       ) : status === 'upgraded' ? (
         <motion.div
           key="upgraded"
