@@ -90,6 +90,7 @@ agent-ctx/
 # tracked in git are unaffected by ignore rules)
 scripts/s4*
 scripts/s5*
+scripts/s58*
 scripts/diag-*
 scripts/fix_*
 scripts/clean-*

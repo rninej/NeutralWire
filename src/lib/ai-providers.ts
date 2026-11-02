@@ -24,18 +24,54 @@
  *
  * The deprecated set is per-instance (cleared on server restart). For
  * permanent removal, update the model lists below.
+ *
+ * ── RATE-LIMIT BACKOFF (Nov 2026 — the "couldn't reach an AI provider"
+ *    while the quota dashboard looks untouched fix) ──
+ * The free tiers limit per-MINUTE, not per-day: Gemini flash ≈10 RPM per
+ * model, Groq ≈30 RPM ORG-WIDE (every model shares one pool), OpenRouter
+ * :free = upstream capacity. The old code treated a 429 as a per-model,
+ * per-instance event and immediately walked the sibling models (often
+ * with a stale clock), so the site's own retries kept those pools
+ * saturated for minutes at a time — every surface 429'd in a storm while
+ * the daily quota counters (which 429s don't consume) looked fine. Now:
+ *   - a Groq 429 cools the WHOLE org (in-memory + shared via the
+ *     `aiModelHealth/_providerCooldowns` Firebase node) for the parsed
+ *     Retry-After or 60s;
+ *   - Gemini 429s honour the API's retryDelay per model;
+ *   - sequential retries re-check cooldowns with a FRESH clock, respect
+ *     the org cooldown, and are capped (3 Gemini / 2 Groq);
+ *   - the whole call fits an internal budget (11s default) so a slow
+ *     rotation can no longer push past the serverless maxDuration.
+ * Health keys are Firebase-safe (healthKey: '.' and '/' → '_') — the old
+ * encodeURIComponent writes landed as nested junk (groq/openai/gpt-oss…)
+ * or 400'd on dots, so cross-instance cooldowns silently never worked.
  */
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || ''
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const GROQ_MODELS_URL = 'https://api.groq.com/openai/v1/models'
+// Base URLs are env-overridable (defaults = production endpoints) so the
+// retry/backoff behaviour can be integration-tested against a local mock
+// provider without touching real quotas.
+const GROQ_URL =
+  process.env.AI_GROQ_URL || 'https://api.groq.com/openai/v1/chat/completions'
+const GROQ_MODELS_URL =
+  process.env.AI_GROQ_MODELS_URL || 'https://api.groq.com/openai/v1/models'
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ''
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
+const GEMINI_URL =
+  process.env.AI_GEMINI_BASE ||
+  'https://generativelanguage.googleapis.com/v1beta/models'
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
+const OPENROUTER_URL =
+  process.env.AI_OPENROUTER_URL ||
+  'https://openrouter.ai/api/v1/chat/completions'
+const OPENROUTER_MODELS_URL =
+  process.env.AI_OPENROUTER_MODELS_URL || 'https://openrouter.ai/api/v1/models'
+
+function envInt(name: string, def: number): number {
+  const v = Number(process.env[name])
+  return Number.isFinite(v) && v > 0 ? v : def
+}
 
 // ── Preferred models (in priority order) ──
 // These are PREFERENCES, not hard requirements: on the first AI call we
@@ -87,9 +123,15 @@ const GROQ_MODELS = [
   'llama-3.1-8b-instant',
 ]
 
-// Track rate-limited models to skip them in future calls (per-process)
-const rateLimitedModels = new Map<string, number>()
-const RATE_LIMIT_COOLDOWN_MS = 60 * 1000
+// Track rate-limited models to skip them in future calls (per-process).
+// VALUE SEMANTICS (Nov 2026 fix): the map stores the cooldown EXPIRY
+// (epoch ms), not the hit time — a 429 with a longer Retry-After extends
+// it, and readers just compare against Date.now(). The old set-at-time
+// semantics also let the sequential retry loop re-fire sibling models
+// with a STALE `now` captured before the parallel volley, feeding the
+// "everything 429s while the quota dashboard looks untouched" storm.
+const rateLimitedModels = new Map<string, number>() // key → blocked-until epoch ms
+const RATE_LIMIT_COOLDOWN_MS = envInt('AI_RATE_LIMIT_COOLDOWN_MS', 60 * 1000)
 
 // ─────────────────────────────────────────────────────────────────────────
 // FIREBASE-PERSISTED MODEL HEALTH — the "learning" half of the fallback.
@@ -118,6 +160,7 @@ const RATE_LIMIT_COOLDOWN_MS = 60 * 1000
 // we just don't share it across instances.
 // ─────────────────────────────────────────────────────────────────────────
 const HEALTH_DB_URL =
+  process.env.AI_HEALTH_DB_URL ||
   'https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app'
 const HEALTH_ROOT = 'aiModelHealth'
 
@@ -128,8 +171,97 @@ interface ModelHealth {
   last429?: number
   last404?: number
   lastOk?: number
+  /** 429 cooldown expiry shared across instances (epoch ms). */
+  cooldownUntil?: number
 }
 type HealthTable = Record<string, Record<string, ModelHealth>> // provider → model → health
+
+// ── ORG-WIDE PROVIDER COOLDOWN (Nov 2026) ──
+// Groq's free-tier limits are ORG-WIDE (RPM/RPD shared by every model on
+// the key). A 429 on gpt-oss-120b means gpt-oss-20b will 429 too — but the
+// old per-model cooldowns let each instance walk the sibling models
+// immediately after (and every OTHER instance, because the shared health
+// data was unreadable — see healthKey), a retry storm that kept the org
+// pool saturated for minutes: "couldn't reach an AI provider" on screen
+// while the daily quota dashboard looked untouched. Now a Groq 429 cools
+// the WHOLE provider, in-memory AND cross-instance via Firebase.
+const PROVIDER_ORG_WIDE = new Set(['groq'])
+const PROVIDER_COOLDOWN_NODE = '_providerCooldowns'
+const providerCooldowns = new Map<string, number>() // provider → until epoch ms (in-memory)
+let sharedProviderCooldowns: Record<string, number> = {} // loaded from Firebase
+
+function providerCooldownRemaining(provider: string, now = Date.now()): number {
+  if (!PROVIDER_ORG_WIDE.has(provider)) return 0
+  const until = Math.max(
+    providerCooldowns.get(provider) || 0,
+    sharedProviderCooldowns[provider] || 0,
+  )
+  return Math.max(0, until - now)
+}
+
+function setProviderCooldown(provider: string, ms: number): void {
+  const until = Date.now() + ms
+  const prev = Math.max(
+    providerCooldowns.get(provider) || 0,
+    sharedProviderCooldowns[provider] || 0,
+  )
+  providerCooldowns.set(provider, Math.max(until, prev))
+  // Persist cross-instance — only when meaningfully extending, so a burst
+  // of 429s doesn't PATCH Firebase on every single one.
+  if (until > prev + 5000) {
+    void (async () => {
+      try {
+        await fetch(
+          `${HEALTH_DB_URL}/${HEALTH_ROOT}/${PROVIDER_COOLDOWN_NODE}/${provider}.json`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ until }),
+            signal: AbortSignal.timeout(4000),
+          },
+        )
+      } catch {
+        // Firebase unreachable — in-memory cooldown still applies locally.
+      }
+    })()
+  }
+}
+
+function healthKey(model: string): string {
+  // Firebase path segments cannot contain '.', '/', '$', '#', '[', ']'.
+  // Model ids are FULL of these ('openai/gpt-oss-120b', 'gemini-2.5-flash',
+  // 'google/gemma-4-26b-a4b-it:free') — and the old encodeURIComponent
+  // approach failed BOTH ways in production: Firebase decoded '%2F' back
+  // into a path separator (groq health landed at groq/openai/gpt-oss-120b,
+  // nested junk no reader ever found) while dots 400'd outright
+  // ("Invalid token in path" — the live 502 diag showed every gemini-2.5-*
+  // health write failing). Underscores are safe, and ids without dots or
+  // slashes (gemini-flash-latest) stay byte-identical, so the historical
+  // success-rate data for those models keeps working.
+  return model.replace(/[./$#\[\]]/g, '_')
+}
+
+/** Parse a Retry-After hint into a cooldown in ms: the standard
+ *  `Retry-After` header (seconds) or Gemini's error-detail retryDelay
+ *  ("26s"). Clamped to [15s, 5min]; null when the response carries no
+ *  hint (callers fall back to RATE_LIMIT_COOLDOWN_MS). */
+function parseRetryAfterMs(res: Response, errText: string): number | null {
+  const header = res.headers.get('retry-after')
+  if (header) {
+    const secs = Number(header)
+    if (Number.isFinite(secs) && secs > 0) {
+      return Math.max(15_000, Math.min(5 * 60_000, secs * 1000))
+    }
+  }
+  const m = errText && errText.match(/"retryDelay"\s*:\s*"?(\d+(?:\.\d+)?)s"?/i)
+  if (m) {
+    const secs = Number(m[1])
+    if (Number.isFinite(secs) && secs > 0) {
+      return Math.max(15_000, Math.min(5 * 60_000, secs * 1000))
+    }
+  }
+  return null
+}
 
 let healthCache: HealthTable | null = null
 let healthFetchInFlight: Promise<HealthTable | null> | null = null
@@ -137,13 +269,6 @@ let healthLoadedAt = 0
 const HEALTH_TTL_MS = 60 * 1000
 const HEALTH_WRITE_THROTTLE_MS = 20 * 1000
 const lastHealthWrite = new Map<string, number>()
-
-function encodeModelId(model: string): string {
-  // Model ids contain '/' (openrouter, groq) and ':' (openrouter :free) —
-  // both are illegal in Firebase path segments. encodeURIComponent covers
-  // them reversibly.
-  return encodeURIComponent(model)
-}
 
 async function fetchHealth(): Promise<HealthTable | null> {
   try {
@@ -158,15 +283,30 @@ async function fetchHealth(): Promise<HealthTable | null> {
       string,
       Record<string, ModelHealth>
     >
-    // Decode the urlencoded model keys back to real model ids.
     const out: HealthTable = {}
     for (const [provider, models] of Object.entries(raw)) {
+      if (provider === PROVIDER_COOLDOWN_NODE) {
+        // Org-wide provider cooldowns (cross-instance 429 backoff).
+        const cds: Record<string, number> = {}
+        for (const [p, v] of Object.entries(models || {})) {
+          const until = (v as unknown as { until?: number } | null)?.until
+          if (typeof until === 'number') cds[p] = until
+        }
+        sharedProviderCooldowns = cds
+        continue
+      }
       out[provider] = {}
-      for (const [encModel, h] of Object.entries(models || {})) {
-        try {
-          out[provider][decodeURIComponent(encModel)] = h
-        } catch {
-          out[provider][encModel] = h
+      for (const [k, h] of Object.entries(models || {})) {
+        // Keys are stored pre-sanitized (healthKey) — read them as-is.
+        // Legacy nested junk (groq/openai/gpt-oss-120b from the %2F bug)
+        // reads as objects-of-objects without any counter fields — skip.
+        if (
+          h &&
+          typeof h === 'object' &&
+          !Array.isArray(h) &&
+          ('ok' in h || 'fail' in h || 'last429' in h || 'last404' in h || 'lastOk' in h || 'cooldownUntil' in h)
+        ) {
+          out[provider][k] = h
         }
       }
     }
@@ -206,6 +346,7 @@ function recordHealth(
   provider: string,
   model: string,
   event: HealthEvent,
+  cooldownMs?: number,
 ): void {
   // In-memory update (instant).
   const h = ((healthCache ||= {})[provider] ||= {})[model] ||= {}
@@ -216,13 +357,14 @@ function recordHealth(
     h.fail = (h.fail || 0) + 1
   } else if (event === '429') {
     h.last429 = Date.now()
+    h.cooldownUntil = Date.now() + (cooldownMs ?? RATE_LIMIT_COOLDOWN_MS)
   } else if (event === '404') {
     h.last404 = Date.now()
   }
 
   // Mirror the rate-limit/deprecation state into the fast in-memory maps
   // so the existing selection logic benefits immediately.
-  if (event === '429') rateLimitedModels.set(`${provider}-${model}`, Date.now())
+  if (event === '429') rateLimitedModels.set(`${provider}-${model}`, h.cooldownUntil!)
   if (event === '404') deprecatedModels.set(`${provider}-${model}`, Date.now())
 
   // Persist (fire-and-forget, throttled).
@@ -233,7 +375,7 @@ function recordHealth(
   lastHealthWrite.set(key, Date.now())
   void (async () => {
     try {
-      const path = `${HEALTH_ROOT}/${provider}/${encodeModelId(model)}`
+      const path = `${HEALTH_ROOT}/${provider}/${healthKey(model)}`
       const res = await fetch(`${HEALTH_DB_URL}/${path}.json`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -248,21 +390,26 @@ function recordHealth(
 }
 
 /** Shared cross-instance cooldown: true when ANY instance recently saw a
- *  429 (within RATE_LIMIT_COOLDOWN_MS) or 404 (within DEPRECATION_TTL_MS)
- *  for this provider+model. */
+ *  429 (cooldownUntil / legacy last429 window) or a 404 (30-min window —
+ *  retirement and key-level restrictions don't heal in 10 minutes; the old
+ *  short window made every instance re-try the "no longer available to new
+ *  users" gemini-2.5-* twins every 10 minutes, forever) for this
+ *  provider+model. */
+const SHARED_404_BLOCK_MS = 30 * 60 * 1000
 function sharedBlocked(provider: string, model: string): boolean {
-  const h = healthCache?.[provider]?.[model]
-  if (!h) return false
+  const h = healthCache?.[provider]?.[healthKey(model)]
   const now = Date.now()
+  if (!h) return false
+  if (h.cooldownUntil && now < h.cooldownUntil) return true
   if (h.last429 && now - h.last429 < RATE_LIMIT_COOLDOWN_MS) return true
-  if (h.last404 && now - h.last404 < DEPRECATION_TTL_MS) return true
+  if (h.last404 && now - h.last404 < SHARED_404_BLOCK_MS) return true
   return false
 }
 
 /** Learning score for ordering models: success rate first, recency of
  *  success as tiebreak, caller's preference order as final tiebreak. */
 function healthScore(provider: string, model: string, prefIndex: number): number {
-  const h = healthCache?.[provider]?.[model]
+  const h = healthCache?.[provider]?.[healthKey(model)]
   if (!h) return 1000 - prefIndex // no data → keep preference order
   const ok = h.ok || 0
   const fail = h.fail || 0
@@ -284,7 +431,7 @@ function healthOrdered(provider: string, models: string[]): string[] {
   const scored = models.map((m, i) => ({ m, s: healthScore(provider, m, i) }))
   // Only re-order when we actually have health data for ≥2 models of this
   // provider — otherwise the preference order stands.
-  const withData = scored.filter(({ m }) => healthCache?.[provider]?.[m])
+  const withData = scored.filter(({ m }) => healthCache?.[provider]?.[healthKey(m)])
   if (withData.length < 2) return models
   return scored.sort((a, b) => b.s - a.s).map((x) => x.m)
 }
@@ -771,6 +918,12 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   const maxTokens = opts.maxTokens ?? 400
   const candidates: Array<Promise<string | null>> = []
   lastDiagnostics = []
+  // Internal budget: the parallel volley plus the capped sequential retry
+  // must fit inside a serverless request window (ask-ai runs maxDuration
+  // 15 with a 12.5s deadline; /api/summary similar). Without a budget the
+  // old code could spend 20s+ walking sibling models while Vercel killed
+  // the function mid-flight.
+  const callDeadline = Date.now() + envInt('AI_CALL_BUDGET_MS', 11_000)
 
   // Make sure model discovery has run (no-op after the first call) and
   // load the SHARED Firebase health table (cross-instance cooldowns +
@@ -781,14 +934,18 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   const groqModels = healthOrdered('groq', effectiveModels(disc.groq, GROQ_MODELS, rankGroqModels, 'groq'))
 
   // Pick up to 2 available models per provider (skip deprecated +
-  // rate-limited, including SHARED Firebase cooldowns).
+  // rate-limited, including SHARED Firebase cooldowns and — for providers
+  // with org-wide rate pools (Groq) — the org-wide provider cooldown).
   const available = (keys: Array<{ key: string; model: string }>) =>
     keys.filter(({ key, model }) => {
       if (isDeprecated(key)) return false
-      const limitedAt = rateLimitedModels.get(key)
-      if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) return false
+      const limitedUntil = rateLimitedModels.get(key)
+      if (limitedUntil && limitedUntil > now) return false
       const dash = key.indexOf('-')
-      if (dash > 0 && sharedBlocked(key.slice(0, dash), model)) return false
+      if (dash > 0) {
+        if (sharedBlocked(key.slice(0, dash), model)) return false
+        if (providerCooldownRemaining(key.slice(0, dash), now) > 0) return false
+      }
       return true
     })
 
@@ -796,12 +953,16 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   const groqAvail = available(groqModels.map((m) => ({ key: `groq-${m}`, model: m }))).slice(0, 1)
 
   // ── Cooldown escape hatch ──
-  // If EVERY model of a provider is in the 60s rate-limit cooldown, the
+  // If EVERY model of a provider is in the rate-limit cooldown, the
   // volley would fire zero candidates and the call is guaranteed to fail
   // — one 429 burst could silence an instance for a minute (observed:
   // repeated ask-ai 502s while /api/summary worked). Always keep ONE
-  // candidate: the least-recently-limited model. Worst case it 429s
-  // again (one cheap request); best case the limit cleared and it works.
+  // candidate: the model whose cooldown expires soonest. Worst case it
+  // 429s again (one cheap request); best case the limit cleared and it
+  // works. EXCEPTION (Nov 2026): Groq's limits are org-wide — while the
+  // org cooldown is active the rescue stays quiet too (firing it just
+  // feeds the storm); it re-probes naturally on the next call after
+  // expiry.
   const rescueCandidate = (keys: Array<{ key: string; model: string }>, have: string[]) => {
     if (keys.length === 0 || have.length > 0) return null
     const limited = keys
@@ -821,10 +982,13 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     groqAvail.map((a) => a.model),
   )
   if (geminiRescue) geminiAvail.push({ key: `gemini-${geminiRescue}`, model: geminiRescue })
-  if (groqRescue) groqAvail.push({ key: `groq-${groqRescue}`, model: groqRescue })
+  if (groqRescue && providerCooldownRemaining('groq', now) === 0) {
+    groqAvail.push({ key: `groq-${groqRescue}`, model: groqRescue })
+  }
 
+  const groqCd = providerCooldownRemaining('groq', now)
   diag(
-    `volley: gemini=[${geminiAvail.map((a) => a.model).join(',') || 'NONE'}] groq=[${groqAvail.map((a) => a.model).join(',') || 'NONE'}] openrouter=${OPENROUTER_API_KEY ? pickOpenRouterModel(disc.openrouter) : 'no-key'} | discovered gemini=${disc.gemini?.length ?? 'n/a'} groq=${disc.groq?.length ?? 'n/a'} or=${disc.openrouter?.length ?? 'n/a'} | deprecated=[${Array.from(deprecatedModels).join(',') || '-'}]`,
+    `volley: gemini=[${geminiAvail.map((a) => a.model).join(',') || 'NONE'}] groq=[${groqAvail.map((a) => a.model).join(',') || 'NONE'}] openrouter=${OPENROUTER_API_KEY ? pickOpenRouterModel(disc.openrouter) : 'no-key'} | discovered gemini=${disc.gemini?.length ?? 'n/a'} groq=${disc.groq?.length ?? 'n/a'} or=${disc.openrouter?.length ?? 'n/a'} | deprecated=[${Array.from(deprecatedModels).join(',') || '-'}] | cooldowns=[${groqCd > 0 ? `groq:${Math.ceil(groqCd / 1000)}s` : '-'}]`,
   )
 
   // 1+2. Fire ONE model from EACH provider in parallel (3 requests total
@@ -850,7 +1014,10 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, false, maxTokens))
   }
 
-  // 4. Race them — first NON-NULL answer wins.
+  // 4. Race them — first NON-NULL answer wins. Bounded by the internal
+  // budget: a slow OpenRouter rotation (up to 3 models × 8s) used to keep
+  // Promise.any pending past the serverless maxDuration, so the route
+  // died at the platform edge instead of returning its own honest error.
   if (candidates.length > 0) {
     const wrappedCandidates = candidates.map((p, i) =>
       p.then((result) => {
@@ -858,21 +1025,37 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
         throw new Error(`candidate ${i} returned null`)
       }),
     )
+    const volleyBudget = Math.max(1500, callDeadline - Date.now())
+    let volleyTimer: ReturnType<typeof setTimeout> | undefined
+    const volleyTimeout = new Promise<null>((resolve) => {
+      volleyTimer = setTimeout(() => resolve(null), volleyBudget)
+    })
     try {
-      const answer = await Promise.any(wrappedCandidates)
+      const answer = await Promise.race([
+        Promise.any(wrappedCandidates).catch(() => null),
+        volleyTimeout,
+      ])
       if (answer) {
         lastProvider = 'AI (parallel)'
         return answer
       }
-    } catch {
-      // All candidates returned null or rejected.
-      // Fall through to sequential retry below.
+    } finally {
+      if (volleyTimer) clearTimeout(volleyTimer)
     }
   }
 
   // 5. Sequential retry: remaining models not yet tried. If everything
   // failed so far, re-read the provider model lists ONCE before this pass
   // (a mass failure usually means the cached list is stale).
+  // NOV 2026 retry-storm fix: (a) cooldowns are re-checked with a FRESH
+  // clock — the parallel volley can take 7-10s and the old code captured
+  // `now` BEFORE it, so a model that 429'd DURING the volley looked
+  // unlimited and was re-fired immediately (the storm that kept the
+  // shared free-tier pools saturated while daily quotas looked untouched);
+  // (b) an org-wide provider cooldown (Groq) skips that provider's
+  // remaining models entirely; (c) capped at 3 Gemini + 2 Groq models —
+  // enough coverage without walking the whole catalog into a saturated
+  // free tier; (d) the internal budget stops the walk.
   const freshDisc = await invalidateDiscovery('callAI all-candidates-failed')
   const geminiRetry = healthOrdered(
     'gemini',
@@ -882,12 +1065,17 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     'groq',
     effectiveModels(freshDisc?.groq ?? disc.groq, GROQ_MODELS, rankGroqModels, 'groq'),
   )
+  let geminiTries = 0
   for (const model of geminiRetry) {
     if (geminiAvail.some((a) => a.model === model)) continue
+    if (geminiTries >= 3) break
+    if (Date.now() > callDeadline) break
     const key = `gemini-${model}`
     if (isDeprecated(key)) continue
-    const limitedAt = rateLimitedModels.get(key)
-    if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
+    const limitedUntil = rateLimitedModels.get(key)
+    if (limitedUntil && limitedUntil > Date.now()) continue
+    if (sharedBlocked('gemini', model)) continue
+    geminiTries++
 
     const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model, false, maxTokens)
     if (answer) {
@@ -896,13 +1084,19 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     }
   }
 
-  // 6. Try remaining Groq models
+  // 6. Try remaining Groq models (org cooldown = stop for this provider)
+  let groqTries = 0
   for (const model of groqRetry) {
     if (groqAvail.some((a) => a.model === model)) continue
+    if (groqTries >= 2) break
+    if (providerCooldownRemaining('groq') > 0) break
+    if (Date.now() > callDeadline) break
     const key = `groq-${model}`
     if (isDeprecated(key)) continue
-    const limitedAt = rateLimitedModels.get(key)
-    if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
+    const limitedUntil = rateLimitedModels.get(key)
+    if (limitedUntil && limitedUntil > Date.now()) continue
+    if (sharedBlocked('groq', model)) continue
+    groqTries++
 
     const answer = await callGroq(opts.systemPrompt, opts.userPrompt, model, maxTokens)
     if (answer) {
@@ -933,10 +1127,13 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
 
   const modelOk = (key: string) => {
     if (isDeprecated(key)) return false
-    const limitedAt = rateLimitedModels.get(key)
-    if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) return false
+    const limitedUntil = rateLimitedModels.get(key)
+    if (limitedUntil && limitedUntil > now) return false
     const dash = key.indexOf('-')
-    if (dash > 0 && sharedBlocked(key.slice(0, dash), key.slice(dash + 1))) return false
+    if (dash > 0) {
+      if (sharedBlocked(key.slice(0, dash), key.slice(dash + 1))) return false
+      if (providerCooldownRemaining(key.slice(0, dash), now) > 0) return false
+    }
     return true
   }
 
@@ -950,8 +1147,9 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
     }
   }
 
-  // 2. Groq compound-beta in parallel (skip if deprecated)
-  if (GROQ_API_KEY && !isDeprecated('groq-compound-beta')) {
+  // 2. Groq compound-beta in parallel (skip if deprecated or the org-wide
+  //    Groq cooldown is active — see PROVIDER_ORG_WIDE)
+  if (GROQ_API_KEY && !isDeprecated('groq-compound-beta') && providerCooldownRemaining('groq', now) === 0) {
     candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, GROQ_COMPOUND_MODEL))
     // ALSO race a regular Groq model (no web search, but at least answers
     // from training data) — compound-beta alone has been unreliable.
@@ -996,18 +1194,24 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
   }
 
   // 5. Sequential retry on remaining Gemini models WITH search. Re-read
-  //    the model lists first when the whole volley failed (stale list?).
+  //    the model lists first when the whole volley failed (stale list?);
+  //    cooldowns re-checked with a FRESH clock, capped at 2 models so one
+  //    compound question can't walk the whole catalog into a rate limit.
   const freshDisc = await invalidateDiscovery('callAICompound all-candidates-failed')
   const geminiRetry = healthOrdered(
     'gemini',
     effectiveModels(freshDisc?.gemini ?? disc.gemini, GEMINI_MODELS, rankGeminiModels, 'gemini'),
   )
+  let geminiTries = 0
   for (const model of geminiRetry) {
     if (geminiSearchModels.includes(model)) continue
+    if (geminiTries >= 2) break
     const key = `gemini-${model}`
     if (isDeprecated(key)) continue
-    const limitedAt = rateLimitedModels.get(key)
-    if (limitedAt && now - limitedAt < RATE_LIMIT_COOLDOWN_MS) continue
+    const limitedUntil = rateLimitedModels.get(key)
+    if (limitedUntil && limitedUntil > Date.now()) continue
+    if (sharedBlocked('gemini', model)) continue
+    geminiTries++
 
     const answer = await callGemini(opts.systemPrompt, opts.userPrompt, model, true)
     if (answer) {
@@ -1089,11 +1293,17 @@ export async function callVisionAI(
   const dataUrl = `data:${img.mime};base64,${img.data}`
   const candidates: Array<Promise<string | null>> = []
 
-  // Groq vision (llama-4-scout) — OpenAI-compatible image_url format
-  if (GROQ_API_KEY && !isDeprecated(`groq-${GROQ_VISION_MODEL}`)) {
+  // Groq vision (llama-4-scout) — OpenAI-compatible image_url format.
+  // Respects the org-wide Groq cooldown too (vision calls share the same
+  // org rate pool as every other Groq call).
+  if (
+    GROQ_API_KEY &&
+    !isDeprecated(`groq-${GROQ_VISION_MODEL}`) &&
+    providerCooldownRemaining('groq') === 0
+  ) {
     const key = `groq-${GROQ_VISION_MODEL}`
-    const limitedAt = rateLimitedModels.get(key)
-    if (!limitedAt || Date.now() - limitedAt >= RATE_LIMIT_COOLDOWN_MS) {
+    const limitedUntil = rateLimitedModels.get(key)
+    if (!limitedUntil || limitedUntil <= Date.now()) {
       candidates.push(
         (async () => {
           const controller = new AbortController()
@@ -1127,8 +1337,11 @@ export async function callVisionAI(
             if (!res.ok) {
               const errText = await res.text().catch(() => '')
               if (res.status === 429) {
-                rateLimitedModels.set(key, Date.now())
-                console.warn(`[ai] Groq vision rate-limited`)
+                const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
+                rateLimitedModels.set(key, Date.now() + cooldown)
+                recordHealth('groq', GROQ_VISION_MODEL, '429', cooldown)
+                setProviderCooldown('groq', cooldown)
+                console.warn(`[ai] Groq vision rate-limited (org-wide backoff ${Math.ceil(cooldown / 1000)}s)`)
               } else {
                 checkDeprecation(key, res.status, errText)
               }
@@ -1149,9 +1362,11 @@ export async function callVisionAI(
   }
 
   // Gemini vision — inline_data format
-  const geminiModel = GEMINI_VISION_MODELS.find(
-    (m) => !isDeprecated(`gemini-${m}`) && !rateLimitedModels.has(`gemini-${m}`),
-  )
+  const geminiModel = GEMINI_VISION_MODELS.find((m) => {
+    if (isDeprecated(`gemini-${m}`)) return false
+    const limitedUntil = rateLimitedModels.get(`gemini-${m}`)
+    return !limitedUntil || limitedUntil <= Date.now()
+  })
   if (geminiModel && GEMINI_API_KEY) {
     candidates.push(
       (async () => {
@@ -1181,8 +1396,10 @@ export async function callVisionAI(
           if (!res.ok) {
             const errText = await res.text().catch(() => '')
             if (res.status === 429) {
-              rateLimitedModels.set(`gemini-${geminiModel}`, Date.now())
-              console.warn(`[ai] Gemini ${geminiModel} (vision) rate-limited`)
+              const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
+              rateLimitedModels.set(`gemini-${geminiModel}`, Date.now() + cooldown)
+              recordHealth('gemini', geminiModel, '429', cooldown)
+              console.warn(`[ai] Gemini ${geminiModel} (vision) rate-limited (${Math.ceil(cooldown / 1000)}s backoff)`)
             } else {
               checkDeprecation(`gemini-${geminiModel}`, res.status, errText)
             }
@@ -1249,9 +1466,14 @@ async function callGroq(
       const key = `groq-${model}`
 
       if (res.status === 429) {
-        rateLimitedModels.set(key, Date.now())
-        recordHealth('groq', model, '429') // shared across ALL instances
-        diag(`groq ${model}: 429 rate-limited`)
+        // Groq's free-tier limits are ORG-WIDE (RPM/RPD shared by every
+        // model on the key): one 429 means the whole provider needs to
+        // back off, not just this model. Honour any Retry-After hint.
+        const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
+        rateLimitedModels.set(key, Date.now() + cooldown)
+        recordHealth('groq', model, '429', cooldown) // shared across ALL instances
+        setProviderCooldown('groq', cooldown)
+        diag(`groq ${model}: 429 rate-limited (org-wide backoff ${Math.ceil(cooldown / 1000)}s)`)
       } else {
         // Check for deprecation — auto-deprecate if detected
         checkDeprecation(key, res.status, errText)
@@ -1316,9 +1538,13 @@ async function callGemini(
       const key = `gemini-${model}`
 
       if (res.status === 429) {
-        rateLimitedModels.set(key, Date.now())
-        recordHealth('gemini', model, '429') // shared across ALL instances
-        diag(`gemini ${model}: 429 rate-limited`)
+        // Gemini's free-tier limits are per-model pools, so a 429 here does
+        // NOT block the sibling models — but honour the retryDelay the API
+        // reports (usually 20-60s) instead of guessing a flat 60s.
+        const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
+        rateLimitedModels.set(key, Date.now() + cooldown)
+        recordHealth('gemini', model, '429', cooldown) // shared across ALL instances
+        diag(`gemini ${model}: 429 rate-limited (${Math.ceil(cooldown / 1000)}s backoff)`)
       } else {
         checkDeprecation(key, res.status, errText)
         if (res.status !== 404) recordHealth('gemini', model, 'fail')
@@ -1366,6 +1592,10 @@ async function callOpenRouter(
 
   for (let attempt = 0; attempt < candidates.length; attempt++) {
     const model = candidates[attempt]
+    // Model-level 429 cooldown: a free model that just rate-limited us
+    // shouldn't be re-fired within its cooldown window.
+    const orLimitedUntil = rateLimitedModels.get(`openrouter-${model}`)
+    if (orLimitedUntil && orLimitedUntil > Date.now()) continue
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 8000)
 
@@ -1412,7 +1642,9 @@ async function callOpenRouter(
         // request, so stop after logging. Other errors (404 model gone,
         // 400 bad request) → rotate to the next candidate model.
         if (res.status === 429) {
-          recordHealth('openrouter', model, '429')
+          const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
+          rateLimitedModels.set(`openrouter-${model}`, Date.now() + cooldown)
+          recordHealth('openrouter', model, '429', cooldown)
           return null
         }
         if (res.status === 404) {
