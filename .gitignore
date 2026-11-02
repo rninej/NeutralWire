@@ -66,3 +66,56 @@ download/*.png
 !public/favicon-*.png
 agent-ctx/
 .quarantine-s54/
+
+# ── Container/verification artifacts — NEVER ship ──────────────────────
+# (session57: the container's git-add-everything auto-commit tracked 200
+# scaffold/screenshot files and BROKE the Vercel build — the scaffold's
+# src/app/api/resources-zip imports jszip, which is not a dependency, and
+# module-resolution failure is not suppressible by ignoreBuildErrors.)
+# These patterns keep any future auto-commit from sweeping them in again.
+/.zscripts/
+/resources/
+/screenshots/
+/verify/
+/download/
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+/*.mp4
+/3199
+/refresh_test.json
+/vlm*.json
+# One-off local diagnostics + session verification scripts (files already
+# tracked in git are unaffected by ignore rules)
+scripts/s4*
+scripts/s5*
+scripts/diag-*
+scripts/fix_*
+scripts/clean-*
+scripts/analyze-*
+scripts/find_*
+scripts/fetch-heroes.ts
+scripts/generate-assets.ts
+scripts/publish-github.sh
+scripts/replace-startup-links.py
+scripts/firebase-audit.ts
+scripts/image-analysis.json
+# Scaffold src duplicates of the REAL public/ assets — tracking these
+# breaks the production build (see note above). The real app ships
+# public/manifest.json + public/robots.txt + root icons instead.
+src/app/api/audit/
+src/app/api/resource/
+src/app/api/resources-zip/
+src/app/article/
+src/app/manifest.ts
+src/app/robots.ts
+src/components/article-json-ld.tsx
+src/components/debug/overview-tab.tsx
+src/components/debug/plan-tab.tsx
+src/components/debug/resources-tab.tsx
+src/components/debug/system-tab.tsx
+src/components/debug/code-block.tsx
+src/hooks/use-discover-progress.ts
+src/lib/articles.ts
+src/lib/resource-registry.ts
