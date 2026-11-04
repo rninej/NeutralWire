@@ -60,11 +60,19 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // ── Interval floor for lease- AND vercel-cron-triggered runs (the
-  //    external secret cron keeps its own schedule and is exempt). The
-  //    x-vercel-cron header is platform-set but spoofable by a determined
-  //    caller — the floor turns spam into at-most-one-run-per-interval. ──
-  if (viaLease || viaVercelCron) {
+  // ── Interval floor for ALL triggers (the Nov 2026 Fluid Active CPU
+  //    diet — the external secret cron used to bypass this entirely and
+  //    ran the full digest sweep on every hit). The x-vercel-cron header
+  //    is platform-set but spoofable by a determined caller — the floors
+  //    turn spam into at-most-one-run-per-interval. ──
+  if (viaVercelCron) {
+    if (await jobRecentlyRan('digest', 25 * 60 * 1000)) {
+      return NextResponse.json({ ok: true, skipped: 'interval-floor' })
+    }
+    await markJobRun('digest')
+  } else {
+    // Secret (external cron) or lease (userCron) — the heavy path,
+    // floored at ~1h.
     if (await jobRecentlyRan('digest', CRON_JOB_INTERVALS.digest.serverFloorMs)) {
       return NextResponse.json({ ok: true, skipped: 'interval-floor' })
     }

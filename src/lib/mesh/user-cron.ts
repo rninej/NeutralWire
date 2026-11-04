@@ -12,9 +12,11 @@
  *    the 3 a.m. no-visitor invocations disappear entirely.
  *
  * Jobs:
- *  - refresh  → /api/cron/refresh-all (RSS/GDELT cache refresh), 30 min
+ *  - refresh  → /api/cron/refresh-all (RSS/GDELT cache refresh), 3h
+ *    (Fluid Active CPU diet, Nov 2026: was 30 min — viewed categories
+ *    still refresh on demand via /api/news's own 30-min TTL)
  *  - notify   → /api/push/trigger-tz  (timezone-aware briefings), 20 min
- *  - digest   → /api/cron/digest     (email newsletters, Resend), 30 min
+ *  - digest   → /api/cron/digest     (email newsletters, Resend), 1h
  *
  * AUTH: the endpoints accept a ONE-TIME LEASE instead of the admin
  * secret: the browser writes meshJobs/leases/<id> = { p, ts: <SERVER
@@ -31,9 +33,12 @@ import { RoomPresence, type PresenceSnapshot } from '@/lib/mesh/mesh-presence'
 import { logMeshEvent } from '@/lib/mesh/mesh-log'
 import { rtdbGet, rtdbPut, serverTimestamp } from '@/lib/mesh/rtdb-rest'
 
-const REFRESH_INTERVAL_MS = 30 * 60 * 1000
+// Fluid Active CPU diet (Nov 2026 Hobby fair-use pause): refresh 30 min →
+// 3h, digest 30 min → 1h. Server-side floors (lease-server.ts) match, so
+// floored triggers are cheap 200s instead of full aggregations.
+const REFRESH_INTERVAL_MS = 3 * 60 * 60 * 1000
 const NOTIFY_INTERVAL_MS = 20 * 60 * 1000
-const DIGEST_INTERVAL_MS = 30 * 60 * 1000
+const DIGEST_INTERVAL_MS = 60 * 60 * 1000
 const TICK_MS = 60 * 1000
 
 type CronJob = 'refresh' | 'notify' | 'digest'

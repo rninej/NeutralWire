@@ -76,21 +76,28 @@ export async function markJobRun(job: string): Promise<void> {
 
 // ── Job constants (client interval > server floor > underlying dedup) ──
 export const CRON_JOB_INTERVALS = {
-  /** RSS/GDELT cache refresh — visitors check every 30 min. */
+  /** RSS/GDELT cache refresh — visitors check every 3h. (Was 30 min: the
+   *  round-the-clock 4-category re-aggregation every 30 min — visitor
+   *  cron + the external cron service — was the main Fluid Active CPU
+   *  burner behind the Nov 2026 Hobby fair-use pause, 12h vs 4h/30d.
+   *  Viewed categories still refresh on demand via /api/news's own
+   *  30-min TTL, so live feeds stay fresh; this schedule only has to
+   *  keep the non-viewed rooms, the archive pass and the sitemap moving.) */
   refresh: {
-    clientIntervalMs: 30 * 60 * 1000,
-    serverFloorMs: 25 * 60 * 1000,
+    clientIntervalMs: 3 * 60 * 60 * 1000,
+    serverFloorMs: 2 * 60 * 60 * 1000 + 55 * 60 * 1000, // 2h55m — just under the client interval
   },
-  /** Timezone-aware briefings — visitors check every 20 min (the ±15
-   *  minute send windows always catch at least one trigger). */
+  /** Timezone-aware briefings — unchanged (light route: reads + sends
+   *  only; the ±15-minute send windows need the 20-min cadence). */
   notify: {
     clientIntervalMs: 20 * 60 * 1000,
     serverFloorMs: 14 * 60 * 1000,
   },
-  /** Email digest sends — visitors check every 30 min (isDue windows are
-   *  an hour wide, so this always lands inside them). */
+  /** Email digest sends — visitors check every 1h. (Was 30 min. isDue
+   *  windows are an hour wide, so a ≤1h interval still lands inside
+   *  every window — the delivery guarantee is preserved.) */
   digest: {
-    clientIntervalMs: 30 * 60 * 1000,
-    serverFloorMs: 25 * 60 * 1000,
+    clientIntervalMs: 60 * 60 * 1000,
+    serverFloorMs: 55 * 60 * 1000,
   },
 } as const

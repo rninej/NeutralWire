@@ -42,13 +42,15 @@ export const maxDuration = 60
  * Firebase lease (the user-powered cron — see /src/lib/mesh/lease-server.ts)
  * OR the Vercel platform cron (vercel.json → `x-vercel-cron: 1` header —
  * also floor-throttled below so a spoofed header can't force heavy
- * back-to-back runs). Lease/cron-triggered runs additionally respect a
- * 25-minute interval floor (Firebase lastRun + in-memory).
+ * back-to-back runs). Lease- AND secret-triggered runs respect a ~3h
+ * interval floor (Firebase lastRun + in-memory) — the Nov 2026 CPU diet.
  *
  * Trigger: Vercel cron (vercel.json, daily 05:00 UTC — the OFFLINE
- *   guarantee) AND/OR cron-job.org every 30 minutes AND/OR the oldest
- *   live visitor (experimental userCron feature, default ON).
- *   URL: https://neutralwire.org/api/cron/refresh-all?secret=965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd
+ *   guarantee) AND/OR cron-job.org every 30 minutes (since the Nov 2026
+ *   Fluid Active CPU diet this path is FLOORED server-side at ~3h —
+ *   hits inside the floor cost one Firebase read and a 200) AND/OR the
+ *   oldest live visitor (experimental userCron feature, default ON, 3h
+ *   cadence). URL: https://neutralwire.org/api/cron/refresh-all?secret=…
  *   Lease: /api/cron/refresh-all?lease=<id>&peer=<peerId>
  *
  * The after() tail ALSO runs the DIGEST email sweep (catch-up mode) —
@@ -90,11 +92,28 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // ── Interval floor for lease- AND vercel-cron-triggered runs ──
-  // The external cron keeps its own schedule and is NOT throttled here;
-  // visitor-driven and platform-cron triggers are capped so a buggy/
-  // spoofed caller cannot multiply invocations.
-  if (viaLease || viaVercelCron) {
+  // ── Interval floors — ALL triggers (the Nov 2026 Fluid Active CPU diet) ──
+  // The external-secret path (cron-job.org, every 30 min) used to run the
+  // FULL 4-category aggregation on every hit, unthrottled — the single
+  // biggest Active-CPU burner on the Hobby plan (12h vs the 4h/30-day
+  // fair-use cap → the team-wide pause). Now every non-platform trigger
+  // (secret or lease) shares the ~3h floor; a floored hit costs one
+  // Firebase read + a 200. The platform cron (daily 05:00 — the OFFLINE
+  // guarantee) keeps only the small spoof-guard floor so it ALWAYS runs.
+  // Runs on every authorized path now mark meshJobs/lastRun — previously
+  // secret runs never marked, so the userCron client kept seeing the job
+  // as due and double-firing on top of the external cron.
+  if (viaVercelCron) {
+    if (await jobRecentlyRan('refresh', 25 * 60 * 1000)) {
+      return NextResponse.json({
+        ok: true,
+        skipped: 'interval',
+        message: 'Refresh ran recently — platform floor respected',
+        ts: Date.now(),
+      })
+    }
+    await markJobRun('refresh')
+  } else {
     if (await jobRecentlyRan('refresh', CRON_JOB_INTERVALS.refresh.serverFloorMs)) {
       return NextResponse.json({
         ok: true,
