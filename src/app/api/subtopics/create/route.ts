@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
     // ── Premium gate ──
     const requester = await getRequesterTier(req)
-    if (!requester.allUnlocked && requester.tier === 'free') {
+    if (!requester.premiumUnlocked && requester.tier === 'free') {
       return NextResponse.json(
         {
           error: 'Custom subtopics are a Premium feature.',

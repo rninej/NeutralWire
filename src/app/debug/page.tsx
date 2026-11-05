@@ -747,7 +747,7 @@ export default function DebugPage() {
   const [smartPersonalizationResult, setSmartPersonalizationResult] = React.useState<string | null>(null)
 
   // ── Monetization model (subscription tiers vs the original donations) ──
-  const [monetizationModel, setMonetizationModel] = React.useState<'subscription' | 'donation' | null>(null)
+  const [monetizationModel, setMonetizationModel] = React.useState<'subscription' | 'donation' | 'free' | null>(null)
   const [monetizationFlipping, setMonetizationFlipping] = React.useState(false)
   const [monetizationResult, setMonetizationResult] = React.useState<string | null>(null)
 
@@ -783,7 +783,13 @@ export default function DebugPage() {
         setMeshRelay(d?.meshRelay !== false)
         setUserCron(d?.userCron !== false)
         setSmartPersonalization(d?.smartPersonalization !== false)
-        setMonetizationModel(d?.monetizationModel === 'donation' ? 'donation' : 'subscription')
+        setMonetizationModel(
+          d?.monetizationModel === 'donation'
+            ? 'donation'
+            : d?.monetizationModel === 'free'
+              ? 'free'
+              : 'subscription',
+        )
       })
       .catch(() => {
         setNavMode('cards')
@@ -818,9 +824,10 @@ export default function DebugPage() {
     }
   }
 
-  /** Switch the WHOLE SITE between the subscription tier model and the
-   *  original donation model (the monetization master switch). */
-  const setMonetization = async (model: 'subscription' | 'donation') => {
+  /** Switch the WHOLE SITE between the subscription tier model, the
+   *  original donation model, and the completely-free mode (the
+   *  monetization master switch). */
+  const setMonetization = async (model: 'subscription' | 'donation' | 'free') => {
     if (!passwordRef.current || monetizationFlipping) return
     setMonetizationFlipping(true)
     setMonetizationResult(null)
@@ -835,7 +842,9 @@ export default function DebugPage() {
         setMonetizationResult(
           model === 'donation'
             ? 'Donation model LIVE for everyone on their next page load — the classic Ko-fi site, all premium gates open.'
-            : 'Subscription model LIVE for everyone on their next page load — premium gates on, donation popups stood down.',
+            : model === 'free'
+              ? 'Completely-free mode LIVE for everyone on their next page load — every premium feature open, the donation system hidden, export/API still Ultra.'
+              : 'Subscription model LIVE for everyone on their next page load — premium gates on, donation popups stood down.',
         )
       } else {
         setMonetizationResult('Flip failed — check the admin password.')
@@ -1795,9 +1804,12 @@ export default function DebugPage() {
             the email digest, gradient themes and personal flags, and Ultra
             (£20/$20/€20) adds API access + article export. <strong>Donation</strong>{" "}
             flips the whole site back to the original Ko-fi model — every premium gate
-            stands down. Applies to all users on their next page load.
+            stands down. <strong>Free</strong> unlocks every premium feature for everyone
+            and stands the donation system down everywhere (no Ko-fi, no donate asks,
+            no upsells) — only article export &amp; API access stay Ultra-gated.
+            Applies to all users on their next page load.
           </p>
-          <div className="grid max-w-4xl grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid max-w-4xl grid-cols-1 gap-3 sm:grid-cols-3">
             <button
               type="button"
               onClick={() => setMonetization('subscription')}
@@ -1844,6 +1856,30 @@ export default function DebugPage() {
               </span>
               <span className="text-xs text-muted-foreground">
                 The classic Ko-fi site — everything unlocked for everyone
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMonetization('free')}
+              disabled={monetizationFlipping || monetizationModel === null}
+              className={cn(
+                'flex flex-col items-start gap-1.5 rounded-xl border-2 p-3.5 text-left transition-colors disabled:opacity-60',
+                monetizationModel === 'free'
+                  ? 'border-emerald-500 bg-emerald-500/10'
+                  : 'border-border hover:bg-muted/50',
+              )}
+            >
+              <span className="flex items-center gap-2 text-sm font-bold">
+                <Sparkles className="h-4 w-4 text-emerald-500" />
+                Completely free
+                {monetizationModel === 'free' && (
+                  <span className="rounded-full bg-foreground px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-background">
+                    Live
+                  </span>
+                )}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Every feature free for everyone · no donations anywhere · export stays Ultra
               </span>
             </button>
           </div>

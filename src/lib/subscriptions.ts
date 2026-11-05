@@ -20,6 +20,9 @@
  * visitor's device(s). Tier resolution order:
  *   1. If monetization model is 'donation' → everyone is effectively
  *      unrestricted (the gates read the model, not just the tier).
+ *      If it is 'free' (the /debug completely-free mode) → every PREMIUM
+ *      gate stands down too, but Ultra (API access + article export)
+ *      stays tier-gated, and every donation/upsell surface is hidden.
  *   2. Session cookie `nw_session` → account → account.tier.
  *   3. No session → device record tier (`devices/<id>.tier`) — this is how
  *      the /debug guest-code grant works for logged-out users.
@@ -52,7 +55,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 import { firebaseRead, firebaseWrite, firebasePatch } from '@/lib/firebase-server'
 
 export type Tier = 'free' | 'premium' | 'ultra'
-export type MonetizationModel = 'donation' | 'subscription'
+export type MonetizationModel = 'donation' | 'subscription' | 'free'
 
 export const TIER_PRICES: Record<'premium' | 'ultra', { gbp: number; usd: number; eur: number }> = {
   premium: { gbp: 3, usd: 3, eur: 3 },
@@ -349,8 +352,13 @@ export async function upsertSocialAccount(
 export interface RequesterTier {
   tier: Tier
   model: MonetizationModel
-  /** True when every premium gate stands down (donation model). */
+  /** True when EVERY gate stands down (donation model) — including
+   *  export/API. NOT true under 'free' (export stays Ultra-gated). */
   allUnlocked: boolean
+  /** True when the PREMIUM gates stand down (donation OR free model).
+   *  The free mode unlocks every premium feature site-wide while API
+   *  access + article export remain tier-gated. */
+  premiumUnlocked: boolean
   accountId: string | null
   email: string | null
   renewsAt: number | null
@@ -365,7 +373,8 @@ const MODEL_MEMO_MS = 10 * 1000
 export async function getMonetizationModel(): Promise<MonetizationModel> {
   if (modelMemo && Date.now() - modelMemo.ts < MODEL_MEMO_MS) return modelMemo.value
   const stored = await firebaseRead<string>('featureFlags/monetizationModel')
-  const value: MonetizationModel = stored === 'donation' ? 'donation' : 'subscription'
+  const value: MonetizationModel =
+    stored === 'donation' ? 'donation' : stored === 'free' ? 'free' : 'subscription'
   modelMemo = { value, ts: Date.now() }
   return value
 }
@@ -387,6 +396,7 @@ export function invalidateModelMemo(): void {
 export async function getRequesterTier(req: NextRequest): Promise<RequesterTier> {
   const model = await getMonetizationModel()
   const allUnlocked = model === 'donation'
+  const premiumUnlocked = model === 'donation' || model === 'free'
 
   const session = await readSession(req)
   if (session?.accountId) {
@@ -409,6 +419,7 @@ export async function getRequesterTier(req: NextRequest): Promise<RequesterTier>
         tier,
         model,
         allUnlocked,
+        premiumUnlocked,
         accountId: session.accountId,
         email: account.email,
         renewsAt,
@@ -422,11 +433,11 @@ export async function getRequesterTier(req: NextRequest): Promise<RequesterTier>
   if (deviceId) {
     const t = await firebaseRead<Tier>(`devices/${deviceId}/tier`)
     if (t === 'premium' || t === 'ultra') {
-      return { tier: t, model, allUnlocked, accountId: null, email: null, renewsAt: null, cancelAtEnd: false, via: 'device' }
+      return { tier: t, model, allUnlocked, premiumUnlocked, accountId: null, email: null, renewsAt: null, cancelAtEnd: false, via: 'device' }
     }
   }
 
-  return { tier: 'free', model, allUnlocked, accountId: null, email: null, renewsAt: null, cancelAtEnd: false, via: 'none' }
+  return { tier: 'free', model, allUnlocked, premiumUnlocked, accountId: null, email: null, renewsAt: null, cancelAtEnd: false, via: 'none' }
 }
 
 // ── Tier mutation (checkout, webhook, /debug grant, cancel) ───────────
@@ -769,7 +780,10 @@ export interface Entitlements {
 }
 
 export function entitlementsFor(tier: Tier, model: MonetizationModel): Entitlements {
-  const premium = model === 'donation' ? true : tier === 'premium' || tier === 'ultra'
+  // 'donation' unlocks EVERYTHING (the classic site). 'free' unlocks every
+  // premium feature but keeps API access + article export tier-gated
+  // (owner spec: "every feature free — not the export feature").
+  const premium = model !== 'subscription'
   const ultra = model === 'donation' ? true : tier === 'ultra'
   return {
     model,

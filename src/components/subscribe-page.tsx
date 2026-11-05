@@ -295,6 +295,62 @@ function SubscribePageInner() {
     </div>
   ) : null
 
+  // ── FREE MODEL (the completely-free mode) ──
+  // Every premium feature is unlocked for everyone and there is NO
+  // donation system anywhere — no Ko-fi, no donate buttons, no upsells.
+  // The only paid feature left is article export + API access (Ultra),
+  // reachable from the export button on any article.
+  if (sub.model === 'free') {
+    return (
+      <div className="min-h-dvh bg-background">
+        <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur">
+          <div className="mx-auto flex h-14 max-w-3xl items-center gap-2 px-4">
+            <Button variant="ghost" size="sm" onClick={goBackToFeed} className="gap-1.5">
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">Back to your feed</span>
+              <span className="sm:hidden">Back</span>
+            </Button>
+            <div className="ml-auto flex items-center gap-1.5 text-sm font-bold text-emerald-600 dark:text-emerald-400">
+              <Sparkles className="h-4 w-4" />
+              Free
+            </div>
+          </div>
+        </header>
+        <main className="mx-auto max-w-xl px-4 pb-16 pt-10 text-center">
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10 ring-1 ring-emerald-500/30">
+              <Sparkles className="h-8 w-8 text-emerald-500" />
+            </div>
+            <h1 className="text-2xl font-extrabold leading-tight sm:text-3xl">
+              Every feature is free right now
+            </h1>
+            <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
+              All subtopics, the full archive, the email briefing, gradient
+              themes and personal flags are unlocked for everyone — no
+              subscription, no donations, no paywalls.
+            </p>
+            <p className="mx-auto mt-2 max-w-md text-xs leading-relaxed text-muted-foreground">
+              The only exception is article export &amp; API access, which
+              remain an Ultra feature — unlock it from the export button on
+              any story.
+            </p>
+            <Button
+              size="lg"
+              className="mt-6 h-12 rounded-full px-8 text-sm font-bold"
+              onClick={goBackToFeed}
+            >
+              Back to your feed
+            </Button>
+          </motion.div>
+        </main>
+      </div>
+    )
+  }
+
   // ── DONATION MODEL ──
   // No tiers exist when the site runs the classic donation model — every
   // feature is unlocked for everyone. This page becomes the simple

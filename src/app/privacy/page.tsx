@@ -30,15 +30,16 @@ const LAST_UPDATED = '28 September 2026'
  */
 
 const MONETIZATION_FLAG_TTL_MS = 10 * 1000
-let monetizationMemo: { value: 'subscription' | 'donation'; ts: number } | null = null
+let monetizationMemo: { value: 'subscription' | 'donation' | 'free'; ts: number } | null = null
 
-async function getMonetizationModel(): Promise<'subscription' | 'donation'> {
+async function getMonetizationModel(): Promise<'subscription' | 'donation' | 'free'> {
   if (monetizationMemo && Date.now() - monetizationMemo.ts < MONETIZATION_FLAG_TTL_MS) {
     return monetizationMemo.value
   }
   try {
     const stored = await firebaseRead<string>('featureFlags/monetizationModel')
-    const value: 'subscription' | 'donation' = stored === 'donation' ? 'donation' : 'subscription'
+    const value: 'subscription' | 'donation' | 'free' =
+      stored === 'donation' ? 'donation' : stored === 'free' ? 'free' : 'subscription'
     monetizationMemo = { value, ts: Date.now() }
     return value
   } catch {
@@ -83,6 +84,7 @@ function Row({ k, v }: { k: string; v: string }) {
 export default async function PrivacyPage() {
   const model = await getMonetizationModel()
   const donation = model === 'donation'
+  const free = model === 'free'
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -112,7 +114,7 @@ export default async function PrivacyPage() {
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             NeutralWire works <b>without an account</b> — the whole app runs
             on a random <b>device ID</b> generated on your phone. If you
-            {donation ? ' do create one (it syncs your feed across devices), all it holds is your email and a salted password hash' : ' want Premium or the email briefing, an account holds your email and a salted password hash — never a name, never plaintext'}{' '}
+            {donation || free ? ' do create one (it syncs your feed across devices), all it holds is your email and a salted password hash' : ' want Premium or the email briefing, an account holds your email and a salted password hash — never a name, never plaintext'}{' '}
             . We store your settings on your device, and a small set of
             anonymous stats in our database so the app can personalize your
             feed and tell left, center, and right coverage apart. We{' '}
@@ -304,7 +306,9 @@ export default async function PrivacyPage() {
           <b>AI providers</b> (Groq, Google, OpenRouter) — see section 4.
         </Li>
         <Li>
-          <b>Ko-fi</b> — {donation
+          <b>Ko-fi</b> — {free
+            ? 'not currently used — the site is running its completely-free mode (every feature open, no payments processed anywhere).'
+            : donation
             ? "only if you choose to donate; that transaction happens entirely on Ko-fi's platform (we receive a confirmation with your payment ID and, if you use the same email, nothing more)."
             : "payments and subscriptions happen entirely on Ko-fi's platform. Ko-fi tells us the payment amount, a payment/message ID, and (if you pay with the email your account uses or paste a claim code) which account to upgrade. We never see your card or bank details."}
         </Li>

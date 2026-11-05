@@ -19,7 +19,7 @@ import * as React from 'react'
 import { setAccountIdLocal } from './user-interests'
 
 export type Tier = 'free' | 'premium' | 'ultra'
-export type Model = 'donation' | 'subscription'
+export type Model = 'donation' | 'subscription' | 'free'
 
 export interface Entitlements {
   customSubtopics: boolean
@@ -143,10 +143,10 @@ export function SubscriptionProvider({
   initialModel,
 }: {
   children: React.ReactNode
-  /** SSR-provided monetization model ('donation' | 'subscription') so the
-   *  first paint already knows which popup system runs — the /me fetch
-   *  refines it (plus tier/account) right after. */
-  initialModel?: 'donation' | 'subscription'
+  /** SSR-provided monetization model ('donation' | 'subscription' |
+   *  'free') so the first paint already knows which popup system runs —
+   *  the /me fetch refines it (plus tier/account) right after. */
+  initialModel?: 'donation' | 'subscription' | 'free'
 }) {
   const [state, setState] = React.useState<SubscriptionState>({
     ...DEFAULT_STATE,
@@ -213,6 +213,10 @@ export function useSubscription(): SubscriptionContextValue {
 export function useFeatureUnlocked(feature: UpgradeFeature): boolean {
   const { model, entitlements, loading } = useSubscription()
   if (model === 'donation') return true // donation model = everything unlocked
+  // Free model = every PREMIUM feature unlocked immediately (no loading
+  // flash); export/API correctly fall through to the tier-gated
+  // entitlements from /me (owner spec: export is NOT free).
+  if (model === 'free' && feature !== 'articleExport' && feature !== 'apiAccess') return true
   if (loading) return false
   return Boolean(entitlements[feature])
 }

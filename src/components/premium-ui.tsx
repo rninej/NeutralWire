@@ -132,9 +132,10 @@ export function MeteorShower({ className }: { className?: string }) {
 
 export function PremiumBadge({ ultra = false, className }: { ultra?: boolean; className?: string }) {
   // No tiers to advertise in the donation model — every feature is
-  // already unlocked, so a "Premium" chip would be a lie.
+  // already unlocked, so a "Premium" chip would be a lie. Same under the
+  // completely-free model (nothing is for sale).
   const { model } = useSubscription()
-  if (model === 'donation') return null
+  if (model === 'donation' || model === 'free') return null
   return (
     <span
       className={cn(

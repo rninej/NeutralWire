@@ -344,9 +344,11 @@ export default function Home({
   smartPersonalization?: boolean
   /** THE MONETIZATION SWITCH (SSR-provided): 'subscription' = the tier
    *  model (premium gates live, donation popups stand down); 'donation'
-   *  = the original Ko-fi donation site (all gates open). Flipped from
-   *  /debug; also re-checked live by the popups leaf via useSubscription. */
-  monetizationModel?: 'donation' | 'subscription'
+   *  = the original Ko-fi donation site (all gates open); 'free' = the
+   *  completely-free mode (every premium feature open, donation system
+   *  hidden everywhere, export/API still Ultra). Flipped from /debug;
+   *  also re-checked live by the popups leaf via useSubscription. */
+  monetizationModel?: 'donation' | 'subscription' | 'free'
 }) {
   // --- Platform detection (Android / Apple / Other) ---
   // Sets body.platform-{android|apple|other} so the CSS glass rules in
@@ -3135,14 +3137,15 @@ export default function Home({
       <IosNotificationPrompt />
       <PwaOnboarding />
 
-      {/* ── MONETIZATION POPUPS — donation vs subscription model ──
+      {/* ── MONETIZATION POPUPS — donation vs subscription vs free ──
           'donation' model → the ORIGINAL Ko-fi popup / milestone-donate
           celebration (the classic site, exactly as before).
           'subscription' model → donation asks stand down: milestones
           still celebrate, but with the donate body OFF (premium is the
-          support path now). Live-switchable from /debug — this leaf
-          reads the CURRENT model from the subscription provider, so a
-          flip applies without a reload of this tree. */}
+          support path now).
+          'free' model → NO donation surface at all: same treatment as
+          subscription (celebration-only milestones, and the Ko-fi popup
+          never mounts even in the 'original' popupSystem mode). */}
       <MonetizationPopups popupSystem={popupSystem} milestoneDonate={milestoneDonate} />
 
       {/* User page (account / referral / personalization / themes / support)
@@ -3253,8 +3256,9 @@ function MonetizationPopups({
       <MilestoneCelebration donateMode={milestoneDonate} />
     )
   }
-  // Subscription model: donation asks stand down; milestones still
-  // celebrate (pure celebration, donate body off).
+  // Subscription AND free models: donation asks stand down; milestones
+  // still celebrate (pure celebration, donate body off). Under 'free' the
+  // Ko-fi popup must never mount either — there is no donation system.
   return popupSystem === 'original' ? null : <MilestoneCelebration donateMode={false} />
 }
 
@@ -3265,11 +3269,17 @@ function MonetizationPopups({
  * golden diamond. Mobile stays icon-only (44px target); ≥sm shows the
  * label ("Premium" / "Ultra" once subscribed). BOTH states now route to
  * the DEDICATED /subscribe page (the user spec — a real plans page, not
- * the settings sheet). */
+ * the settings sheet).
+ * FREE model → no button at all: nothing to buy, nothing to donate
+ * (the owner's completely-free mode hides the entire monetization
+ * surface from the header). */
 function MonetizationButton({ onAccount }: { onAccount: () => void }) {
   const sub = useSubscription()
   const router = useRouter()
   void onAccount // reserved: subscribers may again jump straight to Account
+
+  // Free model → nothing to buy, nothing to donate — no button.
+  if (sub.model === 'free') return null
 
   // Donation model → the original Ko-fi heart, byte-for-byte.
   if (sub.model === 'donation') {

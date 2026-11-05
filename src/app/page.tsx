@@ -242,16 +242,16 @@ async function getSmartPersonalization(): Promise<boolean> {
 // pattern so the first paint already knows which popup system + gates
 // run. 'subscription' (default) = tier model; 'donation' = the ORIGINAL
 // Ko-fi donation site with every premium gate stood down.
-let monetizationModelFlagMemo: { value: 'subscription' | 'donation'; ts: number } | null = null
+let monetizationModelFlagMemo: { value: 'subscription' | 'donation' | 'free'; ts: number } | null = null
 const MONETIZATION_FLAG_TTL_MS = 5 * 1000
 
-async function getMonetizationModel(): Promise<'subscription' | 'donation'> {
+async function getMonetizationModel(): Promise<'subscription' | 'donation' | 'free'> {
   if (monetizationModelFlagMemo && Date.now() - monetizationModelFlagMemo.ts < MONETIZATION_FLAG_TTL_MS) {
     return monetizationModelFlagMemo.value
   }
   try {
     const stored = await firebaseRead<string>('featureFlags/monetizationModel')
-    const value = stored === 'donation' ? 'donation' : 'subscription'
+    const value = stored === 'donation' ? 'donation' : stored === 'free' ? 'free' : 'subscription'
     monetizationModelFlagMemo = { value, ts: Date.now() }
     return value
   } catch {

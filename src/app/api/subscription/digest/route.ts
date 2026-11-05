@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
       email?: string
     }
     const requester = await getRequesterTier(req)
-    if (!requester.allUnlocked && requester.tier === 'free') {
+    if (!requester.premiumUnlocked && requester.tier === 'free') {
       return NextResponse.json(
         { error: 'The email digest is a Premium feature.', needUpgrade: true },
         { status: 402 },

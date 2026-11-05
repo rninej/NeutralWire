@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
   // Lives ONLY here — direct /story/<id> links (notifications, Google,
   // old shares) remain fully open for everyone, per the spec.
   const requester = await getRequesterTier(req)
-  const archiveUnlocked = requester.allUnlocked || requester.tier !== 'free'
+  const archiveUnlocked = requester.premiumUnlocked || requester.tier !== 'free'
   const ARCHIVE_LOCK_MS = 91 * 24 * 60 * 60 * 1000 // ~3 months
   const lockIfOld = (iso: number, fromArchive: boolean): boolean =>
     !archiveUnlocked && fromArchive && iso > 0 && Date.now() - iso > ARCHIVE_LOCK_MS

@@ -886,7 +886,7 @@ function GradientSectionGated({
   onToggleMaker: () => void
 }) {
   const sub = useSubscription()
-  const unlocked = sub.model === 'donation' || sub.entitlements.gradientThemes
+  const unlocked = sub.model === 'donation' || sub.model === 'free' || sub.entitlements.gradientThemes
 
   return (
     <div className="mt-4 border-t pt-4">
@@ -960,13 +960,14 @@ function GradientSectionGated({
 }
 
 /**
- * SupportCardGated — the Ko-fi donation card: shown in the DONATION model
- * (the original site); in the subscription model Premium is the support
- * path, so the card stands down.
+ * SupportCardGated — the Ko-fi donation card: shown ONLY in the DONATION
+ * model (the original site); in the subscription model Premium is the
+ * support path, and in the FREE model there is no donation system at
+ * all — the card stands down in both.
  */
 function SupportCardGated() {
   const sub = useSubscription()
-  if (sub.model === 'subscription') return null
+  if (sub.model !== 'donation') return null
   return (
     <Card className="p-4">
       <div className="mb-2.5 flex items-center gap-2">

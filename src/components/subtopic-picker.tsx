@@ -57,7 +57,7 @@ export function SubtopicPicker({ onClose }: { onClose: () => void }) {
   const [creating, setCreating] = React.useState(false)
   const [createMsg, setCreateMsg] = React.useState<{ ok: boolean; text: string } | null>(null)
 
-  const unlocked = sub.model === 'donation' || sub.entitlements.customSubtopics
+  const unlocked = sub.model === 'donation' || sub.model === 'free' || sub.entitlements.customSubtopics
 
   // Load my topics + browse catalog on open.
   React.useEffect(() => {

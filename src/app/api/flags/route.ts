@@ -111,7 +111,7 @@ export const maxDuration = 15
  * values server-side on load (page.tsx SSR) so a flip propagates on the
  * next page load with no wrong-design flash.
  *
- *   - monetizationModel: 'subscription' | 'donation' — THE MONETIZATION
+ *   - monetizationModel: 'subscription' | 'donation' | 'free' — THE MONETIZATION
  *       SWITCH. 'subscription' (default) runs the tier model: free tier
  *       keeps the full classic experience (aggregation, bias bar, full
  *       articles, sources, PWA) while premium/ultra gates (custom
@@ -119,7 +119,11 @@ export const maxDuration = 15
  *       personal flags, API/export) are enforced. 'donation' flips the
  *       whole site back to the ORIGINAL Ko-fi donation model — every
  *       premium gate stands down and the classic donate popups return.
- *       Flipped from /debug → next page load is the old site again.
+ *       'free' (the completely-free mode) unlocks every premium feature
+ *       for everyone AND stands the donation system down everywhere —
+ *       no Ko-fi popups, no donate asks, no upsells — while article
+ *       export + API access stay Ultra-gated. Flipped from /debug →
+ *       next page load applies to every visitor.
  *
  * AUTH for POST: same password gate as the analytics endpoints — SHA-256
  * hash comparison, timing-safe.
@@ -159,7 +163,7 @@ let videoPreviewMemo: { value: boolean; ts: number } | null = null
 let milestoneDonateMemo: { value: boolean; ts: number } | null = null
 let meshRelayMemo: { value: boolean; ts: number } | null = null
 let userCronMemo: { value: boolean; ts: number } | null = null
-let monetizationMemo: { value: 'subscription' | 'donation'; ts: number } | null = null
+let monetizationMemo: { value: 'subscription' | 'donation' | 'free'; ts: number } | null = null
 let smartPersonalizationMemo: { value: boolean; ts: number } | null = null
 const MEMO_TTL_MS = 10 * 1000
 
@@ -274,11 +278,20 @@ export async function GET() {
       if (monetizationMemo && Date.now() - monetizationMemo.ts < MEMO_TTL_MS) return monetizationMemo.value
       const stored = await firebaseRead<string>(MONETIZATION_MODEL_FLAG_PATH)
       // DEFAULT SUBSCRIPTION — the tier model is the live experience;
-      // an explicit 'donation' flips the whole site back.
-      const value = stored === 'donation' ? 'donation' : 'subscription'
+      // 'donation' flips back to the classic Ko-fi site; 'free' is the
+      // completely-free mode (all premium features open, no donations,
+      // export/API still Ultra).
+      // NOTE: this entry MUST end with `})(),` — for its whole life it
+      // ended with `}),` (a dead, never-invoked function expression in
+      // the array), so allSettled fulfilled with the function object and
+      // JSON.stringify dropped the key: /api/flags NEVER returned
+      // monetizationModel and the /debug board always showed the model
+      // as 'subscription' no matter what was flipped.
+      const value =
+        stored === 'donation' ? 'donation' : stored === 'free' ? 'free' : 'subscription'
       monetizationMemo = { value, ts: Date.now() }
       return value
-    }),
+    })(),
     (async () => {
       if (smartPersonalizationMemo && Date.now() - smartPersonalizationMemo.ts < MEMO_TTL_MS) return smartPersonalizationMemo.value
       const stored = await firebaseRead<boolean>(SMART_PERSONALIZATION_FLAG_PATH)
@@ -392,9 +405,9 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     )
   }
-  if (wantsMonetization && body.monetizationModel !== 'donation' && body.monetizationModel !== 'subscription') {
+  if (wantsMonetization && body.monetizationModel !== 'donation' && body.monetizationModel !== 'subscription' && body.monetizationModel !== 'free') {
     return NextResponse.json(
-      { error: 'monetizationModel must be donation or subscription' },
+      { error: 'monetizationModel must be donation, subscription or free' },
       { status: 400 },
     )
   }
@@ -499,7 +512,12 @@ export async function POST(req: NextRequest) {
   }
 
   if (wantsMonetization) {
-    const monetizationModel = body.monetizationModel === 'donation' ? 'donation' : 'subscription'
+    const monetizationModel =
+      body.monetizationModel === 'donation'
+        ? 'donation'
+        : body.monetizationModel === 'free'
+          ? 'free'
+          : 'subscription'
     const ok = await firebaseWrite(MONETIZATION_MODEL_FLAG_PATH, monetizationModel)
     if (!ok) {
       return NextResponse.json({ error: 'Firebase write failed (monetizationModel)' }, { status: 500 })
@@ -522,3 +540,4 @@ export async function POST(req: NextRequest) {
     ...(wantsMonetization ? { monetizationModel: body.monetizationModel } : {}),
   })
 }
+

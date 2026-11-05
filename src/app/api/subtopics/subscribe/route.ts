@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     const action = body.action === 'remove' ? 'remove' : 'add'
 
     const requester = await getRequesterTier(req)
-    if (action === 'add' && !requester.allUnlocked && requester.tier === 'free') {
+    if (action === 'add' && !requester.premiumUnlocked && requester.tier === 'free') {
       return NextResponse.json(
         { error: 'Custom subtopics are a Premium feature.', needUpgrade: true },
         { status: 402 },
