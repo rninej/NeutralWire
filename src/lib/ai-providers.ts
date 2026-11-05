@@ -99,12 +99,17 @@ const GEMINI_MODELS = [
   'gemini-flash-latest',      // → Gemini 3.x Flash: 10 RPM class
   // Numbered Gemini 3 generation — separate per-model pools, so spreading
   // across them multiplies the daily request headroom one pair of aliases
-  // gives (the "gemini shouldn't hit its limits" headroom fix).
+  // gives (the "gemini shouldn't hit its limits" headroom fix). IDs are
+  // the LIVE catalog spellings, verified via GET /api/debug/models on the
+  // production key (Nov 6 2026): 3.5/3.1-flash-lite + 3.8/3.7/3.6/3.5-flash
+  // + 3-flash-preview all exist; a bare "gemini-3-flash" does NOT.
   'gemini-3.5-flash-lite',
-  'gemini-3.1-flash-lite',
+  'gemini-3.1-flash-lite', // first live-proven pool: 26/26 ok on deploy day
   'gemini-3.8-flash',
+  'gemini-3.7-flash',
   'gemini-3.6-flash',
-  'gemini-3-flash',
+  'gemini-3.5-flash',
+  'gemini-3-flash-preview',
   // Legacy families LAST — keys with older access still reach these;
   // on this key they 404 and auto-soft-block for 6h (discovery-confirmed
   // key-level restriction path).
@@ -115,11 +120,12 @@ const GEMINI_MODELS = [
   'gemma-3-27b-it',
 ]
 
-// Groq on THIS key (live 404 trail, Nov 2026): llama-3.1-8b-instant,
-// llama-4-scout and BOTH qwen models are retired from the free/developer
-// roster → removed from preferences entirely so cold instances stop
-// burning sequential retries on guaranteed 404s. What's left is the
-// gpt-oss twins. 20b FIRST (the "cheapest Groq" pick): same 30 RPM org
+// Groq on THIS key (live 404 trail + GET /api/debug/models, Nov 2026):
+// llama-3.1-8b-instant, llama-4-scout and the qwen 3.6/3.2 generation
+// are retired from the roster this key can call → removed from
+// preferences entirely so cold instances stop burning sequential retries
+// on guaranteed 404s. What's left is the gpt-oss twins + the live
+// qwen3.8-27b. 20b FIRST (the "cheapest Groq" pick): same 30 RPM org
 // pool as its big sibling but roughly 2× the output speed — it wins the
 // latency race and leaves org TPM headroom for the next call. Groq free
 // tier (verified Nov 2026 docs): 30 RPM org-wide, ~1,000 RPD per model,
@@ -127,10 +133,11 @@ const GEMINI_MODELS = [
 const GROQ_MODELS = [
   'openai/gpt-oss-20b',
   'openai/gpt-oss-120b',
-  // Roster models that still exist for some access tiers — discovery
-  // decides whether this key can see them at all.
-  'qwen/qwen3.6-27b',
-  'meta-llama/llama-4-scout-17b-16e-instruct',
+  // LIVE in the Nov 2026 catalog on this key (GET /api/debug/models:
+  // qwen3.8-27b ranks #3). The 3.6/3.2 generation and llama-4-scout
+  // 404'd on every attempt — removed so cold instances never waste
+  // sequential retries on them.
+  'qwen/qwen3.8-27b',
 ]
 
 // Track rate-limited models to skip them in future calls (per-process).
@@ -1565,8 +1572,8 @@ const GEMINI_VISION_MODELS = [
   'gemini-flash-lite-latest',
   'gemini-flash-latest',
   'gemini-3.5-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-3.8-flash',
 ]
 
 // Unsupported-by-vision-models formats (Gemini/Groq don't take avif; svg
