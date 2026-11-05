@@ -69,8 +69,34 @@ export function StorySummaryLive({
   React.useEffect(() => {
     if (hasStoredSummary) return
     let cancelled = false
+    let upgradeTimer: ReturnType<typeof setTimeout> | null = null
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 25_000)
+
+    // ── BACKGROUND UPGRADE (Nov 2026) ── one delayed retry when the first
+    // POST could only return the extractive fallback (all providers were
+    // rate-limited). The server's interactive backoff (60s) has lapsed by
+    // the time it fires, so it re-runs the LLM and silently swaps in the
+    // REAL summary while the visitor reads. Single shot, no loop.
+    const scheduleFallbackUpgrade = () => {
+      upgradeTimer = setTimeout(async () => {
+        if (cancelled) return
+        try {
+          const res = await fetch('/api/summary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ topicId, title, articles, topicSummary: initialSummary }),
+          })
+          if (!res.ok) return
+          const data = (await res.json()) as { summary?: string; fallback?: boolean }
+          if (!cancelled && data.summary && data.fallback !== true && !isTemplateSummary(data.summary)) {
+            setSummary(data.summary)
+          }
+        } catch {
+          // best-effort upgrade — silent
+        }
+      }, 65_000)
+    }
 
     fetch('/api/summary', {
       method: 'POST',
@@ -103,6 +129,7 @@ export function StorySummaryLive({
         }
         setSummary(data.summary)
         setStatus('upgraded')
+        if (data.fallback === true) scheduleFallbackUpgrade()
       })
       .catch(() => {
         if (!cancelled) setStatus('failed')
@@ -113,7 +140,13 @@ export function StorySummaryLive({
       cancelled = true
       controller.abort()
       clearTimeout(timer)
+      if (upgradeTimer) clearTimeout(upgradeTimer)
     }
+    // Deps stay minimal ON PURPOSE (session57b): title/articles/
+    // initialSummary are captured at mount — the story page is a server
+    // component, its props never change identity, and widening this
+    // array would re-fire the POST on every parent re-render (the
+    // "tries to generate and never gives a summary" churn bug).
   }, [topicId, hasStoredSummary])
 
   // Parse sections (memoised) — MUST run before any early return below

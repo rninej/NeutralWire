@@ -471,8 +471,49 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     }
     summaryStartedForRef.current = topic.topicId
     let cancelled = false
+    let upgradeTimer: ReturnType<typeof setTimeout> | null = null
     setSummaryLoading(true)
     setSummaryError(null)
+
+    // ── BACKGROUND UPGRADE (Nov 2026 — the "trashy summary from the
+    // outlet" report) ──
+    // When the POST could only produce the EXTRACTIVE fallback, every AI
+    // provider was rate-limited at that moment. The server's interactive
+    // backoff lapses after 60s, so ONE delayed retry ~65s later usually
+    // lands in a recovered quota window and silently swaps in the REAL
+    // summary the user is still reading past. The owner explicitly
+    // prefers waiting over junk text. No retry loop — a single shot.
+    const scheduleFallbackUpgrade = () => {
+      upgradeTimer = setTimeout(async () => {
+        if (cancelled) return
+        try {
+          const res = await fetch('/api/summary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              topicId: topic.topicId,
+              title: topic.title,
+              topicSummary: topic.summary || '',
+              articles: (topic.articles || []).map((a) => ({
+                title: a.title,
+                description: a.description,
+                sourceName: a.sourceName,
+                leaning: a.leaning,
+              })),
+            }),
+          })
+          if (!res.ok) return
+          const data = await res.json()
+          // Only swap when the retry produced a REAL (non-fallback)
+          // summary — otherwise keep the text already displayed.
+          if (!cancelled && data.summary && data.fallback !== true && !isTemplateSummary(data.summary)) {
+            setSummary(data.summary)
+          }
+        } catch {
+          // best-effort upgrade — silent
+        }
+      }, 65_000)
+    }
 
     ;(async () => {
       // Step 1: Try GET first (SW-cached, works offline)
@@ -532,6 +573,9 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           return
         }
         setSummary(data.summary)
+        // Extractive fallback shown → schedule the one-shot upgrade retry
+        // (a REAL summary would have data.fallback !== true).
+        if (data.fallback === true) scheduleFallbackUpgrade()
       } catch (err) {
         if (cancelled) return
         setSummaryError(err instanceof Error ? err.message : 'Unknown error')
@@ -542,6 +586,7 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
 
     return () => {
       cancelled = true
+      if (upgradeTimer) clearTimeout(upgradeTimer)
     }
   }, [topic.topicId, topic.title, topic.articles])
 

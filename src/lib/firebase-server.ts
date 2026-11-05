@@ -33,7 +33,11 @@
  * changes the ETag → the next probe returns 200 with fresh data).
  */
 
+// Env-overridable (defaults = production endpoint) so the retry/backoff
+// behaviour is integration-testable against a local mock Firebase without
+// touching real data — same pattern as ai-providers.ts's endpoint vars.
 const DB_URL =
+  process.env.FB_DB_URL ||
   'https://neutralwire-aaedf-default-rtdb.europe-west1.firebasedatabase.app'
 
 const FETCH_TIMEOUT_MS = 8000

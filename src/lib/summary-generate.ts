@@ -44,6 +44,35 @@ export const SUMMARY_TTL_MS = 2 * 60 * 60 * 1000 // 2 hours
 // These persist across server restarts and are shared across all instances.
 const FIREBASE_ROOT = 'summaries'
 
+// ── NEGATIVE-RESULT BACKOFF (Nov 2026 — the "more than half of the
+// articles have no AI summary" outage) ──
+// Failed LLM generations were never persisted, so EVERY future hit on the
+// topic re-fired a full provider volley: story-page ISR regens (15 min per
+// story), Googlebot crawling /news-sitemap.xml, and every visitor open. With
+// ~130 un-summarized live topics that is a standing ~1-3 volleys/minute that
+// keeps all three free-tier pools saturated — which keeps every NEW
+// generation failing — the doom loop. Now a failure writes
+// summaryBackoff/<topicId> = { failedAt }, and:
+//   • INTERACTIVE callers (a visitor clicked /api/summary POST) retry after
+//     just 60s — a human re-opening soon still gets a fresh attempt.
+//   • BACKGROUND callers (story-page ISR render, cron pre-generation)
+//     wait 15 min — Googlebot hammering a dead topic no longer burns the
+//     quota a real user needs seconds later.
+// A success clears the node (and the stored summary makes it moot anyway).
+const BACKOFF_ROOT = 'summaryBackoff'
+const BACKOFF_INTERACTIVE_MS = 60 * 1000
+const BACKOFF_BACKGROUND_MS = 15 * 60 * 1000
+
+export interface GenerateOpts {
+  /** true = story-page render / cron pre-generation (long failure
+   *  backoff); false/undefined = interactive visitor click. */
+  background?: boolean
+}
+
+interface BackoffMarker {
+  failedAt: number
+}
+
 export interface SummaryRequest {
   topicId: string
   title: string
@@ -120,10 +149,13 @@ export async function readStoredSummary(
  * caller retries the LLM instead of being stuck with the template forever.
  * Resolves to null when there was no content to generate from.
  */
-export function getOrCreateGeneration(body: SummaryRequest): Promise<GenerateResult | null> {
+export function getOrCreateGeneration(
+  body: SummaryRequest,
+  opts: GenerateOpts = {},
+): Promise<GenerateResult | null> {
   let generatePromise = IN_FLIGHT.get(body.topicId)
   if (!generatePromise) {
-    generatePromise = runGeneration(body).finally(() => {
+    generatePromise = runGeneration(body, opts).finally(() => {
       IN_FLIGHT.delete(body.topicId)
     })
     IN_FLIGHT.set(body.topicId, generatePromise)
@@ -131,7 +163,27 @@ export function getOrCreateGeneration(body: SummaryRequest): Promise<GenerateRes
   return generatePromise
 }
 
-async function runGeneration(body: SummaryRequest): Promise<GenerateResult | null> {
+async function runGeneration(
+  body: SummaryRequest,
+  opts: GenerateOpts = {},
+): Promise<GenerateResult | null> {
+  // ── Backoff: a recent failed attempt means the LLM is (still) failing —
+  // skip straight to the extractive result instead of re-firing a volley
+  // that will keep the free-tier pools saturated (the doom loop).
+  const backoffMs = opts.background ? BACKOFF_BACKGROUND_MS : BACKOFF_INTERACTIVE_MS
+  try {
+    const marker = await firebaseRead<BackoffMarker>(`${BACKOFF_ROOT}/${body.topicId}`)
+    if (marker?.failedAt && Date.now() - marker.failedAt < backoffMs) {
+      console.log(
+        `[summary-generate] backoff for ${body.topicId} (failed ${Math.ceil((Date.now() - marker.failedAt) / 1000)}s ago, ${opts.background ? 'background' : 'interactive'} window ${Math.ceil(backoffMs / 1000)}s) — skipping LLM`,
+      )
+      const skipped = generateExtractiveSummary(body)
+      return skipped.trim() ? { summary: skipped, fallback: true } : null
+    }
+  } catch {
+    // backoff read failed — treat as no marker (best effort only)
+  }
+
   // Try the LLM first. If it fails, use the extractive fallback.
   let llmSummary: string | null = null
   try {
@@ -168,9 +220,16 @@ async function runGeneration(body: SummaryRequest): Promise<GenerateResult | nul
     await firebaseWrite(`${FIREBASE_ROOT}/${body.topicId}`, stored)
     // Also populate in-process cache (LLM results only).
     SUMMARY_CACHE.set(body.topicId, { ts: Date.now(), summary })
+    // Success clears any failure marker so future callers never see it.
+    void firebaseWrite(`${BACKOFF_ROOT}/${body.topicId}`, null)
   } else {
+    // Failure writes the marker — the doom-loop breaker. Fire-and-forget:
+    // this response is already served with the extractive text.
+    void firebaseWrite(`${BACKOFF_ROOT}/${body.topicId}`, {
+      failedAt: Date.now(),
+    })
     console.warn(
-      `[summary-generate] serving extractive fallback for ${body.topicId} (not persisted — will retry LLM for the next caller)`,
+      `[summary-generate] serving extractive fallback for ${body.topicId} (not persisted — backoff marker written, will retry LLM after ${Math.ceil(backoffMs / 1000)}s)`,
     )
   }
 
@@ -203,12 +262,18 @@ export async function generateStorySummaryBounded(
   topicSummary: string,
   timeoutMs = 8000,
 ): Promise<string | null> {
-  const generation = getOrCreateGeneration({
-    topicId,
-    title,
-    articles,
-    topicSummary,
-  })
+  // BACKGROUND caller (a page render — Googlebot or ISR): the long failure
+  // backoff applies, so a topic that just failed doesn't get re-fired by
+  // every 15-minute ISR regen / sitemap crawl (the doom loop).
+  const generation = getOrCreateGeneration(
+    {
+      topicId,
+      title,
+      articles,
+      topicSummary,
+    },
+    { background: true },
+  )
 
   let result: GenerateResult | null = null
   let timedOut = false
@@ -269,7 +334,15 @@ export async function preGenerateSummaries(
   topics: Array<TopicArticle>,
   opts: { max?: number; freshWindowMs?: number } = {},
 ): Promise<number> {
-  const max = opts.max ?? 4
+  // Default volume is higher than the old 4, and DOUBLE in the 08-10 UTC
+  // window: Gemini's free tier resets at midnight PACIFIC (= 08:00 UTC),
+  // so the first refresh after the reset gets a fresh day of quota — the
+  // cheapest moment of the day to fill in the stories Googlebot will
+  // crawl. Generation itself is I/O wait (LLM + Firebase), so this does
+  // NOT eat the Fluid Active-CPU budget the CPU diet protects.
+  const hourUtc = new Date().getUTCHours()
+  const postResetWave = hourUtc >= 8 && hourUtc < 10
+  const max = opts.max ?? (postResetWave ? 12 : 6)
   const freshWindowMs = opts.freshWindowMs ?? 6 * 60 * 60 * 1000 // 6h
   const now = Date.now()
 
@@ -296,17 +369,20 @@ export async function preGenerateSummaries(
 
   const results = await Promise.allSettled(
     picked.map((t) =>
-      getOrCreateGeneration({
-        topicId: t.topicId,
-        title: t.title,
-        topicSummary: t.summary || '',
-        articles: (t.articles || []).slice(0, 12).map((a) => ({
-          title: a.title,
-          description: a.description || '',
-          sourceName: a.sourceName,
-          leaning: a.leaning || '',
-        })),
-      }),
+      getOrCreateGeneration(
+        {
+          topicId: t.topicId,
+          title: t.title,
+          topicSummary: t.summary || '',
+          articles: (t.articles || []).slice(0, 12).map((a) => ({
+            title: a.title,
+            description: a.description || '',
+            sourceName: a.sourceName,
+            leaning: a.leaning || '',
+          })),
+        },
+        { background: true }, // long failure backoff — this is a cron, not a click
+      ),
     ),
   )
   return results.filter(

@@ -263,6 +263,99 @@ function parseRetryAfterMs(res: Response, errText: string): number | null {
   return null
 }
 
+/** UNCLAMPED retry hint (seconds) — used by classify429 to tell a
+ *  per-minute window (typically 20-60s) from a DAILY cap (Gemini's
+ *  "PerDay" violations report the seconds until midnight Pacific,
+ *  typically tens of thousands). */
+function rawRetryHintSecs(res: Response, errText: string): number | null {
+  const header = res.headers.get('retry-after')
+  if (header) {
+    const secs = Number(header)
+    if (Number.isFinite(secs) && secs > 0) return secs
+  }
+  const m = errText && errText.match(/"retryDelay"\s*:\s*"?(\d+(?:\.\d+)?)s"?/i)
+  if (m) {
+    const secs = Number(m[1])
+    if (Number.isFinite(secs) && secs > 0) return secs
+  }
+  return null
+}
+
+// ── 429 CLASSIFICATION (Nov 2026 — the "every provider 429s forever"
+// forensics) ──
+// A 429 is not one disease. Per-MINUTE saturation heals in ~30s and is
+// worth re-probing; a DAILY cap is dead until the provider's reset time
+// and re-probing it every 5 minutes just noise. The providers label the
+// distinction in the error body:
+//   Gemini RPM:  quota_metric "...GenerateRequestsPerMinute..." + retryDelay ~26s
+//   Gemini RPD:  quota_metric "...GenerateRequestsPerDay..." + retryDelay = seconds
+//                until midnight Pacific (huge)
+//   Groq RPM/RPD: "Rate limit reached ... on tokens per minute (TPM)" /
+//                "... requests per day (RPD)" (org-wide either way)
+//   OpenRouter upstream: {"error":{"message":"Provider returned error",...
+//                "metadata":{"raw":"<model> is temporarily rate-limited..."}}
+//                — the UPSTREAM host is capped, OTHER models on other hosts
+//                may be fine → rotate instead of stopping.
+//   OpenRouter account: "Rate limit exceeded: free-models-per-day..."
+export type RateLimitKind = 'rpm' | 'daily' | 'upstream' | 'account'
+export interface RateLimitInfo {
+  kind: RateLimitKind
+  /** Cooldown to apply (ms from now). */
+  cooldownMs: number
+  /** Raw error body (for diagnostics — truncated upstream). */
+  raw: string
+}
+
+function classify429(provider: string, res: Response, errText: string): RateLimitInfo {
+  const raw = (errText || '').slice(0, 240)
+  const lower = raw.toLowerCase()
+  const hintSecs = rawRetryHintSecs(res, errText)
+
+  if (provider === 'openrouter') {
+    // Account-level free-tier cap: rotating is pointless (every :free model
+    // shares it) — cool the whole provider.
+    if (
+      lower.includes('free-models') ||
+      lower.includes('free models') ||
+      (lower.includes('rate limit exceeded') && !lower.includes('provider returned error'))
+    ) {
+      return { kind: 'account', cooldownMs: 15 * 60_000, raw }
+    }
+    // Upstream capacity error — the HOST serving this model is throttled;
+    // models on other upstream hosts may answer. The caller should ROTATE.
+    return { kind: 'upstream', cooldownMs: 60_000, raw }
+  }
+
+  // Gemini / Groq: daily-cap signatures take a LONG cooldown (bounded so a
+  // parse glitch can't silence a provider for hours); RPM keeps the old
+  // behaviour (parsed Retry-After, else 60s).
+  const daily =
+    lower.includes('perday') ||
+    lower.includes('per day') ||
+    lower.includes('requests per day') ||
+    lower.includes('rpd') ||
+    (provider === 'gemini' && hintSecs !== null && hintSecs > 600)
+  if (daily) {
+    const parsed = hintSecs ? hintSecs * 1000 : 30 * 60_000
+    return { kind: 'daily', cooldownMs: Math.max(5 * 60_000, Math.min(55 * 60_000, parsed)), raw }
+  }
+  return { kind: 'rpm', cooldownMs: parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS, raw }
+}
+
+// ── QUOTA PRESSURE (Nov 2026) ──
+// True for a couple of minutes after any 429 — the signal OPTIONAL AI
+// consumers (title shortening, image verification) use to stand down so
+// the scarce free-tier requests go to what the user actually sees
+// (neutral summaries, Ask AI). Priority consumers NEVER check this.
+let quotaPressureUntil = 0
+export function aiQuotaPressure(): boolean {
+  return Date.now() < quotaPressureUntil
+}
+function noteRateLimit(kind: RateLimitKind): void {
+  const ms = kind === 'rpm' ? 90_000 : 5 * 60_000
+  quotaPressureUntil = Math.max(quotaPressureUntil, Date.now() + ms)
+}
+
 let healthCache: HealthTable | null = null
 let healthFetchInFlight: Promise<HealthTable | null> | null = null
 let healthLoadedAt = 0
@@ -348,8 +441,15 @@ function recordHealth(
   event: HealthEvent,
   cooldownMs?: number,
 ): void {
-  // In-memory update (instant).
-  const h = ((healthCache ||= {})[provider] ||= {})[model] ||= {}
+  // In-memory update (instant). NOTE: every READER (sharedBlocked,
+  // healthScore, healthOrdered) looks models up by healthKey(model) — the
+  // SANITIZED id. The old code wrote the RAW model id here, so in-memory
+  // state for every dotted/slashed model (groq's openai/gpt-oss-120b,
+  // openrouter's google/gemma-4-26b-a4b-it:free) landed where nobody ever
+  // read it: after any Firebase-load the two views disagreed and
+  // sharedBlocked() saw stale/no data for exactly the models that 429 the
+  // most (a live contributor to the cross-instance retry storm).
+  const h = ((healthCache ||= {})[provider] ||= {})[healthKey(model)] ||= {}
   if (event === 'ok') {
     h.ok = (h.ok || 0) + 1
     h.lastOk = Date.now()
@@ -709,13 +809,19 @@ function effectiveModels(
 // single retired/daily-capped model no longer kills the whole provider —
 // the old single hard-coded ID 404'd permanently when OpenRouter retired
 // it, another "cannot reach AI provider" contributor).
+// NOV 2026 reorder — UPSTREAM DIVERSITY FIRST: a 429 on a :free model is
+// usually the UPSTREAM host being throttled ("Provider returned error"),
+// not OpenRouter itself. Two Google models back-to-back meant the rotation
+// re-hit the same throttled Google host before ever reaching Meta/DeepSeek/
+// Mistral hosting. Interleave hosts so the 2nd candidate is always on a
+// DIFFERENT upstream than the 1st.
 const OPENROUTER_MODELS = [
   'google/gemma-4-26b-a4b-it:free',
-  'google/gemma-3-27b-it:free',
   'meta-llama/llama-3.3-70b-instruct:free',
   'deepseek/deepseek-chat-v3-0324:free',
-  'qwen/qwen-2.5-72b-instruct:free',
   'mistralai/mistral-small-3.1-24b-instruct:free',
+  'google/gemma-3-27b-it:free',
+  'qwen/qwen-2.5-72b-instruct:free',
   'meta-llama/llama-4-scout:free',
 ]
 const OPENROUTER_MODEL = OPENROUTER_MODELS[0]
@@ -723,17 +829,17 @@ const GROQ_COMPOUND_MODEL = 'compound-beta'
 
 /** Ordered OpenRouter rotation candidates: preferences found in the live
  *  list first, then (if none match) any other free text models the list
- *  offers. Capped at 3 — enough coverage without burning requests. */
+ *  offers. Capped at 4 — enough host diversity without burning requests. */
 function openRouterCandidates(discoveredList: string[] | null): string[] {
   const hits = discoveredList
     ? OPENROUTER_MODELS.filter((m) => discoveredList.includes(m))
     : []
-  if (hits.length > 0) return hits.slice(0, 3)
+  if (hits.length > 0) return hits.slice(0, 4)
   if (discoveredList) {
     const anyFree = discoveredList.filter(
       (m) => m.endsWith(':free') && !/nemo|vision|guard|embed/i.test(m),
     )
-    if (anyFree.length > 0) return anyFree.slice(0, 3)
+    if (anyFree.length > 0) return anyFree.slice(0, 4)
   }
   return [OPENROUTER_MODEL]
 }
@@ -822,6 +928,12 @@ function stripThinking(text: string): string {
  * provider PERMANENTLY from the instance (the "gemini=[NONE]" blackout).
  */
 const DEPRECATION_TTL_MS = 10 * 60 * 1000
+// Key-level restriction block (model exists but THIS key can't call it —
+// see checkDeprecation's discovery-confirmed branch).
+const KEY_RESTRICTED_TTL_MS = 6 * 60 * 60 * 1000
+// A model whose rate-limit cooldown lands further out than this is treated
+// as daily-capped and is NOT rescue-probed (see rescueCandidate).
+const RESCUE_PROBE_MAX_MS = 5 * 60 * 1000
 const deprecatedModels = new Map<string, number>()
 
 function isDeprecated(key: string): boolean {
@@ -878,8 +990,13 @@ function checkDeprecation(key: string, status: number, errText: string): boolean
 
   // Discovery-confirmed model: the model exists for the PROVIDER, but this
   // key may still not have access. Allow ONE transient 404; after 2
-  // consecutive, soft-block it for the deprecation TTL (it's a key-level
-  // restriction, not a fluke).
+  // consecutive, soft-block it — with a LONGER TTL than a plain retirement:
+  // key-level restrictions (Gemini free tier: "not available to new users")
+  // don't heal in 10 minutes, and there are ~9 such models on the live key.
+  // Re-probing them every 10 min costs ~2 requests/hour/model for nothing —
+  // a real tax on a saturated free tier. deprecatedModels entries expire
+  // when now - ts >= DEPRECATION_TTL_MS, so the timestamp is backdated to
+  // make the entry live for KEY_RESTRICTED_TTL_MS instead.
   if (discoveryConfirmed.has(key)) {
     const n = (consecutive404s.get(key) || 0) + 1
     consecutive404s.set(key, n)
@@ -887,9 +1004,9 @@ function checkDeprecation(key: string, status: number, errText: string): boolean
       diag(`${key}: ${status} ignored (discovery-confirmed, transient #${n})`)
       return false
     }
-    deprecatedModels.set(key, Date.now())
+    deprecatedModels.set(key, Date.now() - DEPRECATION_TTL_MS + KEY_RESTRICTED_TTL_MS)
     consecutive404s.set(key, 0)
-    console.warn(`[ai] soft-blocked ${key} for 10min (${n} consecutive 404s — key-level restriction)`)
+    console.warn(`[ai] soft-blocked ${key} for 6h (${n} consecutive 404s — key-level restriction)`)
     return true
   }
   if (!deprecatedModels.has(key)) {
@@ -949,7 +1066,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
       return true
     })
 
-  const geminiAvail = available(geminiModels.map((m) => ({ key: `gemini-${m}`, model: m }))).slice(0, 1)
+  const geminiAvail = available(geminiModels.map((m) => ({ key: `gemini-${m}`, model: m }))).slice(0, 2)
   const groqAvail = available(groqModels.map((m) => ({ key: `groq-${m}`, model: m }))).slice(0, 1)
 
   // ── Cooldown escape hatch ──
@@ -971,7 +1088,18 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
         (a, b) =>
           (rateLimitedModels.get(a.key) ?? 0) - (rateLimitedModels.get(b.key) ?? 0),
       )
-    return limited[0]?.model ?? keys.find((k) => !isDeprecated(k.key))?.model ?? null
+    // NOV 2026: a model that is DAILY-capped (cooldown > 5 min out — see
+    // classify429) is NOT rescue-probed: the window cannot heal inside any
+    // request, so firing it only burns a request and re-extends the cap.
+    // Re-probing is valuable for RPM windows (~15-60s) only. The
+    // cooldown-blind fallback (first non-deprecated model) applies only
+    // when NOTHING is locally rate-limited — blocked purely via the shared
+    // cross-instance table, the case the rescue exists for.
+    const probeable = limited.filter(
+      (k) => (rateLimitedModels.get(k.key) ?? 0) - Date.now() <= RESCUE_PROBE_MAX_MS,
+    )
+    if (limited.length > 0) return probeable[0]?.model ?? null
+    return keys.find((k) => !isDeprecated(k.key))?.model ?? null
   }
   const geminiRescue = rescueCandidate(
     geminiModels.map((m) => ({ key: `gemini-${m}`, model: m })),
@@ -991,13 +1119,18 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     `volley: gemini=[${geminiAvail.map((a) => a.model).join(',') || 'NONE'}] groq=[${groqAvail.map((a) => a.model).join(',') || 'NONE'}] openrouter=${OPENROUTER_API_KEY ? pickOpenRouterModel(disc.openrouter) : 'no-key'} | discovered gemini=${disc.gemini?.length ?? 'n/a'} groq=${disc.groq?.length ?? 'n/a'} or=${disc.openrouter?.length ?? 'n/a'} | deprecated=[${Array.from(deprecatedModels).join(',') || '-'}] | cooldowns=[${groqCd > 0 ? `groq:${Math.ceil(groqCd / 1000)}s` : '-'}]`,
   )
 
-  // 1+2. Fire ONE model from EACH provider in parallel (3 requests total
-  //  incl. OpenRouter). This is deliberate rate-limit economics: free-tier
+  // 1+2. Fire up to TWO Gemini models + ONE Groq model in parallel (plus
+  // OpenRouter below). This is deliberate rate-limit economics: free-tier
   // RPM is shared across the whole site (summaries, title shortening, image
   // verification, ask-ai), and a 5-request volley per question was causing
-  // 429 bursts that blacked out whole minutes. One model per provider +
-  // sequential fallback below = same coverage, ~40% less quota per call.
-  // If the raced model is slow, ANOTHER provider still wins the race.
+  // 429 bursts that blacked out whole minutes. NOV 2026 width change:
+  // Gemini's free-tier limits are PER-MODEL pools, and after the great
+  // retirement this key has exactly TWO usable aliases (flash-lite-latest
+  // + flash-latest). Firing both doubles the chance one has quota left —
+  // they draw from SEPARATE buckets, so the extra request doesn't compete
+  // with itself. One Groq model only (its limits are org-wide — a second
+  // Groq request would literally compete with itself).
+  // If a raced model is slow, ANOTHER provider still wins the race.
   for (const { model } of geminiAvail) {
     if (GEMINI_API_KEY) {
       candidates.push(callGemini(opts.systemPrompt, opts.userPrompt, model, false, maxTokens))
@@ -1102,6 +1235,79 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     if (answer) {
       lastProvider = `Groq ${model}`
       return answer
+    }
+  }
+
+  // ── 7. WAIT-AND-RETRY (the owner's "I don't care if I have to wait
+  // ~10 seconds for the summary to generate on click") ──
+  // When every candidate failed with RATE-LIMIT COOLDOWNS (not hard
+  // errors), the fastest path to a real answer is to SLEEP until the
+  // earliest cooldown expires and fire that model the moment its window
+  // opens — inside the remaining call budget. Previously the chain
+  // fast-failed to the extractive fallback in <1s whenever a burst had
+  // just 429'd everything, which is exactly why "more than half of the
+  // articles have no AI summary": the cooldowns were always younger
+  // than the visitor's patience. RPM windows heal in 15-60s; a click
+  // that arrives 6s into a 20s cooldown now waits ~14s and gets the
+  // REAL summary instead of the outlet's wire text.
+  //
+  // Only 'rpm' cooldowns are worth waiting for — a DAILY cap (kind
+  // 'daily'/'account') won't heal inside any request budget, so those
+  // are excluded from the wait candidates by their long cooldown times.
+  if (Date.now() < callDeadline - 1200) {
+    // Refresh the shared table first: the volley/sequential pass above
+    // took seconds and other instances wrote fresh cooldowns meanwhile
+    // (the in-memory rateLimitedModels map is authoritative for models
+    // THIS instance tried; the shared table covers everyone else's).
+    const freshHealth = await fetchHealth()
+    if (freshHealth) healthCache = freshHealth
+
+    const cooldownUntilFor = (provider: string, model: string): number => {
+      const perModel = rateLimitedModels.get(`${provider}-${model}`) || 0
+      const shared = healthCache?.[provider]?.[healthKey(model)]?.cooldownUntil || 0
+      const last429Shared = healthCache?.[provider]?.[healthKey(model)]?.last429 || 0
+      const legacy429 = last429Shared ? last429Shared + RATE_LIMIT_COOLDOWN_MS : 0
+      const org = providerCooldownRemaining(provider) > 0 ? Date.now() + providerCooldownRemaining(provider) : 0
+      return Math.max(perModel, shared, legacy429, org)
+    }
+
+    type Shot = { at: number; label: string; fire: () => Promise<string | null> }
+    const shots: Shot[] = []
+    for (const model of geminiRetry) {
+      if (isDeprecated(`gemini-${model}`)) continue
+      shots.push({
+        at: cooldownUntilFor('gemini', model),
+        label: `Gemini ${model}`,
+        fire: () => callGemini(opts.systemPrompt, opts.userPrompt, model, false, maxTokens),
+      })
+    }
+    if (GROQ_API_KEY) {
+      for (const model of groqRetry) {
+        if (isDeprecated(`groq-${model}`)) continue
+        shots.push({
+          at: cooldownUntilFor('groq', model),
+          label: `Groq ${model}`,
+          fire: () => callGroq(opts.systemPrompt, opts.userPrompt, model, maxTokens),
+        })
+      }
+    }
+    shots.sort((a, b) => a.at - b.at)
+
+    for (const shot of shots.slice(0, 2)) {
+      const waitMs = shot.at - Date.now()
+      // Would blow the request budget (or the model is day-capped — its
+      // cooldown is minutes long)? Stop waiting, serve the fallback.
+      if (waitMs > callDeadline - Date.now() - 1200) break
+      if (waitMs > 0) {
+        diag(`wait-and-retry: sleeping ${Math.ceil(waitMs / 1000)}s for ${shot.label}'s rate-limit window`)
+        await new Promise((r) => setTimeout(r, waitMs + 250))
+      }
+      if (Date.now() > callDeadline - 1000) break
+      const answer = await shot.fire()
+      if (answer) {
+        lastProvider = `${shot.label} (waited out cooldown)`
+        return answer
+      }
     }
   }
 
@@ -1337,11 +1543,12 @@ export async function callVisionAI(
             if (!res.ok) {
               const errText = await res.text().catch(() => '')
               if (res.status === 429) {
-                const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
-                rateLimitedModels.set(key, Date.now() + cooldown)
-                recordHealth('groq', GROQ_VISION_MODEL, '429', cooldown)
-                setProviderCooldown('groq', cooldown)
-                console.warn(`[ai] Groq vision rate-limited (org-wide backoff ${Math.ceil(cooldown / 1000)}s)`)
+                const rl = classify429('groq', res, errText)
+                rateLimitedModels.set(key, Date.now() + rl.cooldownMs)
+                recordHealth('groq', GROQ_VISION_MODEL, '429', rl.cooldownMs)
+                setProviderCooldown('groq', rl.cooldownMs)
+                noteRateLimit(rl.kind)
+                console.warn(`[ai] Groq vision rate-limited, ${rl.kind} (org-wide backoff ${Math.ceil(rl.cooldownMs / 1000)}s) ${rl.raw.slice(0, 120)}`)
               } else {
                 checkDeprecation(key, res.status, errText)
               }
@@ -1396,10 +1603,11 @@ export async function callVisionAI(
           if (!res.ok) {
             const errText = await res.text().catch(() => '')
             if (res.status === 429) {
-              const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
-              rateLimitedModels.set(`gemini-${geminiModel}`, Date.now() + cooldown)
-              recordHealth('gemini', geminiModel, '429', cooldown)
-              console.warn(`[ai] Gemini ${geminiModel} (vision) rate-limited (${Math.ceil(cooldown / 1000)}s backoff)`)
+              const rl = classify429('gemini', res, errText)
+              rateLimitedModels.set(`gemini-${geminiModel}`, Date.now() + rl.cooldownMs)
+              recordHealth('gemini', geminiModel, '429', rl.cooldownMs)
+              noteRateLimit(rl.kind)
+              console.warn(`[ai] Gemini ${geminiModel} (vision) rate-limited, ${rl.kind} (${Math.ceil(rl.cooldownMs / 1000)}s backoff) ${rl.raw.slice(0, 120)}`)
             } else {
               checkDeprecation(`gemini-${geminiModel}`, res.status, errText)
             }
@@ -1468,17 +1676,21 @@ async function callGroq(
       if (res.status === 429) {
         // Groq's free-tier limits are ORG-WIDE (RPM/RPD shared by every
         // model on the key): one 429 means the whole provider needs to
-        // back off, not just this model. Honour any Retry-After hint.
-        const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
-        rateLimitedModels.set(key, Date.now() + cooldown)
-        recordHealth('groq', model, '429', cooldown) // shared across ALL instances
-        setProviderCooldown('groq', cooldown)
-        diag(`groq ${model}: 429 rate-limited (org-wide backoff ${Math.ceil(cooldown / 1000)}s)`)
+        // back off, not just this model. The 429 body tells us whether the
+        // org pool is per-minute saturated ("tokens/requests per minute")
+        // or day-capped ("per day") — a daily cap gets a LONG cooldown so
+        // re-probes don't keep the noise floor hot for the rest of the day.
+        const rl = classify429('groq', res, errText)
+        rateLimitedModels.set(key, Date.now() + rl.cooldownMs)
+        recordHealth('groq', model, '429', rl.cooldownMs) // shared across ALL instances
+        setProviderCooldown('groq', rl.cooldownMs)
+        noteRateLimit(rl.kind)
+        diag(`groq ${model}: 429 ${rl.kind} (org-wide backoff ${Math.ceil(rl.cooldownMs / 1000)}s) ${rl.raw.slice(0, 160)}`)
       } else {
         // Check for deprecation — auto-deprecate if detected
         checkDeprecation(key, res.status, errText)
         if (res.status !== 404) recordHealth('groq', model, 'fail')
-        diag(`groq ${model}: ${res.status} ${errText.slice(0, 120)}`)
+        diag(`groq ${model}: ${res.status} ${errText.slice(0, 160)}`)
       }
       return null
     }
@@ -1540,15 +1752,21 @@ async function callGemini(
       if (res.status === 429) {
         // Gemini's free-tier limits are per-model pools, so a 429 here does
         // NOT block the sibling models — but honour the retryDelay the API
-        // reports (usually 20-60s) instead of guessing a flat 60s.
-        const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
-        rateLimitedModels.set(key, Date.now() + cooldown)
-        recordHealth('gemini', model, '429', cooldown) // shared across ALL instances
-        diag(`gemini ${model}: 429 rate-limited (${Math.ceil(cooldown / 1000)}s backoff)`)
+        // reports. The body ALSO distinguishes a per-minute window
+        // (retryDelay ~20-60s) from the DAILY cap (quota_metric
+        // "GenerateRequestsPerDay", retryDelay = seconds until midnight
+        // Pacific) — a daily cap cools the model for up to 55 min instead
+        // of the old 5-min clamp, which re-probed a dead pool ~12×/day per
+        // instance for nothing.
+        const rl = classify429('gemini', res, errText)
+        rateLimitedModels.set(key, Date.now() + rl.cooldownMs)
+        recordHealth('gemini', model, '429', rl.cooldownMs) // shared across ALL instances
+        noteRateLimit(rl.kind)
+        diag(`gemini ${model}: 429 ${rl.kind} (${Math.ceil(rl.cooldownMs / 1000)}s backoff) ${rl.raw.slice(0, 160)}`)
       } else {
         checkDeprecation(key, res.status, errText)
         if (res.status !== 404) recordHealth('gemini', model, 'fail')
-        diag(`gemini ${model}: ${res.status} ${errText.slice(0, 120)}`)
+        diag(`gemini ${model}: ${res.status} ${errText.slice(0, 160)}`)
       }
       return null
     }
@@ -1630,22 +1848,41 @@ async function callOpenRouter(
         // array — the 502 response now says which model failed with what
         // status (previously these were console.warn-only and invisible,
         // which is why OpenRouter looked like it failed "silently").
-        diag(`openrouter ${model}: ${res.status} ${errText.slice(0, 120)}`)
+        diag(`openrouter ${model}: ${res.status} ${errText.slice(0, 160)}`)
 
         // 401/403 = key problem → the whole provider is dead, stop.
         if (res.status === 401 || res.status === 403) {
           deprecatedModels.set('openrouter', Date.now())
           return null
         }
-        // 429 (daily free cap / RPM) on ONE model often means the whole
-        // free pool is capped for now — rotating just burns another
-        // request, so stop after logging. Other errors (404 model gone,
-        // 400 bad request) → rotate to the next candidate model.
+        // NOV 2026 — 429 is TWO different diseases and only one of them
+        // should stop the rotation:
+        //   • UPSTREAM capacity ("Provider returned error" +
+        //     metadata.raw "<model> is temporarily rate-limited") — the
+        //     HOST serving this model is throttled. gemma-4:free is
+        //     Google-hosted and chronically capped at peak hours; the
+        //     next candidates live on Meta/DeepSeek/Mistral hosts and
+        //     are usually FINE. The old code stopped the whole provider
+        //     here, which is why OpenRouter (415 live models!) was
+        //     effectively reduced to ONE model — the one model that
+        //     never answers. → rotate to the next candidate.
+        //   • ACCOUNT-level free-tier cap ("Rate limit exceeded:
+        //     free-models-per-day") — every :free model on the key
+        //     shares it; rotating is pure waste. → stop the rotation.
         if (res.status === 429) {
-          const cooldown = parseRetryAfterMs(res, errText) ?? RATE_LIMIT_COOLDOWN_MS
-          rateLimitedModels.set(`openrouter-${model}`, Date.now() + cooldown)
-          recordHealth('openrouter', model, '429', cooldown)
-          return null
+          const rl = classify429('openrouter', res, errText)
+          rateLimitedModels.set(`openrouter-${model}`, Date.now() + rl.cooldownMs)
+          recordHealth('openrouter', model, '429', rl.cooldownMs)
+          noteRateLimit(rl.kind)
+          diag(`openrouter ${model}: 429 ${rl.kind} (rotation ${rl.kind === 'account' ? 'STOPS' : 'continues'}) ${rl.raw.slice(0, 140)}`)
+          if (rl.kind === 'account') {
+            // Account-wide free cap — cool the whole provider for a while.
+            deprecatedModels.set('openrouter', Date.now())
+            return null
+          }
+          // Upstream throttle on THIS model — the rotation continues to
+          // a model on a different upstream host.
+          continue
         }
         if (res.status === 404) {
           recordHealth('openrouter', model, '404')

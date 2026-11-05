@@ -12,7 +12,7 @@ import {
   type Leaning,
   type NewsSource,
 } from '@/lib/news-sources'
-import { callAI, callVisionAI } from '@/lib/ai-providers'
+import { callAI, aiQuotaPressure, callVisionAI } from '@/lib/ai-providers'
 import { firebaseRead, firebasePatch } from '@/lib/firebase-server'
 import { isJunkTitle } from '@/lib/junk-filter'
 import { upgradeToHighRes } from '@/lib/image-upgrade'
@@ -1603,6 +1603,18 @@ function titleNeedsShortening(title: string): boolean {
  * GDELT-sourced topics too.
  */
 export async function shortenLongTitles(topics: TopicArticle[]): Promise<void> {
+  // QUOTA TRIAGE (Nov 2026): title shortening is cosmetic polish, and it
+  // draws from the SAME free-tier pools as neutral summaries and Ask AI.
+  // Under quota pressure (a 429 landed in the last couple of minutes) the
+  // titles simply stay long this refresh — the Firebase rewrite cache
+  // means a later, calmer aggregation still shortens them. Previously a
+  // saturation spiral spent the scarce requests here AND on image
+  // verification while visitors' summaries 429'd.
+  if (aiQuotaPressure()) {
+    console.log('[title-rewrite] skipped — AI quota pressure (summaries/Ask-AI keep the quota)')
+    return
+  }
+
   // Find topics that need shortening
   const toShorten = topics.filter((t) => titleNeedsShortening(t.title))
   if (toShorten.length === 0) return
@@ -2212,6 +2224,12 @@ async function verifyImageContent(
   }
 
   // 3. Ask a vision model
+  // QUOTA TRIAGE (Nov 2026): under pressure, skip the vision call and
+  // FAIL OPEN (keep the image unverified) — exactly the behaviour of a
+  // provider outage, but without burning a request that a visitor's
+  // summary or Ask AI needs more. No verdict is cached for the skipped
+  // candidate, so a calmer aggregation still verifies it.
+  if (aiQuotaPressure()) return null
   let answer: string | null = null
   try {
     answer = await withVlmSlot(() =>

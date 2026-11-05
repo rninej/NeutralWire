@@ -333,9 +333,12 @@ export async function GET(req: NextRequest) {
     // problem). Pre-generating summaries for the NEWEST stories right
     // after each refresh means Googlebot — arriving via the news sitemap
     // minutes later — reads a story page whose summary is already
-    // persisted: a pure cache read, no render-time LLM wait. Bounded:
-    // newest-first, ≤4 topics per tick, skipped entirely when the tick is
-    // already deep into its maxDuration budget. Best-effort by design.
+    // persisted: a pure cache read, no render-time LLM wait.
+    // NOV 2026: no fixed cap — preGenerateSummaries picks 6 normally and
+    // 12 inside the 08-10 UTC post-reset window (Gemini's daily quota
+    // resets at midnight Pacific = 08:00 UTC, so that wave is the
+    // cheapest fill of the day). Still skipped when the tick is deep into
+    // its maxDuration budget. Best-effort by design.
     try {
       const elapsed = Date.now() - t0
       if (elapsed < 55_000) {
@@ -344,7 +347,7 @@ export async function GET(req: NextRequest) {
           s.status === 'fulfilled' && s.value?.topics ? s.value.topics : [],
         )
         if (freshTopics.length > 0) {
-          const generated = await preGenerateSummaries(freshTopics, { max: 4 })
+          const generated = await preGenerateSummaries(freshTopics)
           console.log(
             `[cron/refresh-all] pre-generated ${generated} neutral summar${generated === 1 ? 'y' : 'ies'} of ${freshTopics.length} fresh topics (${Date.now() - t0}ms into the tick)`,
           )
