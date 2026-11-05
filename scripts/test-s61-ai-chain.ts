@@ -67,8 +67,8 @@ const GEMINI_MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest']
 const GROQ_MODELS = ['openai/gpt-oss-120b']
 const OR_MODELS = [
   'google/gemma-4-26b-a4b-it:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'deepseek/deepseek-chat-v3-0324:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'xingchen-agi/xing4.0-29b-a4b:free',
 ]
 
 // ── The mock server ────────────────────────────────────────────────────────
@@ -270,11 +270,11 @@ async function main() {
     state.groq = 'fail-429-rpm'
     state.or = {
       'google/gemma-4-26b-a4b-it:free': 'fail-429-upstream',
-      'meta-llama/llama-3.3-70b-instruct:free': 'ok',
-      'deepseek/deepseek-chat-v3-0324:free': 'ok',
+      'nvidia/nemotron-3.5-lightning:free': 'ok',
+      'xingchen-agi/xing4.0-29b-a4b:free': 'ok',
     }
     const answer = await ai.callAI({ systemPrompt: 's', userPrompt: 'u' })
-    assert(answer === 'OR meta-llama/llama-3.3-70b-instruct:free ANSWER.', `rotation wins: ${answer}`)
+    assert(answer === 'OR nvidia/nemotron-3.5-lightning:free ANSWER.', `rotation wins: ${answer}`)
     assert(state.counts.or === 2, `exactly 2 OpenRouter requests (gemma-4 429 + llama ok), got ${state.counts.or}`)
     assert(
       state.counts.orPerModel['google/gemma-4-26b-a4b-it:free'] === 1,
@@ -287,7 +287,7 @@ async function main() {
     state.groq = 'fail-429-rpm'
     state.or = {
       'google/gemma-4-26b-a4b-it:free': 'fail-429-account',
-      'meta-llama/llama-3.3-70b-instruct:free': 'ok',
+      'nvidia/nemotron-3.5-lightning:free': 'ok',
     }
     const a1 = await ai.callAI({ systemPrompt: 's', userPrompt: 'u' })
     assert(a1 === null, 'account-cap 429 → no answer from any provider')

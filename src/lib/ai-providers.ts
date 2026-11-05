@@ -809,37 +809,53 @@ function effectiveModels(
 // single retired/daily-capped model no longer kills the whole provider —
 // the old single hard-coded ID 404'd permanently when OpenRouter retired
 // it, another "cannot reach AI provider" contributor).
-// NOV 2026 reorder — UPSTREAM DIVERSITY FIRST: a 429 on a :free model is
-// usually the UPSTREAM host being throttled ("Provider returned error"),
-// not OpenRouter itself. Two Google models back-to-back meant the rotation
-// re-hit the same throttled Google host before ever reaching Meta/DeepSeek/
-// Mistral hosting. Interleave hosts so the 2nd candidate is always on a
-// DIFFERENT upstream than the 1st.
+// NOV 2026 RESEARCH (live catalog checked): the free tier shrank to ~12
+// models and SIX of the seven old preferences were RETIRED — only
+// google/gemma-4-26b-a4b-it:free survived, so the "last resort" provider
+// with 452 live models was effectively ONE model… the one Google-hosted
+// free model that is chronically upstream-throttled. New order, chosen
+// for UPSTREAM-HOST DIVERSITY (a 429 on one host doesn't predict the
+// others) and text quality:
+//   1. google/gemma-4-26b-a4b-it:free  — Google host (proven: ok=2 today)
+//   2. nvidia/nemotron-3.5-lightning:free — NVIDIA host, fast
+//   3. google/gemma-4-31b-it:free     — Google host (bigger sibling)
+//   4. xingchen-agi/xing4.0-29b-a4b:free — Alibaba host
+//   5. nvidia/nemotron-3-ultra-550b-a55b:free — NVIDIA, 550B MoE (quality)
+//   6. recursive/flint-v1.0:free
+//   7. nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free (emits
+//      reasoning — stripThinking cleans it)
+//   8. liquid/lfm-2.5-2.6b:free — tiny, last resort
+// (content-safety and vision-only entries excluded on purpose.)
 const OPENROUTER_MODELS = [
   'google/gemma-4-26b-a4b-it:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'deepseek/deepseek-chat-v3-0324:free',
-  'mistralai/mistral-small-3.1-24b-instruct:free',
-  'google/gemma-3-27b-it:free',
-  'qwen/qwen-2.5-72b-instruct:free',
-  'meta-llama/llama-4-scout:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'google/gemma-4-31b-it:free',
+  'xingchen-agi/xing4.0-29b-a4b:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'recursive/flint-v1.0:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'liquid/lfm-2.5-2.6b:free',
 ]
 const OPENROUTER_MODEL = OPENROUTER_MODELS[0]
 const GROQ_COMPOUND_MODEL = 'compound-beta'
 
 /** Ordered OpenRouter rotation candidates: preferences found in the live
  *  list first, then (if none match) any other free text models the list
- *  offers. Capped at 4 — enough host diversity without burning requests. */
+ *  offers. Capped at 5 — the whole free catalog is only ~12 models and
+ *  each is on a different upstream, so breadth is the point. Safety /
+ *  vision-only entries are never picked dynamically. */
 function openRouterCandidates(discoveredList: string[] | null): string[] {
   const hits = discoveredList
     ? OPENROUTER_MODELS.filter((m) => discoveredList.includes(m))
     : []
-  if (hits.length > 0) return hits.slice(0, 4)
+  if (hits.length > 0) return hits.slice(0, 5)
   if (discoveredList) {
     const anyFree = discoveredList.filter(
-      (m) => m.endsWith(':free') && !/nemo|vision|guard|embed/i.test(m),
+      (m) =>
+        m.endsWith(':free') &&
+        !/nemo|vision|guard|embed|safety|omni-30b-a3b-reasoning/i.test(m),
     )
-    if (anyFree.length > 0) return anyFree.slice(0, 4)
+    if (anyFree.length > 0) return anyFree.slice(0, 5)
   }
   return [OPENROUTER_MODEL]
 }
