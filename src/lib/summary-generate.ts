@@ -185,9 +185,13 @@ async function runGeneration(
   }
 
   // Try the LLM first. If it fails, use the extractive fallback.
+  // BACKGROUND callers (cron pre-gen, ISR story renders) pass the flag down
+  // to callAI so the generation fires ONE provider request instead of the
+  // 4-way parallel race — the volume consumers stop burning the daily
+  // free-tier caps (the "gemini shouldn't hit its limits" economics fix).
   let llmSummary: string | null = null
   try {
-    llmSummary = await generateLlmSummary(body)
+    llmSummary = await generateLlmSummary(body, opts.background === true)
   } catch (err) {
     console.warn(
       '[summary-generate] LLM failed, using fallback:',
@@ -400,7 +404,10 @@ export async function preGenerateSummaries(
  * If the summary is truncated (doesn't end with punctuation), we attempt
  * a continuation call to complete it.
  */
-async function generateLlmSummary(body: SummaryRequest): Promise<string | null> {
+async function generateLlmSummary(
+  body: SummaryRequest,
+  background = false,
+): Promise<string | null> {
   const articlesList = Array.isArray(body.articles) ? body.articles : []
 
   // Build article context — if we have articles, use them; otherwise fall
@@ -467,6 +474,7 @@ Write a neutral, in-depth summary of this story following the rules above.`
     systemPrompt,
     userPrompt,
     maxTokens: 800,
+    background,
   })
 
   if (!summary) return null
@@ -479,6 +487,7 @@ Write a neutral, in-depth summary of this story following the rules above.`
         systemPrompt,
         userPrompt: `Continue and complete this summary. Do not repeat what you already wrote.\n\nSo far:\n${summary}\n\nContinue:`,
         maxTokens: 300,
+        background,
       })
       if (continuation) {
         return summary + ' ' + continuation

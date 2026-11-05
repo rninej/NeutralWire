@@ -15,6 +15,7 @@ import {
   WifiOff,
   ChevronRight,
   Sparkles,
+  Clock,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -71,6 +72,15 @@ import { startUserCron, stopUserCron } from '@/lib/mesh/user-cron'
 import { NAV_STYLE_EVENT, readNavOverride, writeNavOverride, announceNavStyle, type NavMode } from '@/lib/nav-override'
 import { restoreGradient } from '@/lib/use-theme-reveal'
 import { archiveTopicsInBackground } from '@/lib/background-archiver'
+// ── Nov 2026 search upgrade: client-side token matching (mirror of the
+// server rules) + recent-search chips for the search bar. ──
+import {
+  tokenizeQuery,
+  localSearchHit,
+  getRecentSearches,
+  addRecentSearch,
+  clearRecentSearches,
+} from '@/lib/search-client'
 import {
   getInterests,
   getEngagement,
@@ -289,11 +299,16 @@ interface SearchResponse {
     matchedField: 'title' | 'summary' | 'source'
     snippet: string
     fromArchive?: boolean
+    premiumLocked?: boolean
   }>
   total: number
   categoriesSearched: number
   archiveSearched?: number
   indexedNow?: number
+  /** Tokenized query — highlighted in the results grid. */
+  tokens?: string[]
+  /** Typo-tolerant matches (misspelled token → real corpus word). */
+  didYouMean?: Array<{ query: string; word: string }>
   ms: number
 }
 
@@ -597,6 +612,9 @@ export default function Home({
   const [apiSearchLoading, setApiSearchLoading] = useState(false)
   const [apiSearchResult, setApiSearchResult] = useState<SearchResponse | null>(null)
   const [localSearchAttempted, setLocalSearchAttempted] = useState(false)
+  // Recent searches (localStorage) — loaded when the bar opens, refreshed
+  // each time a query commits so the chips update as the user searches.
+  const [recentSearches, setRecentSearches] = useState<string[]>([])
 
   // --- Subtopic header style (server-side feature flag + personal override) ---
   // Which of the 10 category-header designs this visitor sees. The server
@@ -1709,21 +1727,41 @@ export default function Home({
   const filteredTopics = React.useMemo(() => {
     let list = topics
     if (debouncedSearch) {
-      // CRASH GUARD: GDELT/AI-filled topics can miss summary, and slim
-      // feeds carry no articles array — a bare .toLowerCase() on any of
-      // those threw "Cannot read properties of undefined" and killed the
-      // whole feed while typing in the search box. Every field is guarded.
+      // NOV 2026 — "way better" search: token-overlap matching using the
+      // SAME rules the server scores with (lib/search-client mirror),
+      // instead of raw substring only. A multi-word query now matches in
+      // ANY word order, word prefixes catch conjugations ("russia" →
+      // "russian"), and outlet headlines + source names participate — so
+      // the live feed filter behaves like the full-catalog search below
+      // it. Raw substring stays as the fast path (exact phrases).
+      const tokens = tokenizeQuery(debouncedSearch)
       const q = debouncedSearch.toLowerCase()
-      const text = (s: unknown) => (typeof s === 'string' ? s : '')
+      const text = (s: unknown) => (typeof s === 'string' ? s.toLowerCase() : '')
       list = list.filter(
         (t) =>
-          text(t.title).toLowerCase().includes(q) ||
-          text(t.summary).toLowerCase().includes(q) ||
+          // Fast path — exact substring (strongest signal).
+          text(t.title).includes(q) ||
+          text(t.summary).includes(q) ||
           (Array.isArray(t.articles) &&
             t.articles.some(
               (a) =>
-                text(a.title).toLowerCase().includes(q) ||
-                text(a.sourceName).toLowerCase().includes(q),
+                text(a.title).includes(q) ||
+                text(a.sourceName).includes(q),
+            )) ||
+          // Token-overlap path — the server-consistent matcher.
+          (tokens.length > 0 &&
+            localSearchHit(
+              {
+                title: t.title,
+                summary: t.summary,
+                articleTitles: Array.isArray(t.articles)
+                  ? t.articles.map((a) => a.title)
+                  : [],
+                sourceNames: Array.isArray(t.articles)
+                  ? t.articles.map((a) => a.sourceName)
+                  : [],
+              },
+              tokens,
             )),
       )
     }
@@ -2012,6 +2050,9 @@ export default function Home({
     if (q.length < 2) return
     if (lastApiQueryRef.current === q) return // already fetched this query
     lastApiQueryRef.current = q
+    // Committing a query also files it into the recent-searches chips.
+    addRecentSearch(q)
+    setRecentSearches(getRecentSearches())
     let cancelled = false
     setApiSearchLoading(true)
     ;(async () => {
@@ -2484,6 +2525,27 @@ export default function Home({
     }
   }, [])
 
+  // ── Nov 2026 search affordances ──
+  // Recent searches load when the bar opens (they render as tappable
+  // chips below the empty input — one tap = one repeat search).
+  React.useEffect(() => {
+    if (showSearch) setRecentSearches(getRecentSearches())
+  }, [showSearch])
+
+  // Ctrl/Cmd+K opens search from anywhere (desktop power-user path; the
+  // always-visible header button is the discoverable one).
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault()
+        if (!showSearch) openSearch()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showSearch, openSearch])
+
+
   const featured = filteredTopics[0]
   const rest = filteredTopics.slice(1)
   const showApiSearch = localSearchAttempted && debouncedSearch
@@ -2566,6 +2628,32 @@ export default function Home({
               actionable to say. */}
 
           <div className="ml-auto flex items-center gap-1.5">
+            {/* SEARCH — ALWAYS VISIBLE (owner request Nov 2026: mobile users
+                didn't know where search lived — it only appeared in tiny
+                section-header buttons and the desktop nav row). The top-right
+                header cluster is the ONE place every user looks, so search
+                gets a permanent icon button here on EVERY screen size.
+                Toggles: closes + clears when the bar is already open. */}
+            <button
+              type="button"
+              onClick={() => {
+                if (showSearch) {
+                  setShowSearch(false)
+                  handleClearSearch()
+                } else {
+                  openSearch()
+                }
+              }}
+              className={cn(
+                'flex items-center justify-center rounded-full border border-border bg-muted/50 px-2.5 py-1.5 transition-colors hover:bg-muted active:scale-95',
+                showSearch && 'bg-muted ring-2 ring-foreground/20',
+              )}
+              aria-label={showSearch ? 'Close search' : 'Search news'}
+              title="Search news (Ctrl+K)"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+
             {/* Monetization button — model-aware. In DONATION mode it's
                 the original Ko-fi heart (opens ko-fi.com in a new tab,
                 gentle heartbeat pulse on hover). In SUBSCRIPTION mode the
@@ -2784,6 +2872,38 @@ export default function Home({
               <X className="h-4 w-4" />
             </Button>
           </div>
+
+          {/* Recent searches — tappable chips under the EMPTY input.
+              Nov 2026: the fastest repeat search is one the user already
+              made; stored locally, one tap re-runs it. */}
+          {!search && recentSearches.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 pb-1">
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+                <Clock className="h-3 w-3" />
+                Recent
+              </span>
+              {recentSearches.slice(0, 6).map((rq) => (
+                <button
+                  key={rq}
+                  type="button"
+                  onClick={() => setSearch(rq)}
+                  className="max-w-[40vw] truncate rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs text-foreground/80 transition-colors hover:bg-muted"
+                >
+                  {rq}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  clearRecentSearches()
+                  setRecentSearches([])
+                }}
+                className="ml-auto text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              >
+                Clear
+              </button>
+            </div>
+          )}
           </motion.div>
         )}
         </AnimatePresence>
@@ -2804,6 +2924,11 @@ export default function Home({
               loading={apiSearchLoading}
               result={apiSearchResult}
               onOpenTopic={handleOpenDetail}
+              onSuggestion={(fixed) => {
+                // Typo suggestion tapped — replace the query and re-run.
+                lastApiQueryRef.current = ''
+                setSearch(fixed)
+              }}
             />
           </motion.div>
         ) : (

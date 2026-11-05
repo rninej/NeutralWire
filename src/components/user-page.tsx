@@ -21,6 +21,9 @@ import {
   ShieldCheck,
   Mail,
   Lock,
+  Clock,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -73,17 +76,33 @@ const PERSONALIZE_TOPICS = [
 // fixed 4-tab layout with a tab bar pinned UNDER the header: every
 // section is exactly ONE tap away, and each tab's content fits roughly
 // one screen. Everything is reachable without "scrolling a meter".
-type TabId = 'profile' | 'feed' | 'theme' | 'alerts'
+type TabId = 'profile' | 'feed' | 'history' | 'theme' | 'alerts'
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'profile', label: 'Profile', icon: <UserCircle className="h-[18px] w-[18px]" /> },
   { id: 'feed', label: 'Feed', icon: <Target className="h-[18px] w-[18px]" /> },
+  { id: 'history', label: 'History', icon: <Clock className="h-[18px] w-[18px]" /> },
   { id: 'theme', label: 'Theme', icon: <Palette className="h-[18px] w-[18px]" /> },
   { id: 'alerts', label: 'Alerts', icon: <Bell className="h-[18px] w-[18px]" /> },
 ]
 
 // Easing curve shared across the page sections.
 const EASE_OUT = [0.16, 1, 0.3, 1] as const
+
+// ── Vote history entry (GET /api/history) ──
+// v = the vote, ts = WHEN it was cast, t/s/i = title/summary/image,
+// d = the story's own date. `legacy` marks entries reconstructed from the
+// pre-snapshot vote map (vote time unknown — story date used instead).
+interface HistoryEntry {
+  topicId: string
+  v: 'liked' | 'disliked'
+  ts: number
+  t: string
+  s: string
+  i: string | null
+  d: number
+  legacy?: boolean
+}
 
 export function UserPage({ onClose }: UserPageProps) {
   const pageRef = React.useRef<HTMLDivElement | null>(null)
@@ -94,7 +113,13 @@ export function UserPage({ onClose }: UserPageProps) {
   const [tab, setTab] = React.useState<TabId>(() => {
     try {
       const saved = sessionStorage.getItem('neutralwire:account-tab')
-      if (saved === 'profile' || saved === 'feed' || saved === 'theme' || saved === 'alerts') {
+      if (
+        saved === 'profile' ||
+        saved === 'feed' ||
+        saved === 'history' ||
+        saved === 'theme' ||
+        saved === 'alerts'
+      ) {
         return saved
       }
     } catch {}
@@ -133,6 +158,48 @@ export function UserPage({ onClose }: UserPageProps) {
 
   // ── Collapsible custom gradient maker (Theme tab) ──
   const [showGradientMaker, setShowGradientMaker] = React.useState(false)
+
+  // ── Vote history (liked / disliked news — the History tab) ──
+  // Loaded once when the tab is first opened; the endpoint merges the
+  // vote-time snapshots (title/image/summary/date) with any legacy
+  // topicVotes entries resolved through the search index.
+  const [historyLoading, setHistoryLoading] = React.useState(false)
+  const [historyData, setHistoryData] = React.useState<{
+    liked: HistoryEntry[]
+    disliked: HistoryEntry[]
+  } | null>(null)
+
+  React.useEffect(() => {
+    if (tab !== 'history' || historyData || historyLoading) return
+    const deviceId = typeof window !== 'undefined' ? getDeviceId() : ''
+    if (!deviceId) return
+    setHistoryLoading(true)
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(
+          `/api/history?deviceId=${encodeURIComponent(deviceId)}`,
+          { cache: 'no-store' },
+        )
+        if (res.ok) {
+          const json = (await res.json()) as {
+            liked?: HistoryEntry[]
+            disliked?: HistoryEntry[]
+          }
+          if (!cancelled) {
+            setHistoryData({ liked: json.liked || [], disliked: json.disliked || [] })
+          }
+        }
+      } catch {
+        // offline — the empty state renders
+      } finally {
+        if (!cancelled) setHistoryLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [tab, historyData, historyLoading])
 
   // Lock body scroll when open. Also announce open/close so other
   // overlays (PWA install banner, z-60/70) can yield while the Account
@@ -413,7 +480,7 @@ export function UserPage({ onClose }: UserPageProps) {
       <div className="sticky top-14 z-10 border-b bg-background/95 backdrop-blur">
         <div className="mx-auto max-w-2xl px-3 py-2">
           <div
-            className="grid grid-cols-4 gap-1 rounded-xl border border-border/70 bg-muted/40 p-1 shadow-sm"
+            className="grid grid-cols-5 gap-1 rounded-xl border border-border/70 bg-muted/40 p-1 shadow-sm"
             role="tablist"
             aria-label="Account sections"
           >
@@ -733,6 +800,53 @@ export function UserPage({ onClose }: UserPageProps) {
               </div>
             )}
 
+            {/* ═══════════════════ HISTORY ═══════════════════ */}
+            {tab === 'history' && (
+              <div className="space-y-4">
+                <Card className="p-4">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-indigo-500" />
+                    <h2 className="text-sm font-bold">Your story history</h2>
+                  </div>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Every story you liked 👍 or disliked 👎 lives here — tap any
+                    card to reopen the story. Liked stories also teach your feed
+                    what to show you more of.
+                  </p>
+                </Card>
+
+                {historyLoading && (
+                  <Card className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
+                    <RotateCcw className="h-4 w-4 animate-spin" />
+                    Loading your history…
+                  </Card>
+                )}
+
+                {!historyLoading && historyData && (
+                  <>
+                    <HistoryGroup
+                      title="Liked"
+                      icon={<ThumbsUp className="h-4 w-4 text-emerald-500" />}
+                      entries={historyData.liked}
+                      emptyHint="Nothing liked yet — tap the 👍 on any story to keep it here."
+                    />
+                    <HistoryGroup
+                      title="Disliked"
+                      icon={<ThumbsDown className="h-4 w-4 text-rose-500" />}
+                      entries={historyData.disliked}
+                      emptyHint="Nothing disliked yet — tap the 👎 on any story you don't want more of."
+                    />
+                  </>
+                )}
+
+                {!historyLoading && !historyData && (
+                  <Card className="p-8 text-center text-sm text-muted-foreground">
+                    Couldn&apos;t load your history right now. Reopen this tab to retry.
+                  </Card>
+                )}
+              </div>
+            )}
+
             {/* ═══════════════════ THEME ═══════════════════ */}
             {tab === 'theme' && (
               <div className="space-y-4">
@@ -862,6 +976,102 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
     output[i] = rawData.charCodeAt(i)
   }
   return output
+}
+
+// ── History tab: one vote group (Liked or Disliked) ──
+function HistoryGroup({
+  title,
+  icon,
+  entries,
+  emptyHint,
+}: {
+  title: string
+  icon: React.ReactNode
+  entries: HistoryEntry[]
+  emptyHint: string
+}) {
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-center gap-2">
+        {icon}
+        <h2 className="text-sm font-bold">{title}</h2>
+        <span className="ml-auto text-[11px] text-muted-foreground">
+          {entries.length} {entries.length === 1 ? 'story' : 'stories'}
+        </span>
+      </div>
+
+      {entries.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-border/70 p-3 text-xs text-muted-foreground">
+          {emptyHint}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {entries.slice(0, 50).map((e) => (
+            <HistoryItem key={`${e.v}-${e.topicId}`} entry={e} />
+          ))}
+          {entries.length > 50 && (
+            <p className="pt-1 text-center text-[11px] text-muted-foreground">
+              Showing the 50 most recent of {entries.length}
+            </p>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// One history row: image thumb, title, vote time. Tap → the standalone
+// story page (works for live AND archived stories, no feed state needed).
+function HistoryItem({ entry }: { entry: HistoryEntry }) {
+  const [imgError, setImgError] = React.useState(false)
+  const when = entry.ts || entry.d
+  const whenLabel = when
+    ? new Date(when).toLocaleDateString(undefined, {
+        day: 'numeric',
+        month: 'short',
+        year:
+          new Date(when).getFullYear() !== new Date().getFullYear()
+            ? 'numeric'
+            : undefined,
+      })
+    : ''
+  const title = entry.t || 'This story is no longer indexed'
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        // Standalone story page — the same view shared links use.
+        window.location.href = `/story/${encodeURIComponent(entry.topicId)}`
+      }}
+      className="flex w-full items-center gap-3 rounded-lg border border-border/60 p-2 text-left transition-colors hover:bg-muted/50"
+    >
+      {entry.i && !imgError ? (
+        <img
+          src={`/api/img?url=${encodeURIComponent(entry.i)}`}
+          alt=""
+          className="h-11 w-11 shrink-0 rounded-md object-cover"
+          onError={() => setImgError(true)}
+        />
+      ) : (
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-muted">
+          <Clock className="h-4 w-4 text-muted-foreground" />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="line-clamp-2 text-sm font-medium leading-snug">{title}</div>
+        <div className="mt-0.5 text-[11px] text-muted-foreground">
+          {entry.legacy ? 'Voted earlier · ' : ''}
+          {whenLabel}
+        </div>
+      </div>
+      {entry.v === 'liked' ? (
+        <ThumbsUp className="h-4 w-4 shrink-0 text-emerald-500" />
+      ) : (
+        <ThumbsDown className="h-4 w-4 shrink-0 text-rose-500" />
+      )}
+    </button>
+  )
 }
 
 // Re-export so consumers can use AnimatePresence with the user page (the

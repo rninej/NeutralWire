@@ -41,6 +41,11 @@ interface SearchResponse {
   indexedNow: number
   /** The visitor's tier (so the UI can explain the lock state). */
   premiumTier?: string
+  /** Tokenized query — the client highlights these words in results. */
+  tokens?: string[]
+  /** Typo-tolerant matches found (query token → real word in the corpus).
+  *  Powers the "Did you mean X?" chips. */
+  didYouMean?: Array<{ query: string; word: string }>
   ms: number
 }
 
@@ -292,18 +297,35 @@ export async function GET(req: NextRequest) {
   })
 
   // Stamp the premium lock AFTER sorting so it can't change ranking —
-  // and strip the private score fields from the payload.
+  // and strip the private score fields from the payload. While walking
+  // the hits, collect the typo-tolerance matches for "Did you mean…?".
+  const didYouMean = new Map<string, { query: string; word: string }>()
   const cleanHits = hits.slice(0, maxHits).map((hit) => {
-    const { coverage, matched, total, titleMatched, articleMatched, exact, score, ...clean } =
-      hit as SearchHit & {
-        coverage?: number
-        matched?: number
-        total?: number
-        titleMatched?: number
-        articleMatched?: number
-        exact?: boolean
-        score?: number
+    const {
+      coverage,
+      matched,
+      total,
+      titleMatched,
+      articleMatched,
+      exact,
+      score,
+      fuzzyMatches,
+      ...clean
+    } = hit as SearchHit & {
+      coverage?: number
+      matched?: number
+      total?: number
+      titleMatched?: number
+      articleMatched?: number
+      exact?: boolean
+      score?: number
+      fuzzyMatches?: Array<{ query: string; word: string }>
+    }
+    if (fuzzyMatches) {
+      for (const f of fuzzyMatches) {
+        if (!didYouMean.has(f.query)) didYouMean.set(f.query, f)
       }
+    }
     clean.premiumLocked = lockIfOld(
       clean.article.iso || clean.topic.latestSeen || 0,
       clean.fromArchive === true,
@@ -319,6 +341,8 @@ export async function GET(req: NextRequest) {
     archiveSearched,
     indexedNow,
     premiumTier: requester.tier,
+    tokens,
+    didYouMean: didYouMean.size > 0 ? Array.from(didYouMean.values()) : undefined,
     ms: Date.now() - t0,
   } satisfies SearchResponse)
 }

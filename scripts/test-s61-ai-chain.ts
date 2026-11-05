@@ -380,8 +380,67 @@ async function main() {
       r4text.startsWith('GEMINI gemini-flash'),
       `summary text from the model (${r4text.slice(0, 40)})`,
     )
+  } else if (scenario === 'background-width') {
+    // ── Nov 2026 quota-economy volley ──
+    // Interactive call: the 4-way parallel race (2 gemini + 1 groq + 1 OR).
+    // Background call: exactly ONE candidate fired, answer from it.
+    state.gemini = 'ok'
+    state.groq = 'ok'
+    state.or = { 'google/gemma-4-26b-a4b-it:free': 'ok' }
+    const interactive = await ai.callAI({ systemPrompt: 's', userPrompt: 'u' })
+    assert(interactive !== null, `interactive call answers (${interactive})`)
+    // Lingering race candidates (the OR fetch) can land milliseconds
+    // after the winner resolves — give them a beat BEFORE measuring so
+    // the counters are deterministic.
+    await sleep(400)
+    assert(
+      state.counts.gemini === 2 && state.counts.groq === 1 && state.counts.or <= 1,
+      `interactive volley = 2 gemini + 1 groq (+≤1 openrouter racer) (g${state.counts.gemini} k${state.counts.groq} o${state.counts.or})`,
+    )
+
+    // Reset counters for the background measurement.
+    state.counts.gemini = 0
+    state.counts.groq = 0
+    state.counts.or = 0
+    const bg1 = await ai.callAI({ systemPrompt: 's', userPrompt: 'u', background: true })
+    assert(bg1 !== null, `background call answers (${bg1})`)
+    assert(
+      state.counts.gemini === 1 && state.counts.groq === 0 && state.counts.or === 0,
+      `background volley fired exactly ONE request (g${state.counts.gemini} k${state.counts.groq} o${state.counts.or})`,
+    )
+    assert(
+      ai.getLastDiagnostics()[0].includes('[background width-1]'),
+      'diag labels the background width',
+    )
+
+    // Background when the CHEAPEST provider is down: gemini 429s → the
+    // sequential walk must reach groq (held back from the volley) — NOT
+    // skip it as "already tried".
+    state.counts.gemini = 0
+    state.counts.groq = 0
+    state.counts.or = 0
+    state.gemini = 'fail-429-plain'
+    const bg2 = await ai.callAI({ systemPrompt: 's', userPrompt: 'u', background: true })
+    assert(bg2 !== null && String(bg2).includes('GROQ'), `background walk reaches groq (${bg2})`)
+    assert(
+      state.counts.gemini === 2,
+      `the walk tried BOTH gemini models before groq (g${state.counts.gemini})`,
+    )
+    assert(state.counts.groq === 1, `groq fired in the walk (k${state.counts.groq})`)
+    assert(state.counts.or === 0, `openrouter untouched while groq is healthy (o${state.counts.or})`)
+    await sleep(300)
+
+    // Background with gemini AND groq down: the walk reaches the held-back
+    // OpenRouter rotation (step 6b).
+    state.counts.gemini = 0
+    state.counts.groq = 0
+    state.counts.or = 0
+    state.groq = 'fail-429-plain'
+    const bg3 = await ai.callAI({ systemPrompt: 's', userPrompt: 'u', background: true })
+    assert(bg3 !== null && String(bg3).includes('OR '), `background walk falls through to openrouter (${bg3})`)
+    assert(state.counts.or >= 1, `openrouter rotation fired (o${state.counts.or})`)
   } else {
-    console.log('unknown scenario — use or-rotate | or-account | gemini-daily | wait-retry | summary-backoff')
+    console.log('unknown scenario — use or-rotate | or-account | gemini-daily | wait-retry | summary-backoff | background-width')
     server.stop(true)
     process.exit(2)
   }

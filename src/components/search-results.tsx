@@ -31,6 +31,10 @@ interface SearchResponse {
   categoriesSearched: number
   archiveSearched?: number
   indexedNow?: number
+  /** Tokenized query — these words get highlighted in the results. */
+  tokens?: string[]
+  /** Typo-tolerant matches (misspelled query token → real corpus word). */
+  didYouMean?: Array<{ query: string; word: string }>
   ms: number
 }
 
@@ -47,6 +51,8 @@ interface SearchResultsProps {
   /** When true, render NOTHING while loading-with-no-prior-result or
    *  when no hits remain after exclusion (a silent empty section). */
   hiddenIfEmpty?: boolean
+  /** Typo suggestion clicked — parent replaces the query and re-searches. */
+  onSuggestion?: (fixedQuery: string) => void
 }
 
 /**
@@ -66,6 +72,47 @@ function formatTime(ms: number): string {
   return `${date} ${month}${year}, ${hh}:${mm}`
 }
 
+// ── Match highlighting (Nov 2026 search upgrade) ──
+// Wraps every whole-word/prefix occurrence of a query token in a <mark>.
+// Prefixes match like the server does ("russia" highlights "russian") —
+// tokens <4 chars get an exact-word boundary so "war" doesn't paint
+// "warden".
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function Highlight({ text, tokens }: { text: string; tokens: string[] }) {
+  const usable = (tokens || []).filter((t) => t.length >= 2)
+  if (!text || usable.length === 0) return <>{text}</>
+  const pattern = usable
+    .map((t) => (t.length >= 4 ? `\\b${escapeRegex(t)}\\w*` : `\\b${escapeRegex(t)}\\b`))
+    .join('|')
+  let re: RegExp
+  try {
+    re = new RegExp(`(${pattern})`, 'gi')
+  } catch {
+    return <>{text}</>
+  }
+  const parts = text.split(re)
+  if (parts.length <= 1) return <>{text}</>
+  return (
+    <>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <mark
+            key={i}
+            className="rounded-[2px] bg-yellow-200/70 px-0.5 text-inherit dark:bg-yellow-500/25"
+          >
+            {part}
+          </mark>
+        ) : (
+          <React.Fragment key={i}>{part}</React.Fragment>
+        ),
+      )}
+    </>
+  )
+}
+
 export function SearchResults({
   query,
   loading,
@@ -74,6 +121,7 @@ export function SearchResults({
   excludeTopicIds,
   heading,
   hiddenIfEmpty,
+  onSuggestion,
 }: SearchResultsProps) {
   // Deduplicate by topicId — multiple hits from the same topic should only
   // show ONE card (the topic card), not one card per article. Embedded
@@ -90,6 +138,12 @@ export function SearchResults({
     if (hit.fromArchive) archiveHitIds.add(hit.topic.topicId)
     if (hit.premiumLocked) lockedTopicIds.add(hit.topic.topicId)
   }
+
+  // Typo suggestions: replace the misspelled word in the raw query and
+  // hand the fixed query to the parent (one tap = corrected search).
+  const applySuggestion = (q: string, word: string): string =>
+    q.replace(new RegExp(`\\b${escapeRegex(word)}\\b`, 'i'), word)
+  const tokens = result?.tokens || []
 
   // Embedded (hiddenIfEmpty) mode: show nothing until there's something to
   // show — no spinner over the feed while the archive search loads, and no
@@ -110,18 +164,37 @@ export function SearchResults({
   }
 
   if (!result || uniqueTopics.length === 0) {
+    const dym = result?.didYouMean || []
     return (
       <Card className="flex flex-col items-center gap-2 p-8 text-center">
         <SearchIcon className="h-5 w-5 text-muted-foreground" />
         <div className="font-medium">No results for “{query}”</div>
-        <div className="text-xs text-muted-foreground">
-          Searched {result?.categoriesSearched ?? 0} live categories +{' '}
-          {result?.archiveSearched ?? 0} archived stories · {result?.ms ?? 0}ms.
-          Try a different term.
-        </div>
+        {dym.length > 0 && onSuggestion ? (
+          <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+            <span className="text-xs text-muted-foreground">Did you mean</span>
+            {dym.slice(0, 3).map((f) => (
+              <button
+                key={f.query}
+                type="button"
+                onClick={() => onSuggestion(applySuggestion(query, f.word))}
+                className="rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground/90 transition-colors hover:bg-muted"
+              >
+                {f.word}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground">
+            Searched {result?.categoriesSearched ?? 0} live categories +{' '}
+            {result?.archiveSearched ?? 0} archived stories · {result?.ms ?? 0}ms.
+            Try a different term — or check the spelling.
+          </div>
+        )}
       </Card>
     )
   }
+
+  const dym = result?.didYouMean || []
 
   const headingEl = heading ? (
     <div className="mb-1 flex items-center gap-2 border-t border-border pt-6 text-sm font-bold">
@@ -136,6 +209,27 @@ export function SearchResults({
   return (
     <div className="space-y-3">
       {headingEl}
+      {/* Typo suggestions — visible whenever the fuzzy pass corrected
+          something, results or not (users rarely notice their own typos). */}
+      {dym.length > 0 && onSuggestion && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-muted-foreground">Searching for</span>
+          {dym.map((f) => (
+            <span key={f.query} className="text-foreground/60 line-through">{f.query}</span>
+          ))}
+          <span className="text-muted-foreground">— did you mean</span>
+          {dym.slice(0, 3).map((f) => (
+            <button
+              key={f.query}
+              type="button"
+              onClick={() => onSuggestion(applySuggestion(query, f.word))}
+              className="rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-foreground/90 transition-colors hover:bg-muted"
+            >
+              {f.word}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex items-center justify-between text-[11px] text-muted-foreground">
         <span>
           <strong className="text-foreground">{uniqueTopics.length}</strong> stori
@@ -157,6 +251,7 @@ export function SearchResults({
             fromArchive={archiveHitIds.has(topic.topicId)}
             locked={lockedTopicIds.has(topic.topicId)}
             onOpen={onOpenTopic}
+            tokens={tokens}
           />
         ))}
       </div>
@@ -170,12 +265,15 @@ function SearchTopicCard({
   fromArchive = false,
   locked = false,
   onOpen,
+  tokens,
 }: {
   topic: TopicArticle
   index?: number
   fromArchive?: boolean
   locked?: boolean
   onOpen?: (topic: TopicArticle) => void
+  /** Query tokens — highlighted inside the title + summary. */
+  tokens?: string[]
 }) {
   const [imgError, setImgError] = React.useState(false)
   // Only render time after mount — formatTime() is timezone-dependent and
@@ -243,7 +341,7 @@ function SearchTopicCard({
             </span>
           </div>
           <h3 className="font-semibold leading-snug text-base">
-            {topic.title}
+            <Highlight text={topic.title} tokens={tokens || []} />
           </h3>
         </div>
 
@@ -260,7 +358,9 @@ function SearchTopicCard({
 
         {topic.summary && (
           <div className={cn('px-4', showImage ? 'pt-3' : '')}>
-            <p className="text-sm text-muted-foreground line-clamp-3">{topic.summary}</p>
+            <p className="text-sm text-muted-foreground line-clamp-3">
+              <Highlight text={topic.summary} tokens={tokens || []} />
+            </p>
           </div>
         )}
 

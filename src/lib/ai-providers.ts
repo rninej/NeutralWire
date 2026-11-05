@@ -80,47 +80,57 @@ function envInt(name: string, def: number): number {
 // renames a model, discovery automatically falls through to the next
 // preference — no more permanent 404s from hallucinated/retired IDs.
 //
-// UPDATED 2026-09 from free-tier research (Groq docs / deprecation page):
-//   - moonshotai/kimi-k2-instruct-0905: DEPRECATED (2026-04-15) → removed.
-//   - llama-3.3-70b-versatile: shut for free/developer tier (2026-08-16)
-//     → removed from preferences (dynamic fallback can still pick it if
-//     the key has access).
-//   - llama-3.1-8b-instant: deprecated in favour of gpt-oss-20b → demoted
-//     to last place (enterprise keys only).
-//   - qwen/qwen3.6-27b: Groq's recommended replacement tier-2 model.
-// Groq free tier: ~30 RPM / 14,400 RPD (org-level).
+// UPDATED 2026-11 (owner request: "check available models and pick the
+// CHEAPEST ones — Gemini shouldn't hit its limits; do the same for Groq")
+// from the live production health table + the Nov 2026 provider catalogs.
+//
+// Gemini on THIS key: every 2.0/2.5-family and gemma-3 model returns
+// 404 "no longer available to new users" (Google serves them, but NOT to
+// new projects — confirmed by the aiModelHealth 404 trail). The only
+// live pools are the auto-updating -latest aliases plus the numbered
+// Gemini 3 generation, each a SEPARATE per-model quota pool. Cheapest
+// first: Flash-LITE is the cheapest tier (highest RPM, cheapest tokens,
+// and the proven workhorse — 94% live success over 10k+ calls) before
+// full Flash. The numbered 3.x models are verified against the live
+// catalog by discovery; any the key can't see is simply never used.
 const GEMINI_MODELS = [
-  // Google's auto-updating stable aliases FIRST — these exist for every key
-  // (new projects included) and always point at a usable flash model.
-  // In 2026 gemini-flash-latest resolves to the Gemini 3 Flash generation
-  // (10 RPM / 250K TPM / 1500 RPD free tier).
-  'gemini-flash-latest',
-  'gemini-flash-lite-latest',
-  // 2.0-flash next: available on free-tier keys but dropped to 5 RPM in
-  // 2026 — keep below the aliases so the higher-quota model wins.
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-2.0-flash-001',
-  // 2.5 family: free tier available (1500 RPD shared Flash + Flash-Lite)
-  // but "not available to new users" via generateContent on some keys —
-  // discovery + the health system sort these out automatically.
+  // Cheapest-first stable aliases (every key, incl. new projects).
+  'gemini-flash-lite-latest', // → Gemini 3.x Flash-Lite: 15 RPM class
+  'gemini-flash-latest',      // → Gemini 3.x Flash: 10 RPM class
+  // Numbered Gemini 3 generation — separate per-model pools, so spreading
+  // across them multiplies the daily request headroom one pair of aliases
+  // gives (the "gemini shouldn't hit its limits" headroom fix).
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3.8-flash',
+  'gemini-3.6-flash',
+  'gemini-3-flash',
+  // Legacy families LAST — keys with older access still reach these;
+  // on this key they 404 and auto-soft-block for 6h (discovery-confirmed
+  // key-level restriction path).
   'gemini-2.5-flash-lite',
   'gemini-2.5-flash',
-  'gemini-2.5-pro',
-  // gemma-3 runs on the Gemini API too (text-only, but it answers).
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
   'gemma-3-27b-it',
 ]
 
-// Groq: text models in preference order (see the 2026 deprecation notes
-// above). Discovery filters to what the key can actually access, and the
-// Firebase health system re-orders by real-world success rate.
+// Groq on THIS key (live 404 trail, Nov 2026): llama-3.1-8b-instant,
+// llama-4-scout and BOTH qwen models are retired from the free/developer
+// roster → removed from preferences entirely so cold instances stop
+// burning sequential retries on guaranteed 404s. What's left is the
+// gpt-oss twins. 20b FIRST (the "cheapest Groq" pick): same 30 RPM org
+// pool as its big sibling but roughly 2× the output speed — it wins the
+// latency race and leaves org TPM headroom for the next call. Groq free
+// tier (verified Nov 2026 docs): 30 RPM org-wide, ~1,000 RPD per model,
+// 8K TPM / 200K TPD on the gpt-oss models.
 const GROQ_MODELS = [
-  'openai/gpt-oss-120b',
   'openai/gpt-oss-20b',
+  'openai/gpt-oss-120b',
+  // Roster models that still exist for some access tiers — discovery
+  // decides whether this key can see them at all.
   'qwen/qwen3.6-27b',
   'meta-llama/llama-4-scout-17b-16e-instruct',
-  'qwen/qwen3-32b',
-  'llama-3.1-8b-instant',
 ]
 
 // Track rate-limited models to skip them in future calls (per-process).
@@ -724,6 +734,53 @@ async function getDiscoveredModels(): Promise<DiscoveredModels> {
   return discoveryInFlight
 }
 
+// ── PROVIDER CATALOG (public diagnostics — model NAMES only, no secrets) ──
+// Used by GET /api/debug/models so the live catalog each API key actually
+// sees can be verified from production without touching chat quotas (the
+// /models endpoints are free + memoized per server instance).
+export interface ProviderCatalog {
+  keysConfigured: { gemini: boolean; groq: boolean; openrouter: boolean }
+  gemini: { discoveredCount: number | null; textRanked: string[]; preferencesLive: string[] }
+  groq: { discoveredCount: number | null; textRanked: string[]; preferencesLive: string[] }
+  openrouter: { discoveredCount: number | null; freeText: string[]; preferencesLive: string[] }
+  health: Record<string, Record<string, ModelHealth>>
+}
+
+export async function getProviderCatalog(): Promise<ProviderCatalog> {
+  const disc = await getDiscoveredModels()
+  await getHealth()
+  return {
+    keysConfigured: {
+      gemini: !!GEMINI_API_KEY,
+      groq: !!GROQ_API_KEY,
+      openrouter: !!OPENROUTER_API_KEY,
+    },
+    gemini: {
+      discoveredCount: disc.gemini?.length ?? null,
+      textRanked: disc.gemini ? rankGeminiModels(disc.gemini).slice(0, 20) : [],
+      preferencesLive: disc.gemini ? GEMINI_MODELS.filter((m) => disc.gemini!.includes(m)) : [],
+    },
+    groq: {
+      discoveredCount: disc.groq?.length ?? null,
+      textRanked: disc.groq ? rankGroqModels(disc.groq).slice(0, 20) : [],
+      preferencesLive: disc.groq ? GROQ_MODELS.filter((m) => disc.groq!.includes(m)) : [],
+    },
+    openrouter: {
+      discoveredCount: disc.openrouter?.length ?? null,
+      freeText: disc.openrouter
+        ? disc.openrouter.filter((m) => m.endsWith(':free')).slice(0, 30)
+        : [],
+      preferencesLive: disc.openrouter
+        ? OPENROUTER_MODELS.filter((m) => disc.openrouter!.includes(m))
+        : [],
+    },
+    health: JSON.parse(JSON.stringify(healthCache || {})) as Record<
+      string,
+      Record<string, ModelHealth>
+    >,
+  }
+}
+
 // ── Re-discovery on failure ──
 // "When something fails it re-reads the models available." A 404 /
 // deprecation means our cached model list is stale (the provider retired
@@ -841,7 +898,10 @@ const OPENROUTER_MODELS = [
   'liquid/lfm-2.5-2.6b:free',
 ]
 const OPENROUTER_MODEL = OPENROUTER_MODELS[0]
-const GROQ_COMPOUND_MODEL = 'compound-beta'
+// Groq's agentic (web-search) model, newest name FIRST — Groq renamed
+// compound-beta → groq/compound in 2026 (the old id's last live success
+// was months ago). We race both ids; whichever the key accepts answers.
+const GROQ_COMPOUND_MODELS = ['groq/compound', 'compound-beta']
 
 /** Ordered OpenRouter rotation candidates: preferences found in the live
  *  list first, then (if none match) any other free text models the list
@@ -874,6 +934,14 @@ interface ChatCall {
   userPrompt: string
   /** Optional max output tokens. Default 400. Set higher for long summaries. */
   maxTokens?: number
+  /** BACKGROUND caller (cron pre-generation, ISR story renders): fire
+   *  ONE candidate instead of the 4-way parallel race, then walk the
+   *  remaining providers sequentially. The interactive race burns 3-4
+   *  requests per generation (the losing candidates' tokens are spent
+   *  too) — for latency-insensitive callers that is pure quota waste on
+   *  free tiers whose daily caps the site was exhausting. Interactive
+   *  user clicks keep the fast parallel volley. */
+  background?: boolean
 }
 
 let lastProvider = 'none'
@@ -1086,7 +1154,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
       return true
     })
 
-  const geminiAvail = available(geminiModels.map((m) => ({ key: `gemini-${m}`, model: m }))).slice(0, 2)
+  const geminiAvail = available(geminiModels.map((m) => ({ key: `gemini-${m}`, model: m }))).slice(0, opts.background ? 1 : 2)
   const groqAvail = available(groqModels.map((m) => ({ key: `groq-${m}`, model: m }))).slice(0, 1)
 
   // ── Cooldown escape hatch ──
@@ -1136,7 +1204,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
 
   const groqCd = providerCooldownRemaining('groq', now)
   diag(
-    `volley: gemini=[${geminiAvail.map((a) => a.model).join(',') || 'NONE'}] groq=[${groqAvail.map((a) => a.model).join(',') || 'NONE'}] openrouter=${OPENROUTER_API_KEY ? pickOpenRouterModel(disc.openrouter) : 'no-key'} | discovered gemini=${disc.gemini?.length ?? 'n/a'} groq=${disc.groq?.length ?? 'n/a'} or=${disc.openrouter?.length ?? 'n/a'} | deprecated=[${Array.from(deprecatedModels).join(',') || '-'}] | cooldowns=[${groqCd > 0 ? `groq:${Math.ceil(groqCd / 1000)}s` : '-'}]`,
+    `volley${opts.background ? ' [background width-1]' : ''}: gemini=[${geminiAvail.map((a) => a.model).join(',') || 'NONE'}] groq=[${groqAvail.map((a) => a.model).join(',') || 'NONE'}] openrouter=${OPENROUTER_API_KEY ? pickOpenRouterModel(disc.openrouter) : 'no-key'} | live gemini=[${geminiModels.slice(0, 5).join(',')}] groq=[${groqModels.slice(0, 4).join(',')}] | discovered gemini=${disc.gemini?.length ?? 'n/a'} groq=${disc.groq?.length ?? 'n/a'} or=${disc.openrouter?.length ?? 'n/a'} | deprecated=[${Array.from(deprecatedModels).join(',') || '-'}] | cooldowns=[${groqCd > 0 ? `groq:${Math.ceil(groqCd / 1000)}s` : '-'}]`,
   )
 
   // 1+2. Fire up to TWO Gemini models + ONE Groq model in parallel (plus
@@ -1151,19 +1219,26 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   // with itself. One Groq model only (its limits are org-wide — a second
   // Groq request would literally compete with itself).
   // If a raced model is slow, ANOTHER provider still wins the race.
+  // BACKGROUND callers (cron pre-gen, ISR renders) fire ONE candidate and
+  // walk the rest sequentially below — 1 request per generation instead
+  // of 4, quartering the daily quota burn of the volume consumers.
+  const firedInVolley = new Set<string>()
   for (const { model } of geminiAvail) {
     if (GEMINI_API_KEY) {
+      firedInVolley.add(`gemini-${model}`)
       candidates.push(callGemini(opts.systemPrompt, opts.userPrompt, model, false, maxTokens))
     }
   }
-  if (GROQ_API_KEY) {
+  if (GROQ_API_KEY && !opts.background) {
     for (const { model } of groqAvail) {
+      firedInVolley.add(`groq-${model}`)
       candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, model, maxTokens))
     }
   }
 
-  // 3. Fire off OpenRouter (last resort but parallel for speed)
-  if (OPENROUTER_API_KEY && !isDeprecated('openrouter')) {
+  // 3. Fire off OpenRouter (last resort but parallel for speed) — held
+  //    back for background callers, which reach it sequentially in step 6b.
+  if (OPENROUTER_API_KEY && !isDeprecated('openrouter') && !opts.background) {
     candidates.push(callOpenRouter(opts.systemPrompt, opts.userPrompt, false, maxTokens))
   }
 
@@ -1220,7 +1295,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   )
   let geminiTries = 0
   for (const model of geminiRetry) {
-    if (geminiAvail.some((a) => a.model === model)) continue
+    if (firedInVolley.has(`gemini-${model}`)) continue
     if (geminiTries >= 3) break
     if (Date.now() > callDeadline) break
     const key = `gemini-${model}`
@@ -1237,10 +1312,13 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     }
   }
 
-  // 6. Try remaining Groq models (org cooldown = stop for this provider)
+  // 6. Try remaining Groq models (org cooldown = stop for this provider).
+  // NOTE: membership is checked against firedInVolley, not groqAvail — in
+  // background mode groqAvail models were LISTED but deliberately held
+  // back from the volley, so they must still be walked here.
   let groqTries = 0
   for (const model of groqRetry) {
-    if (groqAvail.some((a) => a.model === model)) continue
+    if (firedInVolley.has(`groq-${model}`)) continue
     if (groqTries >= 2) break
     if (providerCooldownRemaining('groq') > 0) break
     if (Date.now() > callDeadline) break
@@ -1254,6 +1332,19 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
     const answer = await callGroq(opts.systemPrompt, opts.userPrompt, model, maxTokens)
     if (answer) {
       lastProvider = `Groq ${model}`
+      return answer
+    }
+  }
+
+  // ── 6b. BACKGROUND ONLY: OpenRouter rotation (sequential) ──
+  // Background callers held OpenRouter out of the parallel volley to save
+  // quota — this is their last sequential stop before giving up. The
+  // rotation inside callOpenRouter walks up to 5 free models across
+  // different upstream hosts; the call budget bounds it.
+  if (opts.background && OPENROUTER_API_KEY && !isDeprecated('openrouter') && Date.now() < callDeadline - 1000) {
+    const answer = await callOpenRouter(opts.systemPrompt, opts.userPrompt, false, maxTokens)
+    if (answer) {
+      lastProvider = 'OpenRouter (background rotation)'
       return answer
     }
   }
@@ -1373,10 +1464,15 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
     }
   }
 
-  // 2. Groq compound-beta in parallel (skip if deprecated or the org-wide
-  //    Groq cooldown is active — see PROVIDER_ORG_WIDE)
+  // 2. Groq compound (agentic web search) in parallel — Groq renamed the
+  //    model compound-beta → groq/compound in 2026, so we race BOTH ids;
+  //    whichever the key still accepts answers. Skipped entirely when the
+  //    org-wide Groq cooldown is active (see PROVIDER_ORG_WIDE).
   if (GROQ_API_KEY && !isDeprecated('groq-compound-beta') && providerCooldownRemaining('groq', now) === 0) {
-    candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, GROQ_COMPOUND_MODEL))
+    for (const compoundModel of GROQ_COMPOUND_MODELS) {
+      if (isDeprecated(`groq-${compoundModel}`)) continue
+      candidates.push(callGroq(opts.systemPrompt, opts.userPrompt, compoundModel))
+    }
     // ALSO race a regular Groq model (no web search, but at least answers
     // from training data) — compound-beta alone has been unreliable.
     const groqModels = effectiveModels(disc.groq, GROQ_MODELS, rankGroqModels, 'groq')
@@ -1461,8 +1557,17 @@ export async function callAICompound(opts: ChatCall): Promise<string | null> {
 // related to the story (e.g. not a supermarket storefront on a
 // Netanyahu headline). Groq llama-4-scout and Gemini flash are both
 // multimodal and cheap; we race them and take the first answer.
+// NOV 2026: cheapest-first (owner request) — llama-4-scout is 404-dead
+// on this key so Gemini flash-LITE carries vision duty, full flash next,
+// then the (key-restricted) numbered models.
 const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
-const GEMINI_VISION_MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash']
+const GEMINI_VISION_MODELS = [
+  'gemini-flash-lite-latest',
+  'gemini-flash-latest',
+  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+]
 
 // Unsupported-by-vision-models formats (Gemini/Groq don't take avif; svg
 // is usually a site logo, not a photo). These return null → caller

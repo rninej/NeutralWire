@@ -36,6 +36,45 @@ export function queryTokens(q: string): string[] {
   return [...new Set(words)]
 }
 
+// ── TYPO TOLERANCE (Nov 2026 — "make the search system way better") ──
+// Real users misspell names ("Kiev"/"Kyiv", "Macron"/"Marcon",
+// "elecion"). Substring and prefix matching both miss those. When a
+// token finds NO strict match anywhere in a candidate, we fall back to a
+// bounded edit-distance-1 word scan — "haras" matches "harass",
+// "sucession" matches "succession". Only for tokens ≥5 chars (a short
+// token's one-edit neighbourhood is all real words: "war"→"wars",
+// "gas"→"was"…) and only ONE edit (two typos in one word is rare and
+// the false-positive rate explodes).
+
+/** Bounded edit-distance ≤ 1: substitution (same length) or one
+ *  insertion/deletion (length ±1). Hot path — written branch-cheap. */
+function withinOneEdit(a: string, b: string): boolean {
+  if (a === b) return true
+  if (Math.abs(a.length - b.length) > 1) return false
+  if (a.length === b.length) {
+    let subs = 0
+    for (let k = 0; k < a.length; k++) {
+      if (a[k] !== b[k] && ++subs > 1) return false
+    }
+    return true
+  }
+  const [short, long] = a.length < b.length ? [a, b] : [b, a]
+  let i = 0
+  let j = 0
+  let skipped = false
+  while (i < short.length && j < long.length) {
+    if (short[i] === long[j]) {
+      i++
+      j++
+    } else {
+      if (skipped) return false
+      skipped = true
+      j++
+    }
+  }
+  return true // any leftover tail ≤1 char (guaranteed by the length diff)
+}
+
 // ── Word-boundary prefix matching ──
 // Outlets CONJUGATE differently ("indicted" vs "indictment", "Russia"
 // vs "Russian", "attack" vs "attacks") — substring matching misses all
@@ -61,6 +100,19 @@ function fieldHasToken(text: string, tok: string): boolean {
   return false
 }
 
+/** Fuzzy fallback for one token against one field's words.
+ *  Returns the ACTUAL field word it matched (for "did you mean"), or null. */
+function fieldFuzzyToken(text: string, tok: string): string | null {
+  if (tok.length < 5) return null // short tokens: one edit = all real words
+  const words = text.split(/[^a-z0-9]+/)
+  for (const w of words) {
+    if (Math.abs(w.length - tok.length) <= 1 && withinOneEdit(w, tok)) {
+      return w
+    }
+  }
+  return null
+}
+
 /** Where a token was found — title hits outweigh body hits in scoring. */
 export interface TokenMatch {
   /** 0..1 — fraction of query tokens found anywhere. */
@@ -77,6 +129,9 @@ export interface TokenMatch {
   exact: boolean
   /** Composite ranking score (higher = better). */
   score: number
+  /** Tokens that matched ONLY via typo tolerance, with the field word
+   *  they matched — powers the "Did you mean X?" suggestion. */
+  fuzzyMatches?: Array<{ query: string; word: string }>
 }
 
 /** Empty-ish texts are normal (archive entries can lack summaries). */
@@ -131,16 +186,54 @@ export function scoreCandidate(
   let titleMatched = 0
   let articleMatched = 0
   let weight = 0
+  const fuzzyMatches: Array<{ query: string; word: string }> = []
+  // Typo tolerance only for human-sized queries — a pasted 12-word
+  // headline gets strict token-overlap (its recall comes from volume).
+  const allowFuzzy = tokens.length <= 8
   for (const tok of tokens) {
-    const inTitle = fieldHasToken(title, tok)
-    const inSummary = fieldHasToken(summary, tok)
-    const inArticle = articleTitles.some((t) => fieldHasToken(t, tok))
-    const inDesc = descriptions.some((t) => fieldHasToken(t, tok))
+    let inTitle = fieldHasToken(title, tok)
+    let inSummary = fieldHasToken(summary, tok)
+    let inArticle = articleTitles.some((t) => fieldHasToken(t, tok))
+    let inDesc = descriptions.some((t) => fieldHasToken(t, tok))
+
+    // Typo fallback: the token matched NOTHING strictly — try one-edit
+    // matching against the field words. A fuzzy hit counts (slightly
+    // softer weight) and is remembered for "Did you mean…?".
+    if (!inTitle && !inSummary && !inArticle && !inDesc && allowFuzzy) {
+      let fz = fieldFuzzyToken(title, tok)
+      if (!fz) fz = fieldFuzzyToken(summary, tok)
+      if (!fz) {
+        for (const t of articleTitles) {
+          const w = fieldFuzzyToken(t, tok)
+          if (w) {
+            fz = w
+            break
+          }
+        }
+      }
+      if (!fz) {
+        for (const t of descriptions) {
+          const w = fieldFuzzyToken(t, tok)
+          if (w) {
+            fz = w
+            break
+          }
+        }
+      }
+      if (fz) {
+        fuzzyMatches.push({ query: tok, word: fz })
+        if (title.includes(fz)) inTitle = true
+        else if (articleTitles.some((t) => t.includes(fz))) inArticle = true
+        else if (summary.includes(fz)) inSummary = true
+        else inDesc = true
+      }
+    }
+
     if (!inTitle && !inSummary && !inArticle && !inDesc) continue
     matched++
     if (inTitle) {
       titleMatched++
-      weight += 1.5
+      weight += fuzzyMatches.some((f) => f.query === tok) ? 1.35 : 1.5
     } else if (inArticle) {
       articleMatched++
       weight += 1.2
@@ -172,7 +265,16 @@ export function scoreCandidate(
   const score =
     (exact ? 10 : 0) + coverage * 3 + (weight / total) * 1.5 + titleBonus * 0.8
 
-  return { coverage, matched, total, titleMatched, articleMatched, exact, score }
+  return {
+    coverage,
+    matched,
+    total,
+    titleMatched,
+    articleMatched,
+    exact,
+    score,
+    fuzzyMatches: fuzzyMatches.length > 0 ? fuzzyMatches : undefined,
+  }
 }
 
 /**

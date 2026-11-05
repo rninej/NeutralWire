@@ -230,7 +230,9 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
     } catch {
       // silent
     }
-    // Also save to Firebase (syncs across devices) — fire and forget
+    // Also save to Firebase (syncs across devices) — fire and forget.
+    // The SNAPSHOT rides along so Account → History can render the story
+    // (title, image, summary, dates) without re-reading the archive.
     const deviceId = getDeviceId()
     if (deviceId) {
       fetch('/api/engagement', {
@@ -241,6 +243,14 @@ export function TopicDetail({ topic, onClose, onReportBroken, autoLike = false }
           deviceId,
           topicId: topic.topicId,
           vote,
+          snapshot: vote
+            ? {
+                t: topic.title || '',
+                s: (topic.summary || '').slice(0, 200),
+                i: typeof topic.imageUrl === 'string' ? topic.imageUrl : '',
+                d: topic.latestSeen || topic.firstSeen || Date.now(),
+              }
+            : undefined,
         }),
       }).catch(() => {})
     }
