@@ -816,11 +816,15 @@ function effectiveModels(
 // free model that is chronically upstream-throttled. New order, chosen
 // for UPSTREAM-HOST DIVERSITY (a 429 on one host doesn't predict the
 // others) and text quality:
-//   1. google/gemma-4-26b-a4b-it:free  — Google host (proven: ok=2 today)
-//   2. nvidia/nemotron-3.5-lightning:free — NVIDIA host, fast
-//   3. google/gemma-4-31b-it:free     — Google host (bigger sibling)
-//   4. xingchen-agi/xing4.0-29b-a4b:free — Alibaba host
-//   5. nvidia/nemotron-3-ultra-550b-a55b:free — NVIDIA, 550B MoE (quality)
+//   1. google/gemma-4-26b-a4b-it:free  — Google host (proven: ok=3 today)
+//   2. nvidia/nemotron-3-ultra-550b-a55b:free — NVIDIA host, 550B MoE.
+//      LIVE-PROVEN: answered when every other free model was throttled.
+//      Slow — that is why the per-attempt timeout below is 10s.
+//   3. xingchen-agi/xing4.0-29b-a4b:free — Alibaba host
+//   4. google/gemma-4-31b-it:free     — Google host (bigger sibling)
+//   5. nvidia/nemotron-3.5-lightning:free — NVIDIA, unproven (timed out
+//      in every live attempt so far — kept, but demoted below the
+//      proven models so it can no longer eat the rotation budget)
 //   6. recursive/flint-v1.0:free
 //   7. nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free (emits
 //      reasoning — stripThinking cleans it)
@@ -828,10 +832,10 @@ function effectiveModels(
 // (content-safety and vision-only entries excluded on purpose.)
 const OPENROUTER_MODELS = [
   'google/gemma-4-26b-a4b-it:free',
-  'nvidia/nemotron-3.5-lightning:free',
-  'google/gemma-4-31b-it:free',
-  'xingchen-agi/xing4.0-29b-a4b:free',
   'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'xingchen-agi/xing4.0-29b-a4b:free',
+  'google/gemma-4-31b-it:free',
+  'nvidia/nemotron-3.5-lightning:free',
   'recursive/flint-v1.0:free',
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
   'liquid/lfm-2.5-2.6b:free',
@@ -1056,7 +1060,7 @@ export async function callAI(opts: ChatCall): Promise<string | null> {
   // 15 with a 12.5s deadline; /api/summary similar). Without a budget the
   // old code could spend 20s+ walking sibling models while Vercel killed
   // the function mid-flight.
-  const callDeadline = Date.now() + envInt('AI_CALL_BUDGET_MS', 11_000)
+  const callDeadline = Date.now() + envInt('AI_CALL_BUDGET_MS', 12_000)
 
   // Make sure model discovery has run (no-op after the first call) and
   // load the SHARED Firebase health table (cross-instance cooldowns +
@@ -1831,7 +1835,9 @@ async function callOpenRouter(
     const orLimitedUntil = rateLimitedModels.get(`openrouter-${model}`)
     if (orLimitedUntil && orLimitedUntil > Date.now()) continue
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 8000)
+    // 10s: the live-proven nemotron-ultra 550B MoE needs the room — the
+    // old 8s abort killed generations that were about to complete.
+    const timeout = setTimeout(() => controller.abort(), 10000)
 
     try {
       const body: Record<string, unknown> = {

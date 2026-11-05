@@ -274,8 +274,8 @@ async function main() {
       'xingchen-agi/xing4.0-29b-a4b:free': 'ok',
     }
     const answer = await ai.callAI({ systemPrompt: 's', userPrompt: 'u' })
-    assert(answer === 'OR nvidia/nemotron-3.5-lightning:free ANSWER.', `rotation wins: ${answer}`)
-    assert(state.counts.or === 2, `exactly 2 OpenRouter requests (gemma-4 429 + llama ok), got ${state.counts.or}`)
+    assert(answer === 'OR xingchen-agi/xing4.0-29b-a4b:free ANSWER.', `rotation wins: ${answer}`)
+    assert(state.counts.or === 2, `exactly 2 OpenRouter requests (gemma-4 429 + xingchen ok), got ${state.counts.or}`)
     assert(
       state.counts.orPerModel['google/gemma-4-26b-a4b-it:free'] === 1,
       'gemma-4 (throttled Google host) tried exactly once',
