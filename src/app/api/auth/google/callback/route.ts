@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   upsertSocialAccount,
@@ -50,7 +51,7 @@ function decodeJwtPayload(jwt: string): IdTokenPayload | null {
   }
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const { clientId, clientSecret } = googleOAuthConfig()
   const code = req.nextUrl.searchParams.get('code') || ''
   const state = req.nextUrl.searchParams.get('state') || ''
@@ -103,3 +104,9 @@ export async function GET(req: NextRequest) {
     return homeWith('?authError=google')
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/auth/google/callback',
+  GET$,
+)

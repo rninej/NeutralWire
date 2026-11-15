@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead } from '@/lib/firebase-server'
 import type { TopicArticle } from '@/lib/news-aggregator'
@@ -34,7 +35,7 @@ const CACHE_CATEGORIES = [
   'science', 'health', 'sports',
 ]
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const limit = Math.min(50, Math.max(1, Number(sp.get('limit') || '20')))
   const slim = sp.get('slim') === '1'
@@ -116,3 +117,9 @@ export async function GET(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/top-news',
+  GET$,
+)

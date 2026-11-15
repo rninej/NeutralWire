@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash, timingSafeEqual } from 'crypto'
 
@@ -523,7 +524,7 @@ function staticCrons(): ApiItem[] {
 
 // ── The route ────────────────────────────────────────────────────────────
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as { password?: string }
     if (!body.password || !verifyPassword(body.password)) {
@@ -626,3 +627,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Board failed', detail: String(err) }, { status: 500 })
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/debug/apis',
+  POST$,
+)

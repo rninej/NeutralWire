@@ -1,3 +1,4 @@
+import { trackRequest, beginTail, endTail } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import type { Category } from '@/lib/news-sources'
@@ -35,7 +36,7 @@ export const maxDuration = 25
  * For virtual categories, the visitor's country is auto-detected server-side
  * (or overridden via ?country=XX).
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const category = (sp.get('category') || 'relevant') as Category
   const limit = Math.min(40, Math.max(5, Number(sp.get('limit') || '24')))
@@ -68,6 +69,7 @@ export async function GET(req: NextRequest) {
     // it). Budget 18s: images + full source ladder, same as the news
     // route's after() polish pass.
     if (stale && customTopicCooldownRemaining(topicId) === 0) {
+      beginTail('api/refresh')
       after(async () => {
         try {
           await fillCustomTopic(topicId, {
@@ -76,6 +78,9 @@ export async function GET(req: NextRequest) {
             budgetMs: 18000,
           })
         } catch {}
+        finally {
+          endTail('api/refresh')
+        }
       })
     }
     const topics = (feed?.topics || [])
@@ -171,6 +176,7 @@ export async function GET(req: NextRequest) {
     // work entirely, and archive PUTs are idempotent + trimmed (12
     // articles, 300-char descriptions) — cost is upload-only, never the
     // download quota. A cold instance re-writes a snapshot at most once.
+    beginTail('api/refresh')
     after(async () => {
       try {
         const room = `${category}${country && (category === 'relevant' || category === 'mycountry') ? `__${country.toUpperCase()}` : ''}`
@@ -199,6 +205,8 @@ export async function GET(req: NextRequest) {
         console.log(`[refresh] Archived ${toArchive.length} topics`)
       } catch (err) {
         console.warn('[refresh] Background archiving failed:', err)
+      } finally {
+        endTail('api/refresh')
       }
     })
 
@@ -218,6 +226,7 @@ export async function GET(req: NextRequest) {
     // visit) was burning too much CPU. 3 is enough for the top stories;
     // the rest generate on-demand when the user opens them.
     const topTopics = fresh.topics.slice(0, 3)
+    beginTail('api/refresh')
     after(async () => {
       const origin = req.nextUrl.origin
       try {
@@ -265,6 +274,8 @@ export async function GET(req: NextRequest) {
         console.log(`[refresh] Background summary generation complete`)
       } catch (err) {
         console.warn('[refresh] Background summary generation failed:', err)
+      } finally {
+        endTail('api/refresh')
       }
     })
 
@@ -289,3 +300,9 @@ export async function GET(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/refresh',
+  GET$,
+)

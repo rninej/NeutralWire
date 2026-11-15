@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead } from '@/lib/firebase-server'
 import { createHash, timingSafeEqual } from 'crypto'
@@ -87,7 +88,7 @@ function dateRange(fromTs: number, toTs: number): string[] {
   return dates
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       password: string
@@ -211,3 +212,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/analytics/query',
+  POST$,
+)

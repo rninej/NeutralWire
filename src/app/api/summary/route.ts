@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import {
@@ -52,7 +53,7 @@ function withEdgeCache(res: NextResponse): NextResponse {
  * If the summary doesn't exist yet, returns 404 (client falls back to
  * POST which generates it).
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const topicId = req.nextUrl.searchParams.get('topicId')
   if (!topicId) {
     return NextResponse.json(
@@ -94,7 +95,7 @@ export async function GET(req: NextRequest) {
  * visitor (on any server) gets it instantly without re-running the LLM.
  * This saves API costs and makes the detail page load fast for everyone.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as SummaryRequest
     if (!body.topicId || !body.title) {
@@ -179,3 +180,13 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/summary',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/summary',
+  POST$,
+)

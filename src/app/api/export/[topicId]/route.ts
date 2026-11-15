@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import { getRequesterTier, accountForApiKey } from '@/lib/subscriptions'
@@ -96,7 +97,7 @@ function safeFilename(title: string): string {
   )
 }
 
-export async function GET(
+async function GET$(
   req: NextRequest,
   ctx: { params: Promise<{ topicId: string }> },
 ) {
@@ -180,3 +181,9 @@ export async function GET(
     },
   })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/export/[topicId]',
+  GET$,
+)

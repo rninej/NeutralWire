@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { verifyAdminPassword } from '@/lib/admin-auth'
@@ -423,7 +424,7 @@ Your finding:`,
 
 // ── route ──
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as { reportId?: string; password?: string }
     if (!body.reportId || !body.password || !verifyAdminPassword(body.password)) {
@@ -514,3 +515,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/debug/ai-fix',
+  POST$,
+)

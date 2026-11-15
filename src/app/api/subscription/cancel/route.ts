@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   readSession,
@@ -25,7 +26,7 @@ export const maxDuration = 20
  * LEGACY Stripe: a stored subscription id is cancelled at period end via
  * the Stripe REST API; test-source tiers downgrade immediately.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   const session = await readSession(req)
   if (!session?.accountId) {
     return NextResponse.json({ error: 'Not signed in.' }, { status: 401 })
@@ -122,3 +123,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/subscription/cancel',
+  POST$,
+)

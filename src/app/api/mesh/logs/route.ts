@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { verifyAdminPassword } from '@/lib/admin-auth'
@@ -30,7 +31,7 @@ interface MeshLogEntry {
   detail?: string
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const password = req.nextUrl.searchParams.get('password') || ''
   if (!password || !verifyAdminPassword(password)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -62,7 +63,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ events, total: keys.length })
 }
 
-export async function DELETE(req: NextRequest) {
+async function DELETE$(req: NextRequest) {
   const password = req.nextUrl.searchParams.get('password') || ''
   if (!password || !verifyAdminPassword(password)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -74,3 +75,13 @@ export async function DELETE(req: NextRequest) {
   }
   return NextResponse.json({ ok: true, cleared: true })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/mesh/logs',
+  GET$,
+)
+export const DELETE = trackRequest(
+  'api/mesh/logs',
+  DELETE$,
+)

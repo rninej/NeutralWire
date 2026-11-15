@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { setAccountTier } from '@/lib/subscriptions'
@@ -59,7 +60,7 @@ function verifyStripeSignature(rawBody: string, header: string | null, secret: s
   }
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   const raw = await req.text()
   const secret = process.env.STRIPE_WEBHOOK_SECRET || ''
 
@@ -147,3 +148,9 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ received: true })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/subscription/webhook',
+  POST$,
+)

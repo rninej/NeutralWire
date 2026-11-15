@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
@@ -18,9 +19,15 @@ export const dynamic = 'force-dynamic'
  *   /api/push/trigger?slot=lunch&secret=neutralwire-trigger
  *   /api/push/trigger?slot=evening&secret=neutralwire-trigger
  */
-export async function GET() {
+async function GET$() {
   return NextResponse.json({
     disabled: true,
     message: 'Use /api/push/trigger?slot=morning|lunch|evening instead',
   })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/push/send',
+  GET$,
+)

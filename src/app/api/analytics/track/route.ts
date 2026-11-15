@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebasePatch } from '@/lib/firebase-server'
 import { detectCountryServer } from '@/lib/country-detect'
@@ -45,7 +46,7 @@ function hash(s: string): string {
   return (h >>> 0).toString(36)
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as AnalyticsPayload
     if (!body.deviceId || !body.ts) {
@@ -88,3 +89,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/analytics/track',
+  POST$,
+)

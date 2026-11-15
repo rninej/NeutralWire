@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextResponse } from 'next/server'
 import { getProviderCatalog } from '@/lib/ai-providers'
 
@@ -22,7 +23,7 @@ export const maxDuration = 15
  * The debug status board (/api/debug/apis) stays password-protected
  * because it names key LOCATIONS.
  */
-export async function GET() {
+async function GET$() {
   try {
     const catalog = await getProviderCatalog()
     return NextResponse.json(
@@ -40,3 +41,9 @@ export async function GET() {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/debug/models',
+  GET$,
+)

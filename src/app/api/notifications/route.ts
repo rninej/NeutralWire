@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebasePatch } from '@/lib/firebase-server'
 
@@ -16,7 +17,7 @@ export const revalidate = 0
  *     frequency: 'daily3' (3 per day) | 'all' (every new story)
  *   → { ok: true }
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const deviceId = req.nextUrl.searchParams.get('deviceId')
   if (!deviceId) {
     return NextResponse.json({ error: 'Missing deviceId' }, { status: 400 })
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
   })
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       deviceId: string
@@ -59,3 +60,13 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/notifications',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/notifications',
+  POST$,
+)

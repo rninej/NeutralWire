@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { upgradeToHighRes } from '@/lib/image-upgrade'
 
@@ -33,7 +34,7 @@ const IMG_CDN_CACHE = 'public, s-maxage=604800, stale-while-revalidate=86400'
  * saver — without it, every page load was proxying 10-30 images
  * through this function (each ~50ms CPU = 500-1500ms CPU per page).
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   let url = req.nextUrl.searchParams.get('url')
   if (!url) {
     return new NextResponse('Missing url param', { status: 400 })
@@ -131,3 +132,9 @@ export async function GET(req: NextRequest) {
     return new NextResponse('Image fetch failed', { status: 502 })
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/img',
+  GET$,
+)

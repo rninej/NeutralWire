@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { createHash } from 'crypto'
@@ -87,7 +88,7 @@ async function countAllTimeInstalls(): Promise<number> {
   return value
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as { type?: string; ts?: number }
     const type = body.type
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET() {
+async function GET$() {
   try {
     const installs = await countAllTimeInstalls()
     return NextResponse.json(
@@ -126,3 +127,13 @@ export async function GET() {
     return NextResponse.json({ installs: 0 })
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/metrics/pwa',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/metrics/pwa',
+  POST$,
+)

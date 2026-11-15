@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead } from '@/lib/firebase-server'
 import { accountForApiKey } from '@/lib/subscriptions'
@@ -28,7 +29,7 @@ const BUILTIN_TOPICS = [
   'top', 'world', 'politics', 'business', 'technology', 'science', 'health', 'sports',
 ]
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   // ── API key (Bearer header or ?key=) ──
   const authHeader = req.headers.get('authorization') || ''
   let key = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : ''
@@ -97,3 +98,9 @@ export async function GET(req: NextRequest) {
     { headers: { 'Cache-Control': 'public, s-maxage=120, stale-while-revalidate=240' } },
   )
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/v1/feed',
+  GET$,
+)

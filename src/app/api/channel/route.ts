@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite, firebasePatch } from '@/lib/firebase-server'
 import type { TopicArticle } from '@/lib/news-aggregator'
@@ -132,7 +133,7 @@ function buildShareText(p: ChannelPick) {
   return lines.join('\n')
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const format = (sp.get('format') || 'json').toLowerCase()
   const country = (sp.get('country') || '').toUpperCase().replace(/[^A-Z]/g, '')
@@ -342,3 +343,9 @@ function respond(
   }
   return NextResponse.json(payload, { status })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/channel',
+  GET$,
+)

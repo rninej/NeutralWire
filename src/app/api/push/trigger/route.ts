@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
@@ -21,7 +22,7 @@ export const maxDuration = 1
  * /api/push/trigger-tz instead. Once that's done, this route does
  * nothing (but is kept here so the old URL doesn't 500).
  */
-export async function GET() {
+async function GET$() {
   return NextResponse.json(
     {
       error: 'Gone',
@@ -32,7 +33,7 @@ export async function GET() {
   )
 }
 
-export async function POST() {
+async function POST$() {
   return NextResponse.json(
     {
       error: 'Gone',
@@ -41,3 +42,13 @@ export async function POST() {
     { status: 410 },
   )
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/push/trigger',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/push/trigger',
+  POST$,
+)

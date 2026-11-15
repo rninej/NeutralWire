@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebasePatch, firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
@@ -42,7 +43,7 @@ const TOPIC_BOOST_STEP = 6
 const TOPIC_BOOST_MAX = 24
 const TOPIC_BOOST_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       notifId?: string
@@ -196,3 +197,9 @@ function detectSectorFromTitle(title: string): string | null {
   }
   return null
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/notification/feedback',
+  POST$,
+)

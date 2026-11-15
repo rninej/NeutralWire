@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
@@ -41,7 +42,7 @@ async function readState(): Promise<LoveState> {
   return { count: typeof count === 'number' ? count : 0, pressed: pressed || {} }
 }
 
-export async function GET() {
+async function GET$() {
   try {
     const state = await readState()
     return NextResponse.json(
@@ -53,7 +54,7 @@ export async function GET() {
   }
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as { deviceId?: string }
     const deviceId = (body.deviceId || '').slice(0, 48)
@@ -79,3 +80,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/love',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/love',
+  POST$,
+)

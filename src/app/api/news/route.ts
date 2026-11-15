@@ -1,3 +1,4 @@
+import { trackRequest, beginTail, endTail } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import type { Category } from '@/lib/news-sources'
@@ -168,7 +169,7 @@ async function personalizeTopics(
  *   - country:  ISO 3166-1 alpha-2 code (overrides auto-detection)
  *   - limit, minCoverage, offset, slim
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const rawCategory = sp.get('category') || 'relevant'
 
@@ -356,11 +357,16 @@ export async function GET(req: NextRequest) {
   let backgroundRefresh = false
   if (stale && canRefresh(category, country)) {
     backgroundRefresh = true
+    // usage-meter: the 30-min-TTL background re-aggregation tail — the
+    // on-demand burner that runs whenever a visitor views a stale room.
+    beginTail('api/news')
     after(async () => {
       try {
         await refreshCategory(category, country, async () => aggregate())
       } catch (err) {
         console.warn(`[api/news] background refresh ${category}/${country} failed:`, err)
+      } finally {
+        endTail('api/news')
       }
     })
   }
@@ -510,10 +516,14 @@ async function handleCustomTopic(
   }
 
   if (fillStillRunning) {
+    beginTail('api/news')
     after(async () => {
       try {
         await fillStillRunning
       } catch {}
+      finally {
+        endTail('api/news')
+      }
     })
   } else if (feed && filledNow) {
     // The sync fill landed (usually the Google News fast path, ~1-2s) —
@@ -521,10 +531,14 @@ async function handleCustomTopic(
     // thumbnails + real publisher URLs), AI relevance filter, image pass.
     // The cache swap is invisible to the visitor; their next feed refresh
     // shows the enriched version. Bounded by maxDuration via after().
+    beginTail('api/news')
     after(async () => {
       try {
         await fillCustomTopic(topicId, { aiFilter: true, mode: 'background', budgetMs: 18000 })
       } catch {}
+      finally {
+        endTail('api/news')
+      }
     })
   }
 
@@ -753,3 +767,9 @@ async function handleBlindspots(
   )
   return blindspotResponse
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/news',
+  GET$,
+)

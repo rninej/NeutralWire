@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead } from '@/lib/firebase-server'
 import {
@@ -27,7 +28,7 @@ interface RuntimeTopic {
   createdAt?: number
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const q = (sp.get('q') || '').trim()
   const limit = Math.min(200, Math.max(10, Number(sp.get('limit') || '60')))
@@ -82,3 +83,9 @@ export async function GET(req: NextRequest) {
     canCreate: staticHits.length + runtimeHits.length === 0,
   })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/subtopics',
+  GET$,
+)

@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
@@ -18,7 +19,7 @@ export const revalidate = 0
  * The cron/broadcast endpoints only send to subscriptions where
  * isStandalone=true, to avoid duplicate notifications (browser + PWA).
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       deviceId: string
@@ -60,3 +61,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/push/subscribe',
+  POST$,
+)

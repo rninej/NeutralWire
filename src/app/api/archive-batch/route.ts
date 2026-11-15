@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite, firebasePatch } from '@/lib/firebase-server'
 import { writeTopicIndex } from '@/lib/topic-lookup'
@@ -65,7 +66,7 @@ function roomPath(room: string): string {
     : `newsCache/${room}`
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       topicIds?: unknown
@@ -186,3 +187,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Archive batch failed' }, { status: 500 })
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/archive-batch',
+  POST$,
+)

@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'crypto'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
@@ -108,7 +109,7 @@ function slimTopic(raw: unknown): TopicArticle | null {
   }
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       type?: string
@@ -168,7 +169,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const password = req.nextUrl.searchParams.get('password') || ''
   if (!password || !verifyAdminPassword(password)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -189,7 +190,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-export async function DELETE(req: NextRequest) {
+async function DELETE$(req: NextRequest) {
   try {
     const body = (await req.json()) as { reportId?: string; password?: string }
     if (!body.reportId || !body.password || !verifyAdminPassword(body.password)) {
@@ -211,3 +212,17 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: 'Failed to dismiss report' }, { status: 500 })
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/report',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/report',
+  POST$,
+)
+export const DELETE = trackRequest(
+  'api/report',
+  DELETE$,
+)

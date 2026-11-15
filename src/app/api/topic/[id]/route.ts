@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import type { TopicArticle } from '@/lib/news-aggregator'
@@ -33,7 +34,7 @@ export const maxDuration = 10
  *   - cat: category hint (e.g. "relevant", "world") — checked first
  *   - country: ISO code for the hinted category (if virtual)
  */
-export async function GET(
+async function GET$(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -110,3 +111,9 @@ export async function GET(
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/topic/[id]',
+  GET$,
+)

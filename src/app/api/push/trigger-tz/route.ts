@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import webpush from 'web-push'
 import { firebaseDelete, firebaseRead, firebaseWrite } from '@/lib/firebase-server'
@@ -177,7 +178,7 @@ function scoreStoryForDevice(
   return score
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const t0 = Date.now()
   const secret = req.nextUrl.searchParams.get('secret') || ''
   const leaseId = req.nextUrl.searchParams.get('lease') || ''
@@ -812,3 +813,9 @@ export async function GET(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/push/trigger-tz',
+  GET$,
+)

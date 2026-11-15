@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextResponse } from 'next/server'
 import { getPushifyWebsites, getPushifySubscriberCount } from '@/lib/pushify'
 
@@ -8,7 +9,7 @@ export const dynamic = 'force-dynamic'
  * Debug endpoint that checks Pushify integration status.
  * Returns: API key configured, websites registered, subscriber count.
  */
-export async function GET() {
+async function GET$() {
   const apiKey = process.env.PUSHIFY_API_KEY || ''
   const pixelKey = process.env.NEXT_PUBLIC_PUSHIFY_PIXEL_KEY || ''
 
@@ -30,3 +31,9 @@ export async function GET() {
       : 'Pushify website found. Make sure the pixel key is set as NEXT_PUBLIC_PUSHIFY_PIXEL_KEY on Vercel.',
   })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/debug/pushify',
+  GET$,
+)

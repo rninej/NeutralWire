@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { generateGuestCodeSmart, generateAlphanumericCode } from '@/lib/referral'
 import { firebaseRead, firebaseWrite, firebasePatch } from '@/lib/firebase-server'
@@ -20,7 +21,7 @@ export const revalidate = 0
  * endpoint unnecessarily, but even if it does, the server verifies
  * ownership before returning.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       deviceId: string
@@ -91,3 +92,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/referral/create',
+  POST$,
+)

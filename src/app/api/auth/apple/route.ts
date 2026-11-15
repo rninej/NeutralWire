@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
@@ -18,7 +19,7 @@ export const revalidate = 0
  * Until those exist this endpoint answers 503 with setup instructions and
  * the UI shows the button in its "needs setup" state.
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const configured = Boolean(
     process.env.APPLE_CLIENT_ID &&
       process.env.APPLE_TEAM_ID &&
@@ -50,3 +51,9 @@ export async function GET(req: NextRequest) {
     `https://appleid.apple.com/auth/authorize?${params.toString()}`,
   )
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/auth/apple',
+  GET$,
+)

@@ -47,6 +47,8 @@
  * or 400'd on dots, so cross-instance cooldowns silently never worked.
  */
 
+import { trackAiCall } from '@/lib/usage-meter'
+
 const GROQ_API_KEY = process.env.GROQ_API_KEY || ''
 // Base URLs are env-overridable (defaults = production endpoints) so the
 // retry/backoff behaviour can be integration-tested against a local mock
@@ -1768,7 +1770,47 @@ export async function callVisionAI(
 }
 
 // ---------- Groq ----------
+// ── usage-meter wrappers (Nov 16, 2026) ──
+// Every real HTTP request to a provider is ledgered (provider/model/ms/ok)
+// so tomorrow's CPU audit can see exactly how many AI requests the site
+// makes per day and which models answer. Wrappers keep the original
+// function names; the implementations are callX$ below.
 async function callGroq(
+  systemPrompt: string,
+  userPrompt: string,
+  model: string,
+  maxTokens: number = 400,
+): Promise<string | null> {
+  const t0 = Date.now()
+  try {
+    const out = await callGroq$(systemPrompt, userPrompt, model, maxTokens)
+    trackAiCall('groq', model, Date.now() - t0, !!out)
+    return out
+  } catch (err) {
+    trackAiCall('groq', model, Date.now() - t0, false)
+    throw err
+  }
+}
+
+async function callGemini(
+  systemPrompt: string,
+  userPrompt: string,
+  model: string = 'gemini-2.0-flash',
+  useSearch: boolean = false,
+  maxTokens: number = 400,
+): Promise<string | null> {
+  const t0 = Date.now()
+  try {
+    const out = await callGemini$(systemPrompt, userPrompt, model, useSearch, maxTokens)
+    trackAiCall('gemini', model, Date.now() - t0, !!out)
+    return out
+  } catch (err) {
+    trackAiCall('gemini', model, Date.now() - t0, false)
+    throw err
+  }
+}
+
+async function callGroq$(
   systemPrompt: string,
   userPrompt: string,
   model: string,
@@ -1840,7 +1882,7 @@ async function callGroq(
 }
 
 // ---------- Gemini ----------
-async function callGemini(
+async function callGemini$(
   systemPrompt: string,
   userPrompt: string,
   model: string = 'gemini-2.0-flash',
@@ -1950,6 +1992,7 @@ async function callOpenRouter(
     // 10s: the live-proven nemotron-ultra 550B MoE needs the room — the
     // old 8s abort killed generations that were about to complete.
     const timeout = setTimeout(() => controller.abort(), 10000)
+    const attemptT0 = Date.now()
 
     try {
       const body: Record<string, unknown> = {
@@ -1978,6 +2021,7 @@ async function callOpenRouter(
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '')
+        trackAiCall('openrouter', model, Date.now() - attemptT0, false)
         // SELF-REPORTING: every OpenRouter failure goes into the diag
         // array — the 502 response now says which model failed with what
         // status (previously these were console.warn-only and invisible,
@@ -2031,6 +2075,7 @@ async function callOpenRouter(
       const answer = stripThinking(data.choices?.[0]?.message?.content?.trim() || '')
       if (answer) {
         recordHealth('openrouter', model, 'ok')
+        trackAiCall('openrouter', model, Date.now() - attemptT0, true)
         return answer
       }
 
@@ -2071,6 +2116,7 @@ async function callOpenRouter(
       diag(`openrouter ${model}: empty answer`)
     } catch (err) {
       clearTimeout(timeout)
+      trackAiCall('openrouter', model, Date.now() - attemptT0, false)
       diag(`openrouter ${model}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }

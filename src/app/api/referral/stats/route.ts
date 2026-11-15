@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { getReferralStats } from '@/lib/referral'
 
@@ -11,7 +12,7 @@ export const revalidate = 0
  * Query: ?code=123456
  * Returns: { totalClicks, successfulReferrals }
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code')
   if (!code) {
     return NextResponse.json({ error: 'Missing code' }, { status: 400 })
@@ -24,3 +25,9 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(stats)
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/referral/stats',
+  GET$,
+)

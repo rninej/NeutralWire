@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebasePatch } from '@/lib/firebase-server'
 import { readSession, getAccountById, emailKey, applyKofiPayment } from '@/lib/subscriptions'
@@ -34,7 +35,7 @@ interface KofiEventRecord {
   accountId?: string | null
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const session = await readSession(req)
     if (!session?.accountId) {
@@ -128,7 +129,7 @@ export async function POST(req: NextRequest) {
 }
 
 /** GET — status of the signed-in account's Ko-fi linkage (debug/UI). */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const session = await readSession(req)
   if (!session?.accountId) {
     return NextResponse.json({ linked: false })
@@ -143,3 +144,13 @@ export async function GET(req: NextRequest) {
     kofiEmail: email || null,
   })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/kofi/claim',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/kofi/claim',
+  POST$,
+)

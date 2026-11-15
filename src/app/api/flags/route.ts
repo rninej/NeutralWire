@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { createHash, timingSafeEqual } from 'crypto'
@@ -198,7 +199,7 @@ function normalizeBooleanFlag(v: unknown, fallback: boolean): boolean {
   return fallback
 }
 
-export async function GET() {
+async function GET$() {
   // All flags are fetched in parallel — one cold instance pays the
   // RTDB reads at most, then all answers are memoized together.
   const [navResult, popupResult, notifLikeResult, notifRaiseFixResult, videoResult, videoPreviewResult, milestoneDonateResult, meshRelayResult, userCronResult, monetizationResult, smartPersonalizationResult] = await Promise.allSettled([
@@ -347,7 +348,7 @@ export async function GET() {
   )
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   let body: {
     password?: string
     subtopicNav?: string
@@ -541,3 +542,13 @@ export async function POST(req: NextRequest) {
   })
 }
 
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/flags',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/flags',
+  POST$,
+)

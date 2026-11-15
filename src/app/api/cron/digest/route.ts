@@ -1,3 +1,4 @@
+import { trackRequest, beginTail, endTail, recordRun } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import {
@@ -37,7 +38,7 @@ export const maxDuration = 60
  */
 const CRON_SECRET = '965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd'
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   // ── Auth: admin secret (external cron) OR one-time mesh lease (the
   //    visitor-powered cron) OR the Vercel platform cron header ──
   const secret = req.nextUrl.searchParams.get('secret') || ''
@@ -84,11 +85,23 @@ export async function GET(req: NextRequest) {
   // Catch-up sweeps process a few more (the day's offline backlog).
   const cap = catchup ? 8 : 5
 
+  beginTail('api/cron/digest')
   after(async () => {
+    try {
     const result = await digestSweep({ catchup, cap, trigger: catchup ? 'vercel-cron-catchup' : viaLease ? 'user-cron-lease' : 'secret' })
     console.log(
       `[cron/digest]${catchup ? ' (catch-up)' : ''} ${result.due} due — ${result.sent} sent, ${result.outboxed} outboxed in ${Date.now() - t0}ms`,
     )
+    recordRun('api/cron/digest', {
+      ms: Date.now() - t0,
+      due: result.due,
+      sent: result.sent,
+      outboxed: result.outboxed,
+      trigger: catchup ? 'vcron' : viaLease ? 'usercron' : 'extcron',
+    })
+    } finally {
+      endTail('api/cron/digest')
+    }
   })
 
   return NextResponse.json({
@@ -99,3 +112,9 @@ export async function GET(req: NextRequest) {
     ts: Date.now(),
   })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/cron/digest',
+  GET$,
+)

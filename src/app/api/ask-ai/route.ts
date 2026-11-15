@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { callAI, callAICompound, getLastProvider, getLastDiagnostics } from '@/lib/ai-providers'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
@@ -39,7 +40,7 @@ function hash(s: string): string {
  * (no AI call needed). This saves costs since many users ask the same
  * questions.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   const deadline = Date.now() + 12500
 
   try {
@@ -233,3 +234,9 @@ function stripSources(answer: string): string {
   s = s.replace(/\s+/g, ' ').trim()
   return s
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/ask-ai',
+  POST$,
+)

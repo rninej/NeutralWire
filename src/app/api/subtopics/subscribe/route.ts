@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import { firebasePatch } from '@/lib/firebase-server'
@@ -31,7 +32,7 @@ export const maxDuration = 30
  * • Logged-in accounts ALSO persist their topic list on the account
  *   (prefs.customSubtopics) so it follows them across devices.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       topicId?: string
@@ -106,3 +107,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/subtopics/subscribe',
+  POST$,
+)

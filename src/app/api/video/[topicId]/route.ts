@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
@@ -152,7 +153,7 @@ interface TopicForVideo {
   }>
 }
 
-export async function GET(
+async function GET$(
   req: NextRequest,
   ctx: { params: Promise<{ topicId: string }> },
 ) {
@@ -356,3 +357,9 @@ async function cacheResult(
     // best-effort — a failed cache write just means we resolve again later
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/video/[topicId]',
+  GET$,
+)

@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   detectCountryServer,
@@ -18,7 +19,7 @@ export const revalidate = 0
  * If server-side detection fails (e.g. localhost, network error),
  * the client falls back to ipwho.is directly.
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const info = await detectCountryServer(req.headers)
   if (info) {
     return NextResponse.json({ ...info, detected: true })
@@ -27,3 +28,9 @@ export async function GET(req: NextRequest) {
   // ipwho.is as a last resort.
   return NextResponse.json({ ...DEFAULT_COUNTRY, detected: false })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/country',
+  GET$,
+)

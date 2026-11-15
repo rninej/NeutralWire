@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'crypto'
 import { firebaseRead, firebasePatch, firebaseWrite } from '@/lib/firebase-server'
@@ -56,7 +57,7 @@ const PAGE = (ok: boolean, detail: string) => `<!doctype html>
   <a class="btn" href="https://neutralwire.org/subscribe">Manage preferences</a>
 </div></body></html>`
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const email = (sp.get('email') || '').trim().toLowerCase()
   const token = (sp.get('token') || '').trim()
@@ -111,3 +112,9 @@ export async function GET(req: NextRequest) {
     { headers: { 'Content-Type': 'text/html; charset=utf-8' } },
   )
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/digest/unsubscribe',
+  GET$,
+)

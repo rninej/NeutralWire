@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import webpush from 'web-push'
 import { firebaseRead } from '@/lib/firebase-server'
@@ -29,7 +30,7 @@ interface DeviceRecord {
  * Returns a step-by-step diagnostic report so you can see exactly
  * where the chain is breaking.
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const deviceId = req.nextUrl.searchParams.get('deviceId')
   const action = req.nextUrl.searchParams.get('action') || 'check'
 
@@ -203,3 +204,9 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({ report, deviceId })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/debug/push',
+  GET$,
+)

@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead } from '@/lib/firebase-server'
 import { readSearchIndex } from '@/lib/search-index'
@@ -36,7 +37,7 @@ interface VoteHistoryEntry {
   d?: number
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const deviceId = (req.nextUrl.searchParams.get('deviceId') || '').trim().slice(0, 64)
   if (!deviceId) {
     return NextResponse.json({ error: 'Missing deviceId' }, { status: 400 })
@@ -116,3 +117,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'History read failed' }, { status: 500 })
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/history',
+  GET$,
+)

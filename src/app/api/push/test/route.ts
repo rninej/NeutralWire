@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { sendPushifyNotification } from '@/lib/pushify'
 
@@ -11,7 +12,7 @@ export const revalidate = 0
  *
  * Body: { deviceId: string }
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as { deviceId: string }
     if (!body.deviceId) {
@@ -43,3 +44,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/push/test',
+  POST$,
+)

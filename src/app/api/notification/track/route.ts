@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 
@@ -21,7 +22,7 @@ export const revalidate = 0
  * - notification-stats/<keyword>: increments click/dismiss count per keyword
  *   (used by the trigger endpoint to score future stories)
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       notifId: string
@@ -103,3 +104,9 @@ function extractKeywords(title: string): string[] {
     .filter((w) => w.length > 4 && !stopWords.has(w))
     .slice(0, 5) // top 5 keywords per title
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/notification/track',
+  POST$,
+)

@@ -28,6 +28,7 @@
  */
 
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { meterStage, recordRun, trackStage } from '@/lib/usage-meter'
 import { dropNearDuplicateTopics } from '@/lib/push/story-dedup'
 import { writeTopicIndex } from '@/lib/topic-lookup'
 import type { Category } from '@/lib/news-sources'
@@ -153,6 +154,7 @@ async function writeMeshManifest(
   cachePathStr: string,
   payload: CategoryCachePayload,
 ): Promise<void> {
+  const t0 = Date.now()
   try {
     const room = cachePathStr.replace(/^newsCache\//, '')
     const node: MeshFeedNode = {
@@ -173,6 +175,10 @@ async function writeMeshManifest(
     })
   } catch (err) {
     console.warn(`[news-cache] mesh manifest for ${cachePathStr} failed:`, err)
+  } finally {
+    // usage-meter: SHA-256 over the room + Ed25519 signing = real CPU per
+    // refresh — counted so tomorrow's report can price the mesh layer.
+    trackStage('agg', 'mesh-manifest-sign', Date.now() - t0)
   }
 }
 
@@ -233,6 +239,7 @@ export async function writeCachedNews(
     cacheVersion: CACHE_VERSION,
   }
   const path = cachePath(category, country)
+  const w0 = Date.now()
   const ok = await firebaseWrite(path, payload)
   if (ok) {
     // Mesh manifest for this room — AWAITED (not void) so a serverless
@@ -249,6 +256,7 @@ export async function writeCachedNews(
     const room = path.replace(/^newsCache\//, '')
     await writeTopicIndex(room, dedupedTopics)
   }
+  trackStage('agg', 'cache-write-total', Date.now() - w0)
   return ok
 }
 
@@ -313,7 +321,19 @@ export async function refreshCategory(
 
   const p = (async () => {
     try {
-      const agg = await aggregateFn(category)
+      // ── usage-meter (Nov 16, 2026) ──
+      // EVERY full aggregation from ANY caller (cron refresh-all, the
+      // /api/news 30-min-TTL background refresh, /api/refresh, first-miss
+      // sync fills) funnels through here — this is the single point where
+      // the suspected #1 Active-CPU burner is counted.
+      const agg = await meterStage('agg', `full:${key}`, () => aggregateFn(category))
+      recordRun('agg', {
+        room: key,
+        topics: agg?.topics?.length ?? 0,
+        articles: agg?.articleCount ?? 0,
+        src: key.includes('mycountry') ? 'gdelt' : 'rss',
+      })
+      trackStage('agg', 'all-rooms', 0, 1)
 
       // ── For mycountry: ALWAYS merge old + new topics ──
       //

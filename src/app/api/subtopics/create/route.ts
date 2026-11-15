@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { callAI } from '@/lib/ai-providers'
@@ -35,7 +36,7 @@ export const maxDuration = 60
  *   4. Persist to `customSubtopics/<id>`, subscribe the caller, and do a
  *      first (AI-filtered) feed fill so the topic has news immediately.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as { name?: string }
     const name = (body.name || '').trim().slice(0, 60)
@@ -319,3 +320,9 @@ async function validateViaGdelt(
     return { answered: false, result: { ok: true, via: 'skipped' } }
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/subtopics/create',
+  POST$,
+)

@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead } from '@/lib/firebase-server'
 import {
@@ -20,7 +21,7 @@ export const maxDuration = 30
  * GET /api/subscription/apikey — status: how many keys exist + the API
  * docs snippet (never the keys themselves).
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const session = await readSession(req)
   if (!session?.accountId) {
     return NextResponse.json({ error: 'Not signed in.' }, { status: 401 })
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
   })
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   const session = await readSession(req)
   if (!session?.accountId) {
     return NextResponse.json({ error: 'Not signed in.' }, { status: 401 })
@@ -67,3 +68,13 @@ export async function POST(req: NextRequest) {
   }
   return NextResponse.json({ ok: true, key })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/subscription/apikey',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/subscription/apikey',
+  POST$,
+)

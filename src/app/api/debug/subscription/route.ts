@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash, timingSafeEqual } from 'crypto'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
@@ -92,7 +93,7 @@ async function handle(identifier: string, tier: Tier): Promise<{
   }
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const password = req.nextUrl.searchParams.get('password') || ''
   const identifier = req.nextUrl.searchParams.get('identifier') || ''
   if (!verifyPassword(password)) {
@@ -105,7 +106,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ ok: true, lookup: info })
 }
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   let body: { password?: string; identifier?: string; tier?: string; action?: string }
   try {
     body = await req.json()
@@ -141,3 +142,13 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json(result)
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/debug/subscription',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/debug/subscription',
+  POST$,
+)

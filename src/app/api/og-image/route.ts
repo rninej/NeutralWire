@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
@@ -68,7 +69,7 @@ function getFallbackJpg(): Buffer {
   return fallbackJpgBuffer
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const topicId = sp.get('topicId') || ''
   if (!topicId) {
@@ -236,3 +237,9 @@ function serveFallbackImage(): NextResponse {
     },
   })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/og-image',
+  GET$,
+)

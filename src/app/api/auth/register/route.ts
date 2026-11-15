@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   registerEmailAccount,
@@ -15,7 +16,7 @@ export const revalidate = 0
  * Body: { email, password, deviceId?, timezone? }
  * Sets the `nw_session` cookie (90 days) and links the current device.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       email?: string
@@ -50,3 +51,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/auth/register',
+  POST$,
+)

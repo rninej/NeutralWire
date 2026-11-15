@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import webpush from 'web-push'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
@@ -38,7 +39,7 @@ if (VAPID_PRIVATE_KEY) {
  * For automatic delivery: the client-side service worker can also poll
  * this endpoint and trigger the send when the time arrives.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       deviceId: string
@@ -143,7 +144,7 @@ export async function POST(req: NextRequest) {
  * GET: Trigger a scheduled notification by ID.
  * This is called by the client's polling SW or manually.
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const scheduleId = req.nextUrl.searchParams.get('id')
   if (!scheduleId) {
     // List all pending scheduled notifications.
@@ -215,3 +216,13 @@ export async function GET(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/push/schedule',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/push/schedule',
+  POST$,
+)

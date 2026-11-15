@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
@@ -5,7 +6,7 @@ export const dynamic = 'force-dynamic'
 
 const API_KEY = process.env.PUSHIFY_API_KEY || ''
 
-export async function GET() {
+async function GET$() {
   // Typed up-front: an untyped `[]` infers as never[] which rejects every push.
   const results: Array<{
     fields: string
@@ -60,3 +61,9 @@ export async function GET() {
 
   return NextResponse.json({ results })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/debug/pushify-test',
+  GET$,
+)

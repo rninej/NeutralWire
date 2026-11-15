@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite, firebasePatch } from '@/lib/firebase-server'
 import {
@@ -42,7 +43,7 @@ export const maxDuration = 20
  * ("Ultra"/"Premium" memberships on Ko-fi) with an amount fallback.
  * One-off tips never change the tier — they're logged as support.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   // ── Parse (form-encoded `data` JSON, or a raw JSON body for testing) ──
   let data: Record<string, unknown>
   try {
@@ -143,10 +144,20 @@ export async function POST(req: NextRequest) {
 }
 
 /** GET — tiny explainer so hitting the URL in a browser isn't a 405. */
-export async function GET() {
+async function GET$() {
   return NextResponse.json({
     endpoint: 'Ko-fi webhook',
     method: 'POST (application/x-www-form-urlencoded, data=<json>)',
     status: 'listening',
   })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/kofi/webhook',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/kofi/webhook',
+  POST$,
+)

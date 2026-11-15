@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
@@ -27,7 +28,7 @@ export const maxDuration = 10
  * If not, it fetches the full topic (with articles) from the cache and
  * writes it to archive/<topicId>.
  */
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as Partial<TopicArticle> & { countryCode?: string }
     const topicId = body.topicId
@@ -83,3 +84,9 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const POST = trackRequest(
+  'api/archive-topic',
+  POST$,
+)

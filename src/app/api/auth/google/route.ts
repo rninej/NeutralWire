@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { googleOAuthConfig } from '@/lib/google-oauth'
 
@@ -18,7 +19,7 @@ export const revalidate = 0
  * The deviceId is carried through the OAuth `state` parameter so the
  * account links back to the visitor's device after the round-trip.
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const { clientId, clientSecret } = googleOAuthConfig()
   const deviceId = req.nextUrl.searchParams.get('deviceId') || ''
   const tier = req.nextUrl.searchParams.get('tier') === 'ultra' ? 'ultra' : 'premium'
@@ -47,3 +48,9 @@ export async function GET(req: NextRequest) {
     `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
   )
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/auth/google',
+  GET$,
+)

@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextResponse } from 'next/server'
 import { getFirebaseStats } from '@/lib/firebase-server'
 
@@ -16,7 +17,13 @@ export const revalidate = 0
  * so this tracks per-instance usage. The client also accumulates a
  * per-session total across multiple API calls.
  */
-export async function GET() {
+async function GET$() {
   const stats = getFirebaseStats()
   return NextResponse.json(stats)
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/fb-stats',
+  GET$,
+)

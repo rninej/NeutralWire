@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash, timingSafeEqual } from 'crypto'
 import {
@@ -50,7 +51,7 @@ const VALID_TYPES: InterestEventType[] = [
   'digest_click', 'notification_click', 'notification_dismiss', 'interests_pick',
 ]
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       deviceId?: string
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const password = sp.get('password') || ''
   const deviceId = (sp.get('deviceId') || '').trim().slice(0, 64)
@@ -171,3 +172,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Profile read failed', detail: String(err) }, { status: 500 })
   }
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/interest/track',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/interest/track',
+  POST$,
+)

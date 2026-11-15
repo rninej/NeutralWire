@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead } from '@/lib/firebase-server'
 import {
@@ -73,7 +74,7 @@ interface SearchResponse {
  * results — and it also feeds the "More from the archive" section when
  * local results exist.
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sp = req.nextUrl.searchParams
   const qRaw = (sp.get('q') || '').trim()
   const q = qRaw.toLowerCase()
@@ -346,3 +347,9 @@ export async function GET(req: NextRequest) {
     ms: Date.now() - t0,
   } satisfies SearchResponse)
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/search',
+  GET$,
+)

@@ -32,6 +32,7 @@
 import { after } from 'next/server'
 import { callAI } from '@/lib/ai-providers'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
+import { trackStage, recordRun } from '@/lib/usage-meter'
 import type { TopicArticle } from '@/lib/news-aggregator'
 import { isEditionRoundupText } from '@/lib/story-quality'
 
@@ -266,6 +267,10 @@ export async function generateStorySummaryBounded(
   topicSummary: string,
   timeoutMs = 8000,
 ): Promise<string | null> {
+  // usage-meter: every story-render LLM attempt (ISR regens + Googlebot
+  // crawls) is counted — the story-render share of AI volume.
+  trackStage('summaries', 'story-bounded-attempts', 0, 1)
+  const t0 = Date.now()
   // BACKGROUND caller (a page render — Googlebot or ISR): the long failure
   // backoff applies, so a topic that just failed doesn't get re-fired by
   // every 15-minute ISR regen / sitemap crawl (the doom loop).
@@ -302,6 +307,7 @@ export async function generateStorySummaryBounded(
     result.summary &&
     !isTemplateSummary(result.summary)
   ) {
+    trackStage('summaries', 'story-bounded-ok', Date.now() - t0)
     return result.summary
   }
 
@@ -371,6 +377,9 @@ export async function preGenerateSummaries(
   }
   if (picked.length === 0) return 0
 
+  // usage-meter: one run record per pre-gen wave — the volume + ms of the
+  // cron's AI fill (I/O-wait heavy, but it extends each refresh tick).
+  const waveT0 = Date.now()
   const results = await Promise.allSettled(
     picked.map((t) =>
       getOrCreateGeneration(
@@ -389,9 +398,12 @@ export async function preGenerateSummaries(
       ),
     ),
   )
-  return results.filter(
+  const generated = results.filter(
     (r) => r.status === 'fulfilled' && r.value && !r.value.fallback,
   ).length
+  trackStage('summaries', 'pre-gen-wave', Date.now() - waveT0)
+  recordRun('summaries', { waveMs: Date.now() - waveT0, picked: picked.length, generated, postResetWave })
+  return generated
 }
 
 /**

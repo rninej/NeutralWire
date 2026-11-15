@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import {
@@ -40,7 +41,7 @@ export const maxDuration = 20
  */
 const CLAIM_TTL_MS = 48 * 60 * 60 * 1000
 
-export async function POST(req: NextRequest) {
+async function POST$(req: NextRequest) {
   try {
     const body = (await req.json()) as { tier?: string; deviceId?: string }
     const tier: 'premium' | 'ultra' | null =
@@ -96,7 +97,7 @@ export async function POST(req: NextRequest) {
  * LEGACY Stripe success-return handler — kept so any old checkout links
  * still resolve; new payments go through Ko-fi's webhook instead.
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const sessionId = req.nextUrl.searchParams.get('session_id') || ''
   const stripeKey = process.env.STRIPE_SECRET_KEY || ''
   if (!sessionId || !stripeKey) {
@@ -131,3 +132,13 @@ export async function GET(req: NextRequest) {
 
 // `after` imported for route-segment consistency with the news routes.
 void after
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/subscription/checkout',
+  GET$,
+)
+export const POST = trackRequest(
+  'api/subscription/checkout',
+  POST$,
+)

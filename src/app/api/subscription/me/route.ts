@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   getRequesterTier,
@@ -19,7 +20,7 @@ export const revalidate = 0
  * The client ALSO passes ?deviceId= so logged-out visitors with a
  * /debug-granted guest premium resolve correctly.
  */
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const requester = await getRequesterTier(req)
   const entitlements = entitlementsFor(requester.tier, requester.model)
 
@@ -59,3 +60,9 @@ export async function GET(req: NextRequest) {
     { headers: { 'Cache-Control': 'no-store' } },
   )
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/subscription/me',
+  GET$,
+)

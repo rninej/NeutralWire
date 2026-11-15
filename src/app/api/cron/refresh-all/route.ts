@@ -1,3 +1,4 @@
+import { trackRequest } from '@/lib/usage-meter'
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import type { Category } from '@/lib/news-sources'
@@ -8,6 +9,7 @@ import { sourcesForCountry } from '@/lib/country-detect'
 import { consumeLease, jobRecentlyRan, markJobRun, CRON_JOB_INTERVALS } from '@/lib/mesh/lease-server'
 import { preGenerateSummaries } from '@/lib/summary-generate'
 import { firebaseWrite, firebasePatch } from '@/lib/firebase-server'
+import { beginTail, endTail, recordRun, trackStage } from '@/lib/usage-meter'
 import { trimTopicForArchive, snapshotArchived, markSnapshotArchived } from '@/lib/topic-archive'
 import { buildSearchIndexEntry } from '@/lib/search-index'
 
@@ -68,7 +70,7 @@ const CRON_SECRET = '965977e5d9adca4f90aa6f23b6f95371964ed8793bc735cd'
 // up to ~10s on the old sequential version).
 const SYNC_WAIT_MS = 8000
 
-export async function GET(req: NextRequest) {
+async function GET$(req: NextRequest) {
   const t0 = Date.now()
 
   // ── Auth: admin secret (external cron) OR one-time mesh lease (a
@@ -296,8 +298,15 @@ export async function GET(req: NextRequest) {
   // the function alive until every refresh settles (even the ones that
   // outlive the response), up to maxDuration. Without this, a recycled
   // instance could drop an unfinished refresh.
+  //
+  // usage-meter: the TAIL (post-response work up to the 60s maxDuration)
+  // is where this route burns its real time — metered separately so the
+  // fast ≤8s response never masks a 60s tick.
+  beginTail('api/cron/refresh-all')
   after(async () => {
+    try {
     await Promise.allSettled([allDone, archivePass, customTopicPass])
+    trackStage('api/cron/refresh-all', 'tail-refreshes+archive+custom', Date.now() - t0)
     console.log(
       `[cron/refresh-all] all refreshes settled after ${Date.now() - t0}ms (response went out earlier)`,
     )
@@ -360,6 +369,16 @@ export async function GET(req: NextRequest) {
     } catch (err) {
       console.warn('[cron/refresh-all] summary pre-generation failed:', err)
     }
+
+    // ── usage-meter: the full tick ledger (one run record per tick) ──
+    recordRun('api/cron/refresh-all', {
+      tickMs: Date.now() - t0,
+      cats: refreshes.map((r) => r.label).join(','),
+      trigger: viaVercelCron ? 'vcron' : leaseId ? 'usercron' : 'extcron',
+    })
+    } finally {
+      endTail('api/cron/refresh-all')
+    }
   })
 
   const ms = Date.now() - t0
@@ -385,3 +404,9 @@ export async function GET(req: NextRequest) {
     ts: Date.now(),
   })
 }
+
+// ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+export const GET = trackRequest(
+  'api/cron/refresh-all',
+  GET$,
+)
