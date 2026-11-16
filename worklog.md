@@ -1030,3 +1030,26 @@ Work Log:
 Stage Summary:
 - The remaining ~19 min/day is cut to ≈5-6 min/day: home is ISR (the biggest miss), story is daily-capped, every bot API surface is now gated or edge-cached, and bots no longer write to Firebase. Real-user behaviour is byte-identical everywhere (verified against the live DB).
 - To land it: push 656c8fb to origin/main (PAT needed this session) — then watch the Vercel graph decay toward <3h as the window rolls.
+
+---
+Task ID: session66
+Agent: main (Super Z)
+Task: Owner (Nov 17, 2026): pasted a fresh GitHub PAT — unblock the session65 deploy (push 8d4038e to origin/main) and verify the <6 min/day diet is live in production.
+
+Work Log:
+- PUSH UNBLOCKED: fetch + push with the new PAT (inline shell var only, never persisted to any file, all output piped through a redacting sed): origin/main 86aab15 → 8d4038e (the session65 diet + worklog commits). Remote HEAD verified == local HEAD (8d4038e39d6d). Vercel auto-built from main and the diet went LIVE within ~1 minute of the push (warm build cache) — first poll at 18:16 UTC already answered with the new gates.
+- LIVE FINGERPRINTS (neutralwire.org, all the expected session65 shapes):
+  * bot POST /api/session → 204 + x-nw-bot-gate:1 (was 200 + a Firebase device-record write per bot render — 711/day);
+  * bot POST /api/summary (valid topicId+title) → 422 "Summary not generated yet — bot requests never generate" (no LLM volley for bots; 539 bot POSTs/day previously);
+  * bot GET /api/refresh → 204 (session64 gate retained through the deploy);
+  * plain GET '/' → second hit x-vercel-cache: HIT — the ISR /home shell is edge-serving plain navigations, the force-dynamic full SSR per crawl is dead (~447 navs/day, 95% bots);
+  * CONTROL: real user (iPhone UA, proper JSON body) POST /api/session → 200 streak JSON — the real-user path is unchanged. (An initial 500 on an EMPTY-body probe was the route's pre-existing req.json() throw — not a regression; the frontend always sends a body.)
+  * /api/flags → 200; site healthy post-deploy.
+- METER READ (GET /api/debug/usage?days=1 at 18:16 UTC, ~17.5h into the day): totals 0.327 cpuHours in-route, still ~90% bot-driven — exactly as expected, because the session65 gates only went live ~18:14 UTC; TODAY's node is the last pre-diet day. TOMORROW's node is the verification: session/referral/track/engagement bot hits should show counts at ~0 cpuMs, summary bots 422, /api/news bot hits served by the 30-min edge TTL, and totals.cpuHours should collapse to ~0.03-0.05h in-route + a small page residual ≈ 5-6 min/day total.
+- NO CODE CHANGES this session — the sessions 63-65 audit held up: every identified burner is gated, edge-cached, or frequency-capped; the only missing piece was the deploy, now landed and verified.
+
+Stage Summary:
+- The <6 min/day diet is DEPLOYED and verified live on production (bot gates, summary gate, home ISR all answering with the new shapes while real users get identical responses).
+- Expected steady state ≈ 5-6 min/day Active CPU (~3h/month); the 30-day rolling graph now drains the accumulated ~21h stock and crosses 3h as the Nov 1-16 1hr/day days age out (~end of November at this rate).
+- Watch: the Vercel Usage graph + GET /api/debug/usage?days=1 tomorrow. Once two clean days confirm the rate, USAGE_METER_OFF=1 can reclaim the meter's last ~0.1 min/day (re-enable any time for future audits).
+- SECURITY: the new PAT appeared in chat (used inline for fetch/push only, never written to any file, output redacted) — ROTATE it after this session's pushes are confirmed.
