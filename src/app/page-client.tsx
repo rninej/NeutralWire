@@ -2468,8 +2468,22 @@ export default function Home({
   // heal would re-add exactly the per-user invocations the mesh exists
   // to remove. The moment the mesh is off/stale/disconnected, the heal
   // effect resumes its normal job.
+  // ── Bot guard (Nov 17, 2026 CPU fix) ──
+  // Googlebot/Bingbot execute the page's JS when they render it for
+  // indexing — and this heal effect then fired a real /api/refresh (a
+  // FULL 21-24s re-aggregation per bot render; 27 bot hits on Nov 16
+  // alone, the #2 CPU burner). The server now bot-gates that route, but
+  // skipping the fetch here saves the round-trip entirely for crawler
+  // renders. Real users never match.
+  const LOOKS_LIKE_BOT_UA =
+    typeof navigator !== 'undefined'
+      ? /googlebot|bingbot|duckduckbot|yandexbot|baiduspider|facebookexternalhit|twitterbot|linkedinbot|petalbot|applebot|semrushbot|ahrefsbot|headlesschrome|lighthouse|puppeteer|playwright/i.test(
+          navigator.userAgent,
+        )
+      : false
   useEffect(() => {
     if (loading) return
+    if (LOOKS_LIKE_BOT_UA) return
     if (meshRelay && meshHealth().live) return
     if (!isFresh || feedTooOld) {
       const delay = feedTooOld && isFresh ? 3000 : 12000

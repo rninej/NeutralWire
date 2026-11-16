@@ -1,4 +1,5 @@
 import { trackRequest, beginTail, endTail } from '@/lib/usage-meter'
+import { botGate } from '@/lib/bot-gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import type { Category } from '@/lib/news-sources'
@@ -302,7 +303,16 @@ async function GET$(req: NextRequest) {
 }
 
 // ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+// ── bot-gate (Nov 17, 2026 CPU fix) ──
+// The meter proved this route was the #2 in-route burner (359,572 cpuMs
+// on Nov 16, 33% of all in-route CPU): 27 BOT-triggered requests, each
+// running a FULL 21-24s RSS/GDELT re-aggregation — crawlers executing
+// the home page's JS fired the auto-heal effect exactly like a user.
+// Bots now get an instant 204 (no aggregation, no Firebase, no tails);
+// cron-job.org / Vercel cron / real users are unaffected. trackRequest
+// stays OUTSIDE the gate so tomorrow's report still counts bot hits —
+// at ~0 cpuMs each, which is the before/after proof.
 export const GET = trackRequest(
   'api/refresh',
-  GET$,
+  botGate(GET$),
 )

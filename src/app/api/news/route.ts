@@ -1,4 +1,5 @@
 import { trackRequest, beginTail, endTail } from '@/lib/usage-meter'
+import { isBotRequest } from '@/lib/bot-gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import type { Category } from '@/lib/news-sources'
@@ -201,6 +202,17 @@ async function GET$(req: NextRequest) {
 
   const t0 = Date.now()
 
+  // ── bot-gate (Nov 17, 2026 CPU fix) ──
+  // The meter proved the stale-room after() re-aggregation tail was the
+  // #1 in-route CPU burner (474,178 cpuMs on Nov 16, 44% of the total;
+  // 121 tails × ~1.9s CPU each) — and 1,955 of this route's 2,124 hits
+  // were crawler bots. Bots now NEVER trigger the background refresh
+  // (the 3-hour cron keeps rooms fresh anyway) and their responses carry
+  // a long CDN TTL so the Vercel edge serves repeat crawls without
+  // running the function at all. Bots still get the full cached payload —
+  // Googlebot's render needs the feed JSON to index the home page.
+  const botHit = isBotRequest(req)
+
   // Resolve the visitor's country for virtual categories.
   let country = countryOverride
   let countryName = ''
@@ -355,7 +367,7 @@ async function GET$(req: NextRequest) {
   // refresh per instance, and REFRESH_IN_FLIGHT dedups concurrent ones.
   const stale = isStale(cached, category)
   let backgroundRefresh = false
-  if (stale && canRefresh(category, country)) {
+  if (stale && !botHit && canRefresh(category, country)) {
     backgroundRefresh = true
     // usage-meter: the 30-min-TTL background re-aggregation tail — the
     // on-demand burner that runs whenever a visitor views a stale room.
@@ -396,11 +408,18 @@ async function GET$(req: NextRequest) {
   })
   // Personalised responses are browser-private (never edge-cached);
   // shared responses keep the 5-min CDN cache that keeps CPU near zero.
+  // BOTS get a much longer edge TTL (30 min + 24h SWR): crawl traffic
+  // repeats the same URLs for hours and the payload for a given URL is
+  // identical regardless of who asks, so edge-serving their repeats is
+  // free function-CPU-wise. (A user hitting a URL a bot just warmed sees
+  // data ≤30 min old — within the room's own 30-min TTL anyway.)
   response.headers.set(
     'Cache-Control',
     personalizedCached.personalized
       ? 'private, max-age=30'
-      : 'public, s-maxage=300, stale-while-revalidate=600',
+      : botHit
+        ? 'public, s-maxage=1800, stale-while-revalidate=86400'
+        : 'public, s-maxage=300, stale-while-revalidate=600',
   )
   return response
 }

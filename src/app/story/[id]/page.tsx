@@ -60,7 +60,13 @@ import {
  * - `isBasedOn` links every outlet article — provenance / E-E-A-T signal.
  */
 
-export const revalidate = 900 // 15 min ISR — matches the feed cache cadence
+// ISR window raised 15 min → 1 hour (Nov 17, 2026 CPU fix): the usage meter
+// counted 2,052 story navigations on Nov 16 — 95% crawler bots, and every
+// post-revalidate bot hit regenerates the page (a render that can also
+// generate a missing ~8s LLM summary). Story content is static (a
+// published article cluster never changes), so a 1h window cuts bot-driven
+// regens ~4× with zero freshness cost for anything users see.
+export const revalidate = 3600
 // A cold story render may wait up to ~8s for the neutral summary's LLM
 // generation (see getStoryData) — 30s keeps Vercel from killing a slow
 // first render of an un-summarized story (ISR regens run inside it too).

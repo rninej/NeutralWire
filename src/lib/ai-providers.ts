@@ -95,31 +95,34 @@ function envInt(name: string, def: number): number {
 // and the proven workhorse — 94% live success over 10k+ calls) before
 // full Flash. The numbered 3.x models are verified against the live
 // catalog by discovery; any the key can't see is simply never used.
+// REORDERED + PRUNED (Nov 17, 2026) from ONE FULL DAY of live
+// usage-meter ledger data (usageMeter/2026-11-16 ai/models) — the list is
+// now ordered by the actual measured success rate, cheapest tier first:
+//   gemini-3.1-flash-lite      190 calls, 147 ok (77%)  ← the workhorse
+//   gemini-3.5-flash-lite       80 calls,  32 ok (40%)
+//   gemini-flash-lite-latest    53 calls,   7 ok (13%, but the always-live
+//                                auto-updating alias — kept as a pool spreader)
+//   gemini-3-flash-preview      53 calls,  18 ok (34%)
+//   gemini-3.6-flash             28 calls,   2 ok
+//   gemini-3.5-flash             19 calls,   1 ok
+//   gemini-flash-latest          60 calls,   0 ok (alias — kept last; its
+//                                failures look like shared-quota 429s, not 404s)
+// DROPPED (0 successes over the full day, most 404 "no longer available
+// to new users" — they burned 273 wasted calls/day, ~a fifth of all AI
+// traffic, while the health layer only soft-blocked them 10 min at a
+// time): gemini-2.5-flash-lite (113 calls 0 ok), gemini-2.5-flash (118
+// calls 0 ok), gemini-2.0-flash (14/0), gemini-2.0-flash-lite (14/0),
+// gemma-3-27b-it (14/0), gemini-3.7-flash (32/0), gemini-3.8-flash (4/0).
+// Killing the guaranteed-404 tail is what makes "Ask AI: providers not
+// available" vanish: the rotation now reaches a live pool in one hop.
 const GEMINI_MODELS = [
-  // Cheapest-first stable aliases (every key, incl. new projects).
-  'gemini-flash-lite-latest', // → Gemini 3.x Flash-Lite: 15 RPM class
-  'gemini-flash-latest',      // → Gemini 3.x Flash: 10 RPM class
-  // Numbered Gemini 3 generation — separate per-model pools, so spreading
-  // across them multiplies the daily request headroom one pair of aliases
-  // gives (the "gemini shouldn't hit its limits" headroom fix). IDs are
-  // the LIVE catalog spellings, verified via GET /api/debug/models on the
-  // production key (Nov 6 2026): 3.5/3.1-flash-lite + 3.8/3.7/3.6/3.5-flash
-  // + 3-flash-preview all exist; a bare "gemini-3-flash" does NOT.
-  'gemini-3.5-flash-lite',
-  'gemini-3.1-flash-lite', // first live-proven pool: 26/26 ok on deploy day
-  'gemini-3.8-flash',
-  'gemini-3.7-flash',
+  'gemini-3.1-flash-lite', // #1 live-proven: 77% success over a full day
+  'gemini-3.5-flash-lite', // #2: 40% — separate per-model quota pool
+  'gemini-flash-lite-latest', // always-live alias family (pool spreader)
+  'gemini-3-flash-preview', // 34% live
   'gemini-3.6-flash',
   'gemini-3.5-flash',
-  'gemini-3-flash-preview',
-  // Legacy families LAST — keys with older access still reach these;
-  // on this key they 404 and auto-soft-block for 6h (discovery-confirmed
-  // key-level restriction path).
-  'gemini-2.5-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemma-3-27b-it',
+  'gemini-flash-latest', // always-live alias (Flash tier)
 ]
 
 // Groq on THIS key (live 404 trail + GET /api/debug/models, Nov 2026):
@@ -133,13 +136,16 @@ const GEMINI_MODELS = [
 // tier (verified Nov 2026 docs): 30 RPM org-wide, ~1,000 RPD per model,
 // 8K TPM / 200K TPD on the gpt-oss models.
 const GROQ_MODELS = [
-  'openai/gpt-oss-20b',
-  'openai/gpt-oss-120b',
-  // LIVE in the Nov 2026 catalog on this key (GET /api/debug/models:
-  // qwen3.8-27b ranks #3). The 3.6/3.2 generation and llama-4-scout
-  // 404'd on every attempt — removed so cold instances never waste
-  // sequential retries on them.
+  'openai/gpt-oss-20b', // 20b FIRST (the "cheapest Groq" pick): same 30 RPM
+  // org pool as its big sibling but roughly 2× the output speed — it wins
+  // the latency race and leaves org TPM headroom for the next call.
+  // Groq free tier (verified Nov 2026 docs): 30 RPM org-wide, ~1,000 RPD per
+  // model, 8K TPM / 200K TPD on the gpt-oss models.
+  // Nov 17 reorder from the meter ledger: qwen3.8-27b measured 12/26 ok
+  // (46%) vs gpt-oss-120b 3/23 (13%) — qwen moves ABOVE the 120b so the
+  // rotation reaches the second-best pool one hop sooner.
   'qwen/qwen3.8-27b',
+  'openai/gpt-oss-120b',
 ]
 
 // Track rate-limited models to skip them in future calls (per-process).
@@ -897,10 +903,14 @@ function effectiveModels(
 //   8. liquid/lfm-2.5-2.6b:free — tiny, last resort
 // (content-safety and vision-only entries excluded on purpose.)
 const OPENROUTER_MODELS = [
-  'google/gemma-4-26b-a4b-it:free',
+  // Nov 17 prune from the meter ledger: google/gemma-4-26b-a4b-it:free took
+  // 158 calls on Nov 16 with ZERO successes (and gemma-4-31b 2/0) — both
+  // hosts dropped so the last-resort rotation stops burning two guaranteed
+  // dead hops per cold instance. nemotron-ultra stays first (the Nov 5
+  // total-saturation hero — OpenRouter free hosts are intermittent, so
+  // capacity breadth is the point).
   'nvidia/nemotron-3-ultra-550b-a55b:free',
   'xingchen-agi/xing4.0-29b-a4b:free',
-  'google/gemma-4-31b-it:free',
   'nvidia/nemotron-3.5-lightning:free',
   'recursive/flint-v1.0:free',
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',

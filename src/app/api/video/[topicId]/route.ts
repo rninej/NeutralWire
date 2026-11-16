@@ -1,4 +1,5 @@
 import { trackRequest } from '@/lib/usage-meter'
+import { botGate } from '@/lib/bot-gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebaseRead, firebaseWrite } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
@@ -359,7 +360,12 @@ async function cacheResult(
 }
 
 // ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+// ── bot-gate (Nov 17, 2026 CPU fix): the meter counted 217 of this
+// route's 229 Nov 16 hits from crawler bots (55,357 cpuMs — Googlebot's
+// story renders fetch /n/<topicId> for every Watch pill). Bots now get
+// an instant 204; the video-player/preview components are fully
+// try/catch-wrapped so an empty 204 render is silently ignored.
 export const GET = trackRequest(
   'api/video/[topicId]',
-  GET$,
+  botGate(GET$),
 )
