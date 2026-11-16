@@ -27,9 +27,14 @@ import {
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-// Cap CPU time. A refresh involves RSS/GDELT aggregation (5-15s) +
-// background summary pre-generation. 25s is a safe ceiling.
-export const maxDuration = 25
+export const maxDuration = 40
+// Raised 25 → 40s (Nov 17, 2026): cold instances have no rate-limit memory,
+// so a real user's first /api/refresh after a scale-to-zero re-aggregates
+// synchronously — RSS fetch + parse + cluster of up to 2,000 articles ran
+// 21-34s and a 25s cap FUNCTION_INVOCATION_TIMEOUT'd the exact work the
+// route exists to do: the full aggregation's CPU was burned and the cache
+// write DISCARDED (the worst possible waste). 40s lets it finish and
+// warm the room for every later visitor + the tail stages.
 
 /**
  * Force a refresh of a single category.
