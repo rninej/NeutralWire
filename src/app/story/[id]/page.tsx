@@ -60,13 +60,14 @@ import {
  * - `isBasedOn` links every outlet article — provenance / E-E-A-T signal.
  */
 
-// ISR window raised 15 min → 1 hour (Nov 17, 2026 CPU fix): the usage meter
-// counted 2,052 story navigations on Nov 16 — 95% crawler bots, and every
-// post-revalidate bot hit regenerates the page (a render that can also
-// generate a missing ~8s LLM summary). Story content is static (a
-// published article cluster never changes), so a 1h window cuts bot-driven
-// regens ~4× with zero freshness cost for anything users see.
-export const revalidate = 3600
+// ISR window raised 1 hour → 24 hours (Nov 17, 2026 CPU fix — the
+// "below 6 minutes per day" push): story content is STATIC (a published
+// article cluster never changes; even the neutral summary is a one-time
+// generation), so a 24h window means each distinct story URL re-renders
+// at most once per day no matter how often Googlebot re-crawls it —
+// everything else is served from the CDN cache. Google still gets a
+// fresh render daily; users see identical content.
+export const revalidate = 86400
 // A cold story render may wait up to ~8s for the neutral summary's LLM
 // generation (see getStoryData) — 30s keeps Vercel from killing a slow
 // first render of an un-summarized story (ISR regens run inside it too).

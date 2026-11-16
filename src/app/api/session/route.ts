@@ -1,4 +1,5 @@
 import { trackRequest } from '@/lib/usage-meter'
+import { botGate } from '@/lib/bot-gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { recordSession, checkReferralQualification } from '@/lib/referral'
 import { firebasePatch } from '@/lib/firebase-server'
@@ -65,7 +66,13 @@ async function POST$(req: NextRequest) {
 }
 
 // ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+// botGate (Nov 17, 2026): 711 of this route's ~732 daily hits were crawler
+// bots — Googlebot's JS renders fire the session bootstrap just like
+// users, each writing device records into Firebase for a BOT deviceId.
+// Bots get an instant 204 (r.ok === true, so the client's gate marking
+// still works; the call sites never read the body). Real users are
+// unchanged. Metered at ~0 cpuMs for the before/after proof.
 export const POST = trackRequest(
   'api/session',
-  POST$,
+  botGate(POST$),
 )

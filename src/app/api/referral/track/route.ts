@@ -1,4 +1,5 @@
 import { trackRequest } from '@/lib/usage-meter'
+import { botGate } from '@/lib/bot-gate'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   trackReferralClick,
@@ -59,7 +60,12 @@ async function POST$(req: NextRequest) {
 }
 
 // ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+// botGate (Nov 17, 2026): 727 of ~737 daily hits were crawler bots —
+// every Googlebot render registered itself as a device in Firebase.
+// Bots now get an instant 204 (r.ok === true keeps the client's 24h
+// device-register gate marking working; the call sites never read the
+// body). Real users and real ?ref= attributions are unchanged.
 export const POST = trackRequest(
   'api/referral/track',
-  POST$,
+  botGate(POST$),
 )

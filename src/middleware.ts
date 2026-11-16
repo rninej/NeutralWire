@@ -107,6 +107,27 @@ export async function middleware(req: NextRequest) {
     }
   }
 
+  // ─ 4. Home ISR rewrite (Nov 17, 2026 CPU fix — the <6 min/day push) ──
+  // A plain, query-less, nw_nav-less GET of '/' would otherwise run the
+  // FULL force-dynamic home SSR (ten Firebase flag reads + the whole
+  // React shell) on EVERY navigation — ~447/day, 95% crawler bots, the
+  // biggest page-render burner left after the session64 bot gates.
+  // Rewriting to the ISR /home shell serves those navigations from the
+  // ISR cache (regens at most once per 15-min window) with IDENTICAL
+  // content: the feed is fetched client-side from /api/news exactly as
+  // before, and window.location.search is still the visitor's real
+  // (empty) query. Anyone with searchParams (?topic= OG previews,
+  // ?ref= referral attribution, ?category= deep links) or the personal
+  // nw_nav header-design cookie still reaches the dynamic '/'.
+  if (
+    req.method === 'GET' &&
+    pathname === '/' &&
+    req.nextUrl.searchParams.size === 0 &&
+    !req.cookies.get('nw_nav')
+  ) {
+    return NextResponse.rewrite(new URL('/home', req.url))
+  }
+
   return NextResponse.next()
 }
 

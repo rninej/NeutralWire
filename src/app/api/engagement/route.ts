@@ -1,4 +1,5 @@
 import { trackRequest } from '@/lib/usage-meter'
+import { botGate } from '@/lib/bot-gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { firebasePatch, firebaseWrite, firebaseDelete } from '@/lib/firebase-server'
 
@@ -100,7 +101,11 @@ async function POST$(req: NextRequest) {
 }
 
 // ── usage-meter (Nov 16, 2026 emergency CPU attribution) ──
+// botGate (Nov 17, 2026): 355 of ~368 daily hits were crawler bots —
+// Googlebot renders fire the like/dislike/engagement pings the client
+// wires up. Bots get an instant 204; every call site is .catch()-only.
+// Real user engagement tracking is unchanged.
 export const POST = trackRequest(
   'api/engagement',
-  POST$,
+  botGate(POST$),
 )

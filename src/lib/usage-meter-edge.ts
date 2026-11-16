@@ -38,7 +38,7 @@ let dirty = false
 
 /** Bucket a pathname into a page class (kept coarse — counts, not logs). */
 function classifyPath(pathname: string): string {
-  if (pathname === '/') return 'page:home'
+  if (pathname === '/' || pathname === '/home') return 'page:home' // /home = the ISR shell middleware rewrites '/' to
   if (pathname.startsWith('/story/')) return 'page:story'
   if (pathname.startsWith('/debug')) return 'page:debug'
   if (pathname.startsWith('/subscribe')) return 'page:subscribe'

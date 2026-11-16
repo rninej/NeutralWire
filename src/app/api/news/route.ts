@@ -287,6 +287,19 @@ async function GET$(req: NextRequest) {
 
   // 2. If no cache at all → do one synchronous aggregate.
   if (!cached) {
+    // BOT GATE (Nov 17, 2026 CPU fix — the <6 min/day push): an uncached
+    // room + a crawler = a full 12-20s synchronous RSS/GDELT aggregation
+    // for a visitor who will never read it. The 3h cron keeps the
+    // sitemap-listed rooms cached anyway; any room a bot can find in
+    // this state is one no user has opened either, so skipping costs
+    // nothing. (The client call sites are the same try/catch-wrapped
+    // fetches the /api/refresh bot gate already protects.)
+    if (botHit) {
+      return new NextResponse(null, {
+        status: 204,
+        headers: { 'x-nw-bot-gate': '1', 'Cache-Control': 'no-store' },
+      })
+    }
     try {
       const agg = await aggregate()
       const payload = {

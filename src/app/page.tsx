@@ -1,272 +1,35 @@
 import type { Metadata } from 'next'
 import { cookies } from 'next/headers'
-import { firebaseRead } from '@/lib/firebase-server'
 import { findTopicAnywhere } from '@/lib/topic-lookup'
 import { isUsefulSummary } from '@/lib/story-quality'
 import {
-  normalizePopupMode,
-  type PopupMode,
-} from '@/lib/popup-mode'
+  NAV_MODES,
+  readHomeFlags,
+  type SubtopicNavMode,
+} from '@/lib/home-flags'
 import { VideoWatchProvider, VideoPreviewProvider } from '@/lib/video-watch'
 import PageClient from './page-client'
 
 // Force dynamic rendering so metadata is generated per-request (needed for
-// ?topic= OG image previews).
+// ?topic= OG image previews) and the per-user nw_nav cookie override below
+// applies in the first paint. Plain, query-less, cookie-less navigations to
+// '/' never reach this page any more — middleware rewrites them to the ISR
+// /home shell (Nov 17, 2026 CPU fix; see src/middleware.ts), so this
+// force-dynamic render only runs for:
+//   - ?topic= / ?ref= / ?category=… deep links (searchParams present)
+//   - visitors with the nw_nav personal header-design cookie
+//   - authenticated/special-cookie traffic that skips the rewrite
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-// ── Server-rendered subtopic-nav flag ──────────────────────────────────
-// The homepage category header has TEN selectable designs, switched for
-// ALL users from /debug (stored in Firebase at featureFlags/subtopicNav).
-//
-// WHY SERVER-SIDE: previously the client started on the default ('cards')
-// and fetched /api/flags after mount — every refresh briefly flashed the
-// big-chips design before snapping to the selected one. Reading the flag
-// HERE and passing it down means the very first paint (SSR HTML) already
-// uses the right design. No flash, ever.
-//
-// Module-level 5s memo bounds Firebase reads on warm instances; flipping
-// the flag in /debug and refreshing therefore applies within ≤5s.
-//
-// PER-USER OVERRIDE: any visitor can pick their own design in Account →
-// Feature Flags ("Your header style"). It's stored in the `nw_nav` cookie —
-// read HERE, server-side, so the user's own choice is in the first paint
-// with the same zero-flash guarantee. The personal cookie WINS over the
-// site-wide default; when it's absent (the vast majority), the Firebase
-// flag decides. See src/lib/nav-override.ts.
-type SubtopicNavMode =
-  | 'cards' | 'classic' | 'tabs' | 'tiles' | 'sheet' | 'dock'
-  | 'maxipills' | 'headerdock' | 'tabsarrow' | 'cardsarrow'
-const NAV_MODES: SubtopicNavMode[] = [
-  'cards', 'classic', 'tabs', 'tiles', 'sheet', 'dock',
-  'maxipills', 'headerdock', 'tabsarrow', 'cardsarrow',
-]
-let navFlagMemo: { value: SubtopicNavMode; ts: number } | null = null
-const NAV_FLAG_TTL_MS = 5 * 1000
+// ── Server-rendered feature flags ──────────────────────────────────
+// The ten SSR flags (subtopic-nav design, popup system, videoWatch,
+// videoPreview, milestoneDonate, meshRelay, userCron, notifRaiseFix,
+// smartPersonalization, monetizationModel) are read in ONE place now:
+// src/lib/home-flags.ts — shared with the ISR /home variant so the two
+// variants can never drift (same defaults, same 5s memos). See the
+// comments there for the no-flash rationale.
 
-async function getSubtopicNav(): Promise<SubtopicNavMode> {
-  if (navFlagMemo && Date.now() - navFlagMemo.ts < NAV_FLAG_TTL_MS) {
-    return navFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<string>('featureFlags/subtopicNav')
-    const value = NAV_MODES.includes(stored as SubtopicNavMode)
-      ? (stored as SubtopicNavMode)
-      : 'cards'
-    navFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return 'cards'
-  }
-}
-
-// ── Server-rendered popup-system flag ──────────────────────────────
-// Which popup system runs site-wide: the ORIGINAL popups, the smart
-// behavioral system, or smart + a first-visit classic install popup.
-// Switched for ALL users from /debug (Firebase featureFlags/popupSystem).
-// Same SSR logic as the nav flag: read HERE so the first paint already
-// mounts the right popup components — no wrong-popup flash. 5s memo.
-// An absent flag → 'smart' (the live behavioral system).
-let popupFlagMemo: { value: PopupMode; ts: number } | null = null
-const POPUP_FLAG_TTL_MS = 5 * 1000
-
-async function getPopupSystem(): Promise<PopupMode> {
-  if (popupFlagMemo && Date.now() - popupFlagMemo.ts < POPUP_FLAG_TTL_MS) {
-    return popupFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<string>('featureFlags/popupSystem')
-    const value = normalizePopupMode(stored)
-    popupFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return 'smart'
-  }
-}
-
-// ── Server-rendered videoWatch flag (experimental Watch button) ──
-// Same SSR pattern as the nav + popup flags: read HERE so the first
-// paint already knows whether to render the Watch pill on article
-// images — no button-then-vanish flash. 5s memo. Absent → ON (the
-// experiment starts live; /debug can flip it off instantly).
-let videoFlagMemo: { value: boolean; ts: number } | null = null
-const VIDEO_FLAG_TTL_MS = 5 * 1000
-
-async function getVideoWatch(): Promise<boolean> {
-  if (videoFlagMemo && Date.now() - videoFlagMemo.ts < VIDEO_FLAG_TTL_MS) {
-    return videoFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<boolean | string>('featureFlags/videoWatch')
-    const value = !(stored === false || stored === 'false')
-    videoFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return true
-  }
-}
-
-// ── Server-rendered videoPreview flag (experimental top-story preview) ──
-// Same SSR pattern: read HERE so the first paint already knows whether
-// the home feed's top card should autoplay a muted video preview. Absent
-// → OFF (this one is a pure experiment; enable it from /debug). 5s memo.
-let videoPreviewFlagMemo: { value: boolean; ts: number } | null = null
-
-async function getVideoPreview(): Promise<boolean> {
-  if (videoPreviewFlagMemo && Date.now() - videoPreviewFlagMemo.ts < VIDEO_FLAG_TTL_MS) {
-    return videoPreviewFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<boolean | string>('featureFlags/videoPreview')
-    const value = stored === true || stored === 'true'
-    videoPreviewFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return false
-  }
-}
-
-// ── Server-rendered milestoneDonate flag (popup body version) ──
-// Which body the PWA's milestone popup carries after "N stories read":
-// the user-requested donate message + a real Donate-on-Ko-fi button
-// (default, true) or the ORIGINAL celebration-only version (false).
-// Same SSR pattern as the other flags: read HERE so the first open of
-// the popup already shows the right body — no wrong-message flash. 5s
-// memo; absent flag → true (the donate version is the live default).
-let milestoneDonateFlagMemo: { value: boolean; ts: number } | null = null
-const MILESTONE_FLAG_TTL_MS = 5 * 1000
-
-async function getMilestoneDonate(): Promise<boolean> {
-  if (milestoneDonateFlagMemo && Date.now() - milestoneDonateFlagMemo.ts < MILESTONE_FLAG_TTL_MS) {
-    return milestoneDonateFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<boolean | string>('featureFlags/milestoneDonate')
-    const value = !(stored === false || stored === 'false')
-    milestoneDonateFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return true
-  }
-}
-
-// ── Server-rendered mesh flags (P2P relay + user-powered cron) ──
-// Both experimental features default ON per the user's spec; flipped
-// from /debug. Read server-side (same 5s-memo pattern) and passed as
-// props so a flip applies on the next page load — the client mesh
-// never runs with a stale on/off state baked into the bundle.
-let meshRelayFlagMemo: { value: boolean; ts: number } | null = null
-let userCronFlagMemo: { value: boolean; ts: number } | null = null
-const MESH_FLAG_TTL_MS = 5 * 1000
-
-async function getMeshRelay(): Promise<boolean> {
-  if (meshRelayFlagMemo && Date.now() - meshRelayFlagMemo.ts < MESH_FLAG_TTL_MS) {
-    return meshRelayFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<boolean | string>('featureFlags/meshRelay')
-    const value = !(stored === false || stored === 'false')
-    meshRelayFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return true
-  }
-}
-
-async function getUserCron(): Promise<boolean> {
-  if (userCronFlagMemo && Date.now() - userCronFlagMemo.ts < MESH_FLAG_TTL_MS) {
-    return userCronFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<boolean | string>('featureFlags/userCron')
-    const value = !(stored === false || stored === 'false')
-    userCronFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return true
-  }
-}
-
-// ── Server-rendered notification raise-fix flag ──
-// The v27 sw.js RAISE VERIFICATION (notification taps actually bring the
-// backgrounded app to the foreground; also fixes the "dead" notification
-// Like button). Read server-side with the same 5s-memo pattern and passed
-// as a prop so the client can mirror it into the service worker — the SW
-// needs it at NOTIFICATION-CLICK time, when network fetches are forbidden
-// (they would burn the tap's transient user activation). Default ON;
-// flipping it OFF from /debug restores the previous focus-trusting click
-// behaviour on every device after its next page load (or instantly for
-// the admin's own device — /debug pushes the flip straight into the SW).
-let notifRaiseFixFlagMemo: { value: boolean; ts: number } | null = null
-
-async function getNotifRaiseFix(): Promise<boolean> {
-  if (notifRaiseFixFlagMemo && Date.now() - notifRaiseFixFlagMemo.ts < MESH_FLAG_TTL_MS) {
-    return notifRaiseFixFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<boolean | string>('featureFlags/notifRaiseFix')
-    const value = !(stored === false || stored === 'false')
-    notifRaiseFixFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return true
-  }
-}
-
-// ── Server-rendered Interest Engine v2 flag (smartPersonalization) ──
-// The master switch for the server-side personalisation brain: ON = the
-// Relevant feed is re-ranked server-side from the learned interest
-// profile, the digest picks stories by taste, notifications score with
-// the engine. OFF = every surface returns to the ORIGINAL behaviour
-// (client-side localStorage boosts, newest-first digest, sector-keyword
-// notification scoring) — the owner's one-click revert from /debug.
-// Learning (tracking pings) continues either way; only CONSUMPTION stops.
-let smartPersonalizationFlagMemo: { value: boolean; ts: number } | null = null
-
-async function getSmartPersonalization(): Promise<boolean> {
-  if (smartPersonalizationFlagMemo && Date.now() - smartPersonalizationFlagMemo.ts < MESH_FLAG_TTL_MS) {
-    return smartPersonalizationFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<boolean | string>('featureFlags/smartPersonalization')
-    const value = !(stored === false || stored === 'false')
-    smartPersonalizationFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return true
-  }
-}
-
-// ── Server-rendered monetization model flag (subscription vs donation) ──
-// THE MONETIZATION SWITCH, read server-side with the same 5s-memo
-// pattern so the first paint already knows which popup system + gates
-// run. 'subscription' (default) = tier model; 'donation' = the ORIGINAL
-// Ko-fi donation site with every premium gate stood down.
-let monetizationModelFlagMemo: { value: 'subscription' | 'donation' | 'free'; ts: number } | null = null
-const MONETIZATION_FLAG_TTL_MS = 5 * 1000
-
-async function getMonetizationModel(): Promise<'subscription' | 'donation' | 'free'> {
-  if (monetizationModelFlagMemo && Date.now() - monetizationModelFlagMemo.ts < MONETIZATION_FLAG_TTL_MS) {
-    return monetizationModelFlagMemo.value
-  }
-  try {
-    const stored = await firebaseRead<string>('featureFlags/monetizationModel')
-    const value = stored === 'donation' ? 'donation' : stored === 'free' ? 'free' : 'subscription'
-    monetizationModelFlagMemo = { value, ts: Date.now() }
-    return value
-  } catch {
-    return 'subscription'
-  }
-}
-
-/**
- *  Generate dynamic OG metadata for shared links.
- *
- * When a link like /?topic=abc123 is shared on WhatsApp/Twitter/etc, the
- * crawler fetches the page HTML and reads the og:image meta tag. We look
- * up the topic in Firebase and return its image + title as OG tags so the
- * link preview shows the news photo.
- */
 export async function generateMetadata({
   searchParams,
 }: {
@@ -344,44 +107,17 @@ export async function generateMetadata({
 }
 
 export default async function Page() {
-  // Read the subtopic-nav flag on the SERVER so the SSR HTML already
-  // renders the selected header design (no default-then-swap flash).
-  let initialSubtopicNav = await getSubtopicNav()
-
-  // Popup system flag — same server-side read, same zero-flash guarantee.
-  const popupSystem = await getPopupSystem()
-
-  // Experimental Watch button flag — same server-side read, so the SSR
-  // HTML already includes (or omits) the Watch pills on card images.
-  const videoWatch = await getVideoWatch()
-
-  // Experimental top-story video preview flag — same server-side read
-  // (defaults OFF; flipped on from /debug).
-  const videoPreview = await getVideoPreview()
-
-  // Milestone-popup body flag — donate message (default) vs the original
-  // celebration-only version; switched from /debug.
-  const milestoneDonate = await getMilestoneDonate()
-
-  // Mesh experimental flags — P2P relay + user-powered cron (both
-  // default ON; switched from /debug).
-  const meshRelay = await getMeshRelay()
-  const userCron = await getUserCron()
-
-  // Notification raise-fix flag (default ON; switched from /debug).
-  const notifRaiseFix = await getNotifRaiseFix()
-
-  // Interest Engine v2 master switch (default ON; the /debug revert).
-  const smartPersonalization = await getSmartPersonalization()
-
-  // Monetization model flag — subscription tiers (default) vs the
-  // original donation model; switched from /debug.
-  const monetizationModel = await getMonetizationModel()
+  // All ten SSR flags in one call (shared module — see home-flags.ts).
+  const flags = await readHomeFlags()
+  let initialSubtopicNav = flags.initialSubtopicNav
 
   // Personal override (Account → Feature Flags → "Your header style"):
   // a cookie, so the server sees it during SSR — the visitor's own pick
   // renders in the very first paint, no flash. Invalid values fall back
-  // to the site-wide default above.
+  // to the site-wide default above. (ISR /home visitors have no such
+  // cookie by construction — the middleware only rewrites cookie-less
+  // navigations — so the dynamic page here is the ONLY place the
+  // override matters.)
   try {
     const cookieNav = (await cookies()).get('nw_nav')?.value
     if (cookieNav && NAV_MODES.includes(cookieNav as SubtopicNavMode)) {
@@ -393,17 +129,17 @@ export default async function Page() {
   }
 
   return (
-    <VideoWatchProvider enabled={videoWatch}>
-      <VideoPreviewProvider enabled={videoPreview}>
+    <VideoWatchProvider enabled={flags.videoWatch}>
+      <VideoPreviewProvider enabled={flags.videoPreview}>
         <PageClient
           initialSubtopicNav={initialSubtopicNav}
-          popupSystem={popupSystem}
-          milestoneDonate={milestoneDonate}
-          meshRelay={meshRelay}
-          userCron={userCron}
-          notifRaiseFix={notifRaiseFix}
-          smartPersonalization={smartPersonalization}
-          monetizationModel={monetizationModel}
+          popupSystem={flags.popupSystem}
+          milestoneDonate={flags.milestoneDonate}
+          meshRelay={flags.meshRelay}
+          userCron={flags.userCron}
+          notifRaiseFix={flags.notifRaiseFix}
+          smartPersonalization={flags.smartPersonalization}
+          monetizationModel={flags.monetizationModel}
         />
       </VideoPreviewProvider>
     </VideoWatchProvider>
